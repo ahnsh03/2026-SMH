@@ -1,0 +1,36 @@
+# ROS2 / colcon
+build/
+install/
+log/
+.colcon/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+*.so
+
+# ML / data
+*.h5
+*.pt
+*.onnx
+*.weights
+datasets/
+runs/
+wandb/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.key
+
+# Vendor clone (use submodule or init script)
+external/D-Racer-Kit/
