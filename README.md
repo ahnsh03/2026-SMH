@@ -107,13 +107,18 @@ ros2 launch inference auto_driving.launch.py
 
 ---
 
-## 브랜치 규칙
+## 브랜치 규칙 (필수)
 
-1. `main` — 안정 버전 (보드 deploy, 팀장 merge)
-2. `feature/이름-기능` — 개인 개발
-3. **담당 `modules/` 파일만** 수정 후 PR
+> 상세: [docs/collaboration.md](docs/collaboration.md) §1
 
-→ [docs/collaboration.md](docs/collaboration.md)
+1. **`main` 직접 push 금지** — PR merge로만 반영
+2. **`feature/이름-기능` 브랜치**에서만 개발 → commit → push → **PR**
+3. **한 PR = 담당 `modules/` 한 모듈** (작은 PR)
+4. merge 후 보드에서 `./scripts/board_sync.sh`로 `main` 테스트
+
+```
+main → feature/wontae-lane → PR → merge → board_sync.sh
+```
 
 ---
 
