@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 
+from inference.types import RoundaboutResult
 
-def plan(frame: np.ndarray) -> tuple[float, float]:
+
+def plan(frame: np.ndarray) -> RoundaboutResult:
     """
-    Returns (steering, throttle) for roundabout segment.
+    Plan steering/throttle for the roundabout segment.
+
+    Set active=True when roundabout logic should override lane following.
     """
     _ = frame
-    return 0.0, 0.0
+    return RoundaboutResult(active=False, steering=0.0, throttle=0.0)

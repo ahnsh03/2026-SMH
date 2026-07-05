@@ -3,11 +3,8 @@ Autonomous driving inference node.
 
 Subscribes to camera images, runs perception/planning pipeline, publishes /control.
 
-Module integration points (assign per docs/roles.md):
-  - lane_detection    : 장원태
-  - traffic_sign      : 장원정
-  - aruco_detection   : 안승현, 박성준
-  - roundabout        : 양서준
+Integration is handled in pipeline.py — assignees edit modules/ only.
+See docs/collaboration.md for branch and PR rules.
 """
 
 from __future__ import annotations
@@ -23,6 +20,8 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
 import yaml
+
+from inference.pipeline import fuse_control, run_perception
 
 
 def get_default_vehicle_config_path() -> str:
@@ -42,6 +41,7 @@ class InferenceNode(Node):
         self.declare_parameter('control_topic', '/control')
         self.declare_parameter('publish_hz', 10.0)
         self.declare_parameter('default_throttle', 0.0)
+        self.declare_parameter('cruise_throttle', 0.35)
         self.declare_parameter('steer_trim', 0.0)
 
         self.vehicle_config_file = os.path.expanduser(
@@ -51,6 +51,7 @@ class InferenceNode(Node):
         control_topic = str(self.get_parameter('control_topic').value)
         publish_hz = float(self.get_parameter('publish_hz').value)
         self.default_throttle = float(self.get_parameter('default_throttle').value)
+        self.cruise_throttle = float(self.get_parameter('cruise_throttle').value)
         self.steer_trim = float(self.load_steer_trim())
 
         if publish_hz <= 0.0:
@@ -89,17 +90,18 @@ class InferenceNode(Node):
             return
 
         self.latest_frame = frame
-        self.steering, self.throttle = self.run_pipeline(frame)
+        command = self.run_pipeline(frame)
+        self.steering = command.steering
+        self.throttle = command.throttle
 
-    def run_pipeline(self, frame: np.ndarray) -> tuple[float, float]:
-        """
-        Main perception + planning pipeline.
-
-        TODO: integrate team modules here.
-        Returns (steering, throttle) in range [-1.0, 1.0].
-        """
-        _ = frame
-        return self.steer_trim, self.default_throttle
+    def run_pipeline(self, frame: np.ndarray):
+        ctx = run_perception(frame)
+        return fuse_control(
+            ctx,
+            steer_trim=self.steer_trim,
+            default_throttle=self.default_throttle,
+            cruise_throttle=self.cruise_throttle,
+        )
 
     def publish_control(self):
         msg = Control()

@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-inference:
+    runs-on: ubuntu-22.04
+    container: ros:humble
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init workspace
+        run: |
+          chmod +x scripts/init_workspace.sh
+          ./scripts/init_workspace.sh
+
+      - name: Build inference package
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build --symlink-install --packages-select inference
+
+      - name: Python import check
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          python3 -c "from inference.pipeline import fuse_control, run_perception; print('ok')"

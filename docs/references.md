@@ -18,6 +18,13 @@
 | 정기 회의 | 매주 **월요일 15시** |
 | 공지 | 카카오톡 오픈채팅방 |
 
+## 실행 (팀 launch)
+
+```bash
+source install/setup.bash
+ros2 launch inference auto_driving.launch.py
+```
+
 ## D-Racer-Kit 주요 패키지
 
 | 패키지 | 역할 |

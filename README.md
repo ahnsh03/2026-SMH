@@ -2,7 +2,8 @@
 
 **2026 SEA:ME 해커톤** — AIM 학술동아리 자율주행 팀 저장소
 
-> **PC(WSL)에서 상위 프로젝트 폴더까지 쓰는 경우**: 예) `~/projects/2026-seame-hackathon/SEA-Me-Hackathon` — [상위 README](../README.md) 참고. **D3-G 보드 단독 clone**(`~/SEA-Me-Hackathon`)만으로도 아래 빠른 시작으로 충분합니다.
+> **PC(WSL) 상위 프로젝트**: [../README.md](../README.md)  
+> **D3-G 보드 단독 clone** (`~/SEA-Me-Hackathon`) — 아래 빠른 시작만으로 충분합니다.
 
 | | |
 |---|---|
@@ -18,15 +19,20 @@
 ```bash
 git clone https://github.com/ahnsh03/SEA-Me-Hackathon.git
 cd SEA-Me-Hackathon
-chmod +x scripts/init_workspace.sh
-./scripts/init_workspace.sh
-
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install
-source install/setup.bash
+chmod +x scripts/*.sh
+./scripts/board_sync.sh --no-pull   # 최초 1회
 ```
 
-자세한 셋업: [docs/setup.md](docs/setup.md)
+이후 코드 받을 때:
+
+```bash
+./scripts/board_sync.sh             # pull + init + build
+source install/setup.bash
+ros2 launch inference auto_driving.launch.py
+```
+
+자세한 셋업: [docs/setup.md](docs/setup.md)  
+협업 규칙: [docs/collaboration.md](docs/collaboration.md)
 
 ---
 
@@ -35,18 +41,27 @@ source install/setup.bash
 ```
 SEA-Me-Hackathon/
 ├── docs/
-│   ├── competition.md   # 대회 정보·규정·주최측 문답
-│   ├── roles.md         # 역할 분담
-│   ├── setup.md         # 개발 환경 셋업
-│   └── references.md    # 링크 모음
+│   ├── collaboration.md   # ★ 브랜치·PR·충돌 방지 (팀원 필독)
+│   ├── roles.md           # 역할 분담
+│   ├── setup.md           # 셋업
+│   └── competition.md     # 대회 정보
 ├── scripts/
-│   └── init_workspace.sh   # D-Racer-Kit clone + src/ 심볼릭 링크 (매 clone마다 실행)
+│   ├── init_workspace.sh  # D-Racer-Kit clone + src/ 링크
+│   └── board_sync.sh      # ★ 보드: pull + init + build
+├── external/              # D-Racer-Kit (Git 제외, init 시 생성)
 └── src/
-    ├── inference/          # 팀 자율주행 패키지 (Git 추적)
-    └── (camera, control, …)  # init_workspace.sh 실행 후 링크 생성 — Git 미추적
+    └── inference/         # ★ 팀 자율주행 패키지 (Git 추적)
+        ├── inference/
+        │   ├── types.py           # 공통 타입
+        │   ├── pipeline.py        # 모듈 통합 (팀장)
+        │   ├── inference_node.py  # ROS2 노드
+        │   └── modules/           # ★ 담당자별 개발
+        └── launch/
+            ├── auto_driving.launch.py
+            └── manual_driving.launch.py
 ```
 
-주최측 공식 코드([D-Racer-Kit](https://github.com/topst-development/D-Racer-Kit/tree/release/v1.0.0))는 `init_workspace.sh`가 **레포 부모 폴더**의 `external/D-Racer-Kit`을 clone한 뒤 `src/`에 심볼릭 링크합니다. clone 경로는 자유롭습니다 (`~/SEA-Me-Hackathon`, `~/workspace/SEA-Me-Hackathon` 등). 링크는 레포에 커밋하지 않으므로 **보드·PC 모두 clone 후 init을 한 번 실행**하세요. 상세: [docs/setup.md](docs/setup.md)
+주최측 패키지(camera, control 등)는 `init_workspace.sh`가 `src/`에 심볼릭 링크합니다.
 
 ---
 
@@ -56,7 +71,8 @@ SEA-Me-Hackathon/
 |------|------|------|
 | **장원태** | 차선 인지 | `modules/lane_detection.py` |
 | **장원정** | 신호등·표지판 | `modules/traffic_sign.py` |
-| **안승현, 박성준** | ArUco 마커 | `modules/aruco_detection.py` |
+| **안승현** | ArUco 검출 | `modules/aruco/detector.py` |
+| **박성준** | ArUco 정지 | `modules/aruco/stop_logic.py` |
 | **양서준** | 회전 교차로 | `modules/roundabout.py` |
 
 상세: [docs/roles.md](docs/roles.md)
@@ -69,10 +85,10 @@ SEA-Me-Hackathon/
 /camera/image/compressed
         │
         ▼
-  inference_node  ◄── modules/ (lane, traffic, aruco, roundabout)
-        │
+  inference_node → pipeline.run_perception()
+        │            (lane / traffic / aruco / roundabout)
         ▼
-    /control  ──►  control_node  ──►  모터/서보
+  pipeline.fuse_control()  →  /control  →  control_node
 ```
 
 ---
@@ -80,28 +96,33 @@ SEA-Me-Hackathon/
 ## 실행
 
 ```bash
-# 수동 주행 (하드웨어 확인)
-ros2 launch control manual_driving.launch.py
+source install/setup.bash
 
-# 자율주행 (inference 포함)
-ros2 launch control auto_driving.launch.py
+# 수동 주행
+ros2 launch inference manual_driving.launch.py
+
+# 자율주행
+ros2 launch inference auto_driving.launch.py
 ```
 
 ---
 
 ## 브랜치 규칙
 
-1. `main` — 안정 버전 (팀장 merge)
+1. `main` — 안정 버전 (보드 deploy, 팀장 merge)
 2. `feature/이름-기능` — 개인 개발
-3. 담당 `modules/*.py` 수정 후 PR
+3. **담당 `modules/` 파일만** 수정 후 PR
+
+→ [docs/collaboration.md](docs/collaboration.md)
 
 ---
 
 ## 문서
 
-- [대회 정보](docs/competition.md)
+- [협업 가이드](docs/collaboration.md) ★
 - [역할 분담](docs/roles.md)
 - [셋업 가이드](docs/setup.md)
+- [대회 정보](docs/competition.md)
 - [참고 링크](docs/references.md)
 
 ---

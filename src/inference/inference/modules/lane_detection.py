@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 
+from inference.types import LaneResult
 
-def detect(frame: np.ndarray) -> tuple[float, float]:
+
+def detect(frame: np.ndarray) -> LaneResult:
     """
-    Returns (steering_offset, confidence).
-    steering_offset: -1.0 (left) ~ +1.0 (right), 0 = center.
+    Detect lane position from camera frame.
+
+    Returns LaneResult with steering_offset (-1.0 ~ +1.0) and confidence (0.0 ~ 1.0).
     """
     _ = frame
-    return 0.0, 0.0
+    return LaneResult(steering_offset=0.0, confidence=0.0)

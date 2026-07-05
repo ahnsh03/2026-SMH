@@ -2,32 +2,36 @@
 
 ---
 
-[SEA:ME 해커톤] 팀 GitHub 개설 안내
-
-안녕하세요, 팀 GitHub 저장소를 구축했습니다.
+[SEA:ME 해커톤] 팀 GitHub + 협업 구조 업데이트
 
 🔗 https://github.com/ahnsh03/SEA-Me-Hackathon
 
-【저장소 내용】
-- 대회 정보·규정·주최측 문답 (docs/competition.md)
-- 역할 분담 및 담당 파일 (docs/roles.md)
-- D3-G 개발 환경 셋업 (docs/setup.md)
-- inference ROS2 패키지 골격 (src/inference/)
+【변경 사항】
+- 모듈별 파일 분리 + ArUco 2인 담당 파일 분리 (충돌 방지)
+- 보드에서 pull 후 바로 빌드: ./scripts/board_sync.sh
+- 팀 launch: ros2 launch inference auto_driving.launch.py
+- 협업 가이드: docs/collaboration.md ★필독
 
-【역할 분담】
-- 차선 인지: 장원태 → modules/lane_detection.py
+【담당 파일】
+- 차선: 장원태 → modules/lane_detection.py
 - 신호등·표지판: 장원정 → modules/traffic_sign.py
-- ArUco 마커: 안승현, 박성준 → modules/aruco_detection.py
-- 회전 교차로: 양서준 → modules/roundabout.py
+- ArUco 검출: 안승현 → modules/aruco/detector.py
+- ArUco 정지: 박성준 → modules/aruco/stop_logic.py
+- 회전교차로: 양서준 → modules/roundabout.py
 
-【D3-G 보드 셋업】
+【D3-G 보드 — 최초】
 git clone https://github.com/ahnsh03/SEA-Me-Hackathon.git
 cd SEA-Me-Hackathon
-./scripts/init_workspace.sh
-colcon build --symlink-install
+chmod +x scripts/*.sh
+./scripts/board_sync.sh --no-pull
 
-【브랜치】
-feature/이름-기능 으로 작업 후 PR
+【D3-G 보드 — 코드 받을 때】
+./scripts/board_sync.sh
+source install/setup.bash
+ros2 launch inference auto_driving.launch.py
+
+【개발】
+feature/이름-기능 브랜치 → 담당 modules/ 파일만 수정 → PR
 
 【Notion】
 https://app.notion.com/p/55e1b0cdce9b8292a19d81c5b1605983

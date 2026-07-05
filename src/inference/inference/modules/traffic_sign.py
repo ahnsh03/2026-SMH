@@ -4,20 +4,17 @@ from __future__ import annotations
 
 import numpy as np
 
-
-class TrafficState:
-    UNKNOWN = 'unknown'
-    GREEN = 'green'
-    RED = 'red'
-    LEFT = 'left'
-    RIGHT = 'right'
+from inference.types import TrafficResult, TrafficSignal, TurnSign
 
 
-def detect(frame: np.ndarray) -> dict:
+def detect(frame: np.ndarray) -> TrafficResult:
     """
-    Returns dict with keys:
-      signal: TrafficState (GREEN / RED / UNKNOWN)
-      turn: TrafficState (LEFT / RIGHT / UNKNOWN) for fork mission
+    Detect traffic light color and fork turn sign.
+
+    Returns TrafficResult with signal (GREEN/RED/UNKNOWN) and turn (LEFT/RIGHT/UNKNOWN).
     """
     _ = frame
-    return {'signal': TrafficState.UNKNOWN, 'turn': TrafficState.UNKNOWN}
+    return TrafficResult(
+        signal=TrafficSignal.UNKNOWN,
+        turn=TurnSign.UNKNOWN,
+    )
