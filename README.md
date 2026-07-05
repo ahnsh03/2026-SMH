@@ -2,6 +2,8 @@
 
 **2026 SEA:ME 해커톤** — AIM 학술동아리 자율주행 팀 저장소
 
+> **PC(WSL)에서 상위 프로젝트 폴더까지 쓰는 경우**: 예) `~/projects/2026-seame-hackathon/SEA-Me-Hackathon` — [상위 README](../README.md) 참고. **D3-G 보드 단독 clone**(`~/SEA-Me-Hackathon`)만으로도 아래 빠른 시작으로 충분합니다.
+
 | | |
 |---|---|
 | **대회** | 2026.7.14 ~ 7.16 / 호텔 파크하비오 |
@@ -38,19 +40,13 @@ SEA-Me-Hackathon/
 │   ├── setup.md         # 개발 환경 셋업
 │   └── references.md    # 링크 모음
 ├── scripts/
-│   └── init_workspace.sh   # D-Racer-Kit + 팀 패키지 연동
+│   └── init_workspace.sh   # D-Racer-Kit clone + src/ 심볼릭 링크 (매 clone마다 실행)
 └── src/
-    └── inference/          # 팀 자율주행 패키지
-        └── inference/
-            ├── inference_node.py
-            └── modules/
-                ├── lane_detection.py    # 장원태
-                ├── traffic_sign.py      # 장원정
-                ├── aruco_detection.py   # 안승현, 박성준
-                └── roundabout.py        # 양서준
+    ├── inference/          # 팀 자율주행 패키지 (Git 추적)
+    └── (camera, control, …)  # init_workspace.sh 실행 후 링크 생성 — Git 미추적
 ```
 
-주최측 공식 코드([D-Racer-Kit](https://github.com/topst-development/D-Racer-Kit/tree/release/v1.0.0))는 `init_workspace.sh`로 `external/`에 받아 `src/`에 링크됩니다.
+주최측 공식 코드([D-Racer-Kit](https://github.com/topst-development/D-Racer-Kit/tree/release/v1.0.0))는 `init_workspace.sh`가 **레포 부모 폴더**의 `external/D-Racer-Kit`을 clone한 뒤 `src/`에 심볼릭 링크합니다. clone 경로는 자유롭습니다 (`~/SEA-Me-Hackathon`, `~/workspace/SEA-Me-Hackathon` 등). 링크는 레포에 커밋하지 않으므로 **보드·PC 모두 clone 후 init을 한 번 실행**하세요. 상세: [docs/setup.md](docs/setup.md)
 
 ---
 

@@ -3,15 +3,18 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENDOR="${ROOT}/external/D-Racer-Kit"
+PROJECT_ROOT="$(cd "${ROOT}/.." && pwd)"
+VENDOR="${PROJECT_ROOT}/external/D-Racer-Kit"
 BRANCH="release/v1.0.0"
 REPO="https://github.com/topst-development/D-Racer-Kit.git"
 
 echo "[SEA-Me] workspace root: ${ROOT}"
+echo "[SEA-Me] project root: ${PROJECT_ROOT}"
+echo "[SEA-Me] vendor: ${VENDOR}"
 
 if [ ! -d "${VENDOR}/.git" ]; then
   echo "[SEA-Me] Cloning D-Racer-Kit (${BRANCH})..."
-  mkdir -p "${ROOT}/external"
+  mkdir -p "${PROJECT_ROOT}/external"
   git clone --branch "${BRANCH}" --depth 1 "${REPO}" "${VENDOR}"
 else
   echo "[SEA-Me] D-Racer-Kit already present at ${VENDOR}"
@@ -34,7 +37,7 @@ for pkg in "${OFFICIAL_PKGS[@]}"; do
   if [ -e "${dst}" ]; then
     echo "[SEA-Me] skip ${pkg} (already exists)"
   else
-    ln -sfn "../external/D-Racer-Kit/src/${pkg}" "${dst}"
+    ln -sfn "../../external/D-Racer-Kit/src/${pkg}" "${dst}"
     echo "[SEA-Me] linked ${pkg}"
   fi
 done
@@ -42,7 +45,7 @@ done
 # vehicle config
 if [ -f "${VENDOR}/src/config/vehicle_config.yaml" ] && [ ! -e "${ROOT}/src/config" ]; then
   mkdir -p "${ROOT}/src"
-  ln -sfn "../external/D-Racer-Kit/src/config" "${ROOT}/src/config"
+  ln -sfn "../../external/D-Racer-Kit/src/config" "${ROOT}/src/config"
   echo "[SEA-Me] linked config"
 fi
 

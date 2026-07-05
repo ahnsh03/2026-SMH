@@ -34,3 +34,16 @@ Thumbs.db
 
 # Vendor clone (use submodule or init script)
 external/D-Racer-Kit/
+
+# init_workspace.sh — D-Racer-Kit 심볼릭 링크 (매 clone마다 스크립트로 생성)
+src/battery
+src/battery_msgs
+src/camera
+src/config
+src/control
+src/control_msgs
+src/joystick
+src/joystick_msgs
+src/monitor
+src/opencv
+src/topst_utils

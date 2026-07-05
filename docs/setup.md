@@ -11,15 +11,29 @@
 팀 레포와 주최측 D-Racer-Kit을 합쳐 하나의 ROS2 워크스페이스로 사용합니다.
 
 ```bash
-# D3-G 보드에서 실행
+# D3-G 보드 (또는 PC) — clone 경로는 어디든 OK
 cd ~
 git clone https://github.com/ahnsh03/SEA-Me-Hackathon.git
 cd SEA-Me-Hackathon
+chmod +x scripts/init_workspace.sh
 ./scripts/init_workspace.sh
 ```
 
-`init_workspace.sh`는 공식 D-Racer-Kit(`release/v1.0.0`)을 `external/`에 받고,  
-`src/`에 공식 패키지 + 팀 `inference` 패키지를 링크합니다.
+`init_workspace.sh` 동작 요약:
+
+| 항목 | 내용 |
+|------|------|
+| D-Racer-Kit 위치 | **레포 부모 폴더** `external/D-Racer-Kit` (레포 안이 아님) |
+| 예 (보드) | `~/SEA-Me-Hackathon` clone → `~/external/D-Racer-Kit` 생성 |
+| 예 (PC) | `~/workspace/SEA-Me-Hackathon` clone → `~/workspace/external/D-Racer-Kit` 생성 |
+| `src/` 링크 | camera, control, joystick 등 공식 패키지 심볼릭 링크 생성 |
+
+### 주의: 심볼릭 링크는 Git에 없음
+
+- `src/camera`, `src/control` 등 **공식 패키지 링크는 커밋하지 않습니다.**
+- **매 clone·새 보드마다** `./scripts/init_workspace.sh` 를 실행해야 `colcon build`가 됩니다.
+- D-Racer-Kit 최초 clone에 **네트워크**가 필요합니다 (`release/v1.0.0`).
+- 이미 `src/`에 링크가 있으면 스크립트가 건너뜁니다 (`skip … already exists`).
 
 ## 2. ROS2 환경
 
@@ -31,7 +45,7 @@ source ~/.bashrc
 ## 3. 빌드
 
 ```bash
-cd ~/SEA-Me-Hackathon
+cd "$(git rev-parse --show-toplevel)"
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 source install/setup.bash
