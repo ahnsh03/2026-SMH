@@ -2,6 +2,11 @@
 
 <!-- 무엇을 변경했는지 한 줄 요약 -->
 
+## Git 규약 확인
+
+- [ ] `main`에서 **feature 브랜치**를 생성해 작업했습니다 (`main` 직접 push 아님)
+- [ ] PR 전 `git pull origin main` 또는 rebase로 main과 맞췄습니다
+
 ## 담당 모듈
 
 - [ ] `lane_detection.py` (장원태)

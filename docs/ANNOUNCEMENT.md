@@ -30,8 +30,14 @@ chmod +x scripts/*.sh
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py
 
-【개발】
-feature/이름-기능 브랜치 → 담당 modules/ 파일만 수정 → PR
+【개발 — Git 규약 ★필독】
+1. main 직접 push 금지
+2. feature/이름-기능 브랜치 생성
+3. 담당 modules/ 파일만 수정 → commit → push
+4. Pull Request → 팀장 merge
+5. 보드: ./scripts/board_sync.sh
+
+→ docs/collaboration.md
 
 【Notion】
 https://app.notion.com/p/55e1b0cdce9b8292a19d81c5b1605983

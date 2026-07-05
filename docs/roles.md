@@ -7,8 +7,8 @@
 ## 공통
 
 - 대회 미션 숙지, 작년 영상으로 트랙 형태 파악
-- `feature/이름-기능` 브랜치 → PR → 팀장 merge
-- **담당 `modules/` 파일만 수정** ([충돌 방지 가이드](./collaboration.md))
+- **Git: `main` 직접 push 금지** — `feature/이름-기능` 브랜치 → PR → merge ([협업 가이드](./collaboration.md) §1)
+- **담당 `modules/` 파일만** 수정 ([충돌 방지](./collaboration.md) §2)
 
 ## 인지 (Perception)
 

@@ -45,6 +45,10 @@ source install/setup.bash
 
 D-Racer-Kit이 `../external/D-Racer-Kit`에 있으면 자동으로 사용합니다.
 
+> **WSL (Ubuntu 26.04 등)**: `/opt/ros/humble`이 없을 수 있습니다.  
+> PC에서는 **코드 편집 + Git 브랜치·PR**까지 진행하고, `colcon build`·주행 테스트는 **D3-G 보드**에서 하세요.  
+> Git 규약: [collaboration.md](./collaboration.md)
+
 ---
 
 ## init_workspace.sh 동작
@@ -101,6 +105,16 @@ ros2 launch inference auto_driving.launch.py
 
 ---
 
-## 협업
+## 협업 (Git 규약)
 
-브랜치·PR·충돌 방지: [collaboration.md](./collaboration.md)
+**모든 코드 수정은 feature 브랜치 → PR → merge 방식입니다.** `main` 직접 push 금지.
+
+| 단계 | 명령·행동 |
+|------|-----------|
+| 1 | `git checkout main && git pull` |
+| 2 | `git checkout -b feature/이름-기능` |
+| 3 | 담당 `modules/` 수정 · commit · push |
+| 4 | GitHub PR 생성 → 팀장 merge |
+| 5 | 보드: `./scripts/board_sync.sh` |
+
+상세: [collaboration.md](./collaboration.md)
