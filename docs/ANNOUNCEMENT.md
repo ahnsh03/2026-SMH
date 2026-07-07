@@ -4,7 +4,7 @@
 
 [SEA:ME 해커톤] 팀 GitHub + 협업 구조 업데이트
 
-🔗 https://github.com/ahnsh03/SEA-Me-Hackathon
+🔗 https://github.com/ahnsh03/2026-SMH
 
 【변경 사항】
 - 모듈별 파일 분리 + ArUco 2인 담당 파일 분리 (충돌 방지)
@@ -20,8 +20,8 @@
 - 회전교차로: 양서준 → modules/roundabout.py
 
 【D3-G 보드 — 최초】
-git clone https://github.com/ahnsh03/SEA-Me-Hackathon.git
-cd SEA-Me-Hackathon
+git clone https://github.com/ahnsh03/2026-SMH.git
+cd 2026-SMH
 chmod +x scripts/*.sh
 ./scripts/board_sync.sh --no-pull
 

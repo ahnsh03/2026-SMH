@@ -1,6 +1,6 @@
 # 2026 SEA:ME 해커톤 — 대회 정보 통합 정리
 
-> **PC(WSL) 전체 프로젝트** (`…/2026-seame-hackathon/SEA-Me-Hackathon` 형태)를 쓰는 경우에만: 동일 내용이 [`../../docs/competition/대회정보.md`](../../docs/competition/대회정보.md)에 있습니다. 수정 시 두 파일을 동기화하세요. **D3-G 보드 단독 clone**에서는 이 파일이 SSOT입니다.
+> **PC(WSL) 전체 프로젝트** (`…/2026-seame-hackathon/2026-SMH` 형태)를 쓰는 경우에만: 동일 내용이 [`../../docs/competition/대회정보.md`](../../docs/competition/대회정보.md)에 있습니다. 수정 시 두 파일을 동기화하세요. **D3-G 보드 단독 clone**에서는 이 파일이 SSOT입니다.
 
 > 마지막 업데이트: 2026-07-01  
 > Notion: [2026 SEA:ME 해커톤](https://app.notion.com/p/55e1b0cdce9b8292a19d81c5b1605983)
@@ -16,7 +16,7 @@
 | 참가 | 27팀, 117명 |
 | 주제 | AI 네이티브 스케일카 자율주행 챌린지 |
 | 문의 | 국민대 미래자동차사업단 김민경 (02-910-6683, dana231920@kookmin.ac.kr) |
-| 팀 GitHub | https://github.com/ahnsh03/SEA-Me-Hackathon.git |
+| 팀 GitHub | https://github.com/ahnsh03/2026-SMH.git |
 | 정기 회의 | 월요일 15시 |
 
 ---
@@ -165,6 +165,6 @@
 | 자료 | 링크 |
 |------|------|
 | D-Racer-Kit (공식) | https://github.com/topst-development/D-Racer-Kit/tree/release/v1.0.0 |
-| 팀 GitHub | https://github.com/ahnsh03/SEA-Me-Hackathon.git |
+| 팀 GitHub | https://github.com/ahnsh03/2026-SMH.git |
 | 참고 영상 (Google Drive) | https://drive.google.com/file/d/1QpnQdkiiYtEs1k2Ll4sRCjBB_1pBNbmG/view |
 | 작년 홍보영상 | 유튜브 없음, 파일만 존재 (추후 공지 예정) |

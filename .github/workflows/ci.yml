@@ -10,6 +10,9 @@ jobs:
   build-inference:
     runs-on: ubuntu-22.04
     container: ros:humble
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -21,7 +24,7 @@ jobs:
       - name: Build inference package
         run: |
           source /opt/ros/humble/setup.bash
-          colcon build --symlink-install --packages-select inference
+          colcon build --symlink-install --packages-up-to inference
 
       - name: Python import check
         run: |
