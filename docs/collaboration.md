@@ -34,8 +34,8 @@ main (안정 — 보드 deploy)
 
 ```bash
 # 0. 저장소 이동
-cd ~/projects/2026-seame-hackathon/SEA-Me-Hackathon
-# 또는: cd ~/SEA-Me-Hackathon  (보드·단독 clone)
+cd ~/projects/2026-seame-hackathon/2026-SMH
+# 또는: cd ~/2026-SMH  (보드·단독 clone)
 
 # 1. main 최신화
 git checkout main
@@ -222,7 +222,7 @@ WSL에서 ROS Humble이 없으면 **코드 편집 + PR**까지 진행하고, 빌
 ### PC (WSL) — clone·브랜치 작업
 
 ```bash
-cd ~/projects/2026-seame-hackathon/SEA-Me-Hackathon
+cd ~/projects/2026-seame-hackathon/2026-SMH
 git checkout main && git pull
 
 # feature 브랜치에서 modules/ 수정 → commit → push → PR
@@ -237,7 +237,7 @@ gh pr create   # 또는 GitHub 웹
 ### D3-G 보드 — merge된 main 테스트
 
 ```bash
-cd ~/SEA-Me-Hackathon
+cd ~/2026-SMH
 ./scripts/board_sync.sh          # pull + init + build
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py
@@ -253,8 +253,8 @@ ros2 launch inference auto_driving.launch.py
 
 ```bash
 cd ~
-git clone https://github.com/ahnsh03/SEA-Me-Hackathon.git
-cd SEA-Me-Hackathon
+git clone https://github.com/ahnsh03/2026-SMH.git
+cd 2026-SMH
 chmod +x scripts/*.sh
 ./scripts/board_sync.sh --no-pull   # clone 직후엔 pull 생략
 ```
@@ -262,7 +262,7 @@ chmod +x scripts/*.sh
 ### 이후 매번 (main merge 반영)
 
 ```bash
-cd ~/SEA-Me-Hackathon
+cd ~/2026-SMH
 ./scripts/board_sync.sh
 ```
 

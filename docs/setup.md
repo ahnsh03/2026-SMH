@@ -12,8 +12,8 @@
 
 ```bash
 cd ~
-git clone https://github.com/ahnsh03/SEA-Me-Hackathon.git
-cd SEA-Me-Hackathon
+git clone https://github.com/ahnsh03/2026-SMH.git
+cd 2026-SMH
 chmod +x scripts/*.sh
 ./scripts/board_sync.sh --no-pull
 ```
@@ -23,7 +23,7 @@ D-Racer-Kit은 `<repo>/external/D-Racer-Kit`에 clone됩니다 (Git 추적 안 �
 ### 코드 업데이트 (매번)
 
 ```bash
-cd ~/SEA-Me-Hackathon
+cd ~/2026-SMH
 ./scripts/board_sync.sh
 ```
 
@@ -34,7 +34,7 @@ cd ~/SEA-Me-Hackathon
 ## PC (WSL) — 상위 프로젝트 사용
 
 ```bash
-cd ~/projects/2026-seame-hackathon/SEA-Me-Hackathon
+cd ~/projects/2026-seame-hackathon/2026-SMH
 chmod +x scripts/*.sh
 ./scripts/init_workspace.sh
 

@@ -1,9 +1,11 @@
-# SEA-Me-Hackathon
+# 2026-SMH
 
 **2026 SEA:ME 해커톤** — AIM 학술동아리 자율주행 팀 저장소
 
+> Repo 이름은 대회 약자(SMH)를 사용합니다. 로컬 경로·셸 변수: `$SMH`
+
 > **PC(WSL) 상위 프로젝트**: [../README.md](../README.md)  
-> **D3-G 보드 단독 clone** (`~/SEA-Me-Hackathon`) — 아래 빠른 시작만으로 충분합니다.
+> **D3-G 보드 단독 clone** (`~/2026-SMH`) — 아래 빠른 시작만으로 충분합니다.
 
 | | |
 |---|---|
@@ -17,8 +19,8 @@
 ## 빠른 시작 (D3-G 보드)
 
 ```bash
-git clone https://github.com/ahnsh03/SEA-Me-Hackathon.git
-cd SEA-Me-Hackathon
+git clone https://github.com/ahnsh03/2026-SMH.git
+cd 2026-SMH
 chmod +x scripts/*.sh
 ./scripts/board_sync.sh --no-pull   # 최초 1회
 ```
@@ -39,7 +41,7 @@ ros2 launch inference auto_driving.launch.py
 ## 저장소 구조
 
 ```
-SEA-Me-Hackathon/
+2026-SMH/
 ├── docs/
 │   ├── collaboration.md   # ★ 브랜치·PR·충돌 방지 (팀원 필독)
 │   ├── roles.md           # 역할 분담

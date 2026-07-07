@@ -12,7 +12,7 @@
 
 | 자료 | 링크 |
 |------|------|
-| 팀 GitHub | https://github.com/ahnsh03/SEA-Me-Hackathon |
+| 팀 GitHub | https://github.com/ahnsh03/2026-SMH |
 | Notion 대시보드 | https://app.notion.com/p/55e1b0cdce9b8292a19d81c5b1605983 |
 | Notion 대회 정보 | https://app.notion.com/p/3901b0cdce9b81eaa6eff92ecd0f026b |
 | 정기 회의 | 매주 **월요일 15시** |

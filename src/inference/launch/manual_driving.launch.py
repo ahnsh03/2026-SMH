@@ -9,7 +9,7 @@ def get_vehicle_config_path() -> str:
         candidate = base_path / 'src' / 'config' / 'vehicle_config.yaml'
         if candidate.exists():
             return str(candidate)
-    return '/home/topst/SEA-Me-Hackathon/src/config/vehicle_config.yaml'
+    return '/home/topst/2026-SMH/src/config/vehicle_config.yaml'
 
 
 def generate_launch_description():
