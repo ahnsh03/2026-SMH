@@ -10,6 +10,9 @@ jobs:
   build-inference:
     runs-on: ubuntu-22.04
     container: ros:humble
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
