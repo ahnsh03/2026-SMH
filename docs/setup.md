@@ -31,7 +31,33 @@ cd ~/2026-SMH
 
 ---
 
-## PC (WSL) — 상위 프로젝트 사용
+## PC (WSL) — Docker 개발 환경 (권장)
+
+팀원 WSL 버전(22.04 / 24.04 / 26.04 등)이 달라도 **동일한 Ubuntu 22.04 + ROS2 Humble** 컨테이너를 사용합니다.
+
+**사전 요구**: [Docker Desktop](https://www.docker.com/products/docker-desktop/) (WSL2 통합 활성화)
+
+```bash
+cd ~/projects/2026-seame-hackathon/2026-SMH
+chmod +x scripts/*.sh
+
+# 최초 1회
+./scripts/dev_container.sh build
+./scripts/dev_container.sh init
+
+# PR 전 검증 (GitHub CI와 동일)
+./scripts/dev_container.sh check
+
+# 개발 셸 진입
+./scripts/dev_container.sh shell
+```
+
+상세 규약·트러블슈팅: **[dev-environment.md](./dev-environment.md)**  
+Git 규약: [collaboration.md](./collaboration.md)
+
+### PC (WSL) — 네이티브 22.04 (Docker 미사용 시)
+
+Ubuntu 22.04 WSL에 ROS2 Humble이 설치된 경우에만 해당합니다.
 
 ```bash
 cd ~/projects/2026-seame-hackathon/2026-SMH
@@ -45,9 +71,8 @@ source install/setup.bash
 
 D-Racer-Kit이 `../external/D-Racer-Kit`에 있으면 자동으로 사용합니다.
 
-> **WSL (Ubuntu 26.04 등)**: `/opt/ros/humble`이 없을 수 있습니다.  
-> PC에서는 **코드 편집 + Git 브랜치·PR**까지 진행하고, `colcon build`·주행 테스트는 **D3-G 보드**에서 하세요.  
-> Git 규약: [collaboration.md](./collaboration.md)
+> **WSL 24.04 / 26.04 등**: `/opt/ros/humble`이 없을 수 있습니다.  
+> **Docker 사용을 권장**합니다. 주행 테스트는 **D3-G 보드**에서 하세요.
 
 ---
 

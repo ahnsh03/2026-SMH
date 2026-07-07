@@ -34,6 +34,7 @@ ros2 launch inference auto_driving.launch.py
 ```
 
 자세한 셋업: [docs/setup.md](docs/setup.md)  
+**PC Docker 환경 (팀 표준)**: [docs/dev-environment.md](docs/dev-environment.md)  
 협업 규칙: [docs/collaboration.md](docs/collaboration.md)
 
 ---
@@ -47,8 +48,11 @@ ros2 launch inference auto_driving.launch.py
 │   ├── roles.md           # 역할 분담
 │   ├── setup.md           # 셋업
 │   └── competition.md     # 대회 정보
+├── Dockerfile             # PC 개발용 (22.04 + Humble)
+├── docker-compose.yml
 ├── scripts/
 │   ├── init_workspace.sh  # D-Racer-Kit clone + src/ 링크
+│   ├── dev_container.sh   # ★ PC: Docker 빌드·셸·검증
 │   └── board_sync.sh      # ★ 보드: pull + init + build
 ├── external/              # D-Racer-Kit (Git 제외, init 시 생성)
 └── src/
@@ -129,6 +133,7 @@ main → feature/wontae-lane → PR → merge → board_sync.sh
 - [협업 가이드](docs/collaboration.md) ★
 - [역할 분담](docs/roles.md)
 - [셋업 가이드](docs/setup.md)
+- [개발 환경 규약 · Docker](docs/dev-environment.md) ★
 - [대회 정보](docs/competition.md)
 - [참고 링크](docs/references.md)
 
