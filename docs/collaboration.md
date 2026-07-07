@@ -214,16 +214,23 @@ RoundaboutResult(active=True, steering=0.3, throttle=0.2)
 
 | 환경 | 역할 | 빌드 |
 |------|------|------|
-| **PC (WSL)** | 코드 편집, Git 브랜치·PR | Ubuntu 26.04 등 — ROS2 Humble **미설치** 가능 |
+| **PC Docker** (권장) | 코드 편집, `colcon build`, import 검증, PR | Ubuntu 22.04 + Humble (컨테이너) |
+| **PC (WSL 네이티브)** | Docker 미사용 시 | Ubuntu **22.04** + Humble만 해당 |
 | **D3-G 보드** | `colcon build`, 주행 테스트 | Ubuntu 22.04 + ROS2 Humble |
 
-WSL에서 ROS Humble이 없으면 **코드 편집 + PR**까지 진행하고, 빌드·주행 확인은 **D3-G**에서 `board_sync.sh` 후 테스트합니다.
+팀 표준 Docker 환경: **[dev-environment.md](./dev-environment.md)**
+
+PR 전 PC에서 `./scripts/dev_container.sh check`로 CI와 동일한 검증을 권장합니다.  
+실제 주행 확인은 merge 후 **D3-G**에서 `board_sync.sh` 후 테스트합니다.
 
 ### PC (WSL) — clone·브랜치 작업
 
 ```bash
 cd ~/projects/2026-seame-hackathon/2026-SMH
 git checkout main && git pull
+
+# PR 전 로컬 검증 (권장)
+./scripts/dev_container.sh check
 
 # feature 브랜치에서 modules/ 수정 → commit → push → PR
 git checkout -b feature/wontae-lane
