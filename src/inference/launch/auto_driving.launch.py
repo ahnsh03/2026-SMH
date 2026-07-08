@@ -62,6 +62,18 @@ def generate_launch_description():
             output='screen',
         ),
         Node(
+            package='monitor',
+            executable='monitor_node',
+            name='monitor_node',
+            output='screen',
+            parameters=[
+                {
+                    'vehicle_config_file': vehicle_config_path,
+                    'debug_image': False,
+                },
+            ],
+        ),
+        Node(
             package='inference',
             executable='inference_node',
             name='inference_node',
