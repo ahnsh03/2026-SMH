@@ -121,12 +121,17 @@ ros2 launch inference auto_driving.launch.py
 ```bash
 source install/setup.bash
 
-# 수동 주행
+# 수동 주행 (camera + monitor)
 ros2 launch inference manual_driving.launch.py
 
-# 자율주행
+# 자율주행 (camera + monitor + inference)
 ros2 launch inference auto_driving.launch.py
 ```
+
+웹 모니터: `http://<WEB_HOST>:5000` (`src/config/vehicle_config.yaml`)  
+ArUco 보드 확인: `ros2 topic echo /debug/aruco` — 상세는 [docs/board-workflow.md](docs/board-workflow.md) §3.3
+
+> `~/D-Racer-Kit`에서 camera/monitor를 따로 실행하지 마세요. 장치 충돌로 영상이 멈춥니다.
 
 ---
 

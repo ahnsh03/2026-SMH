@@ -129,15 +129,22 @@ source ~/.bashrc
 ```bash
 source install/setup.bash
 
-# 수동 주행 (조이스틱)
+# 수동 주행 (조이스틱) — camera + monitor 포함
 ros2 launch inference manual_driving.launch.py
 
-# 자율주행 (팀 inference 파이프라인)
+# 자율주행 (팀 inference 파이프라인) — camera + monitor + inference 포함
 ros2 launch inference auto_driving.launch.py
 ```
 
 > 주최측 launch (`ros2 launch control auto_driving.launch.py`) 대신  
 > **팀 `inference` 패키지 launch**를 사용하세요.
+
+팀 launch에 `monitor_node`가 포함되어 있습니다.  
+웹 모니터 주소는 `src/config/vehicle_config.yaml`의 `WEB_HOST` / `WEB_PORT`입니다  
+(보드 예: `http://10.0.0.23:5000`).
+
+> `~/D-Racer-Kit`에서 `camera_node` / `monitor_node`를 **따로 켜지 마세요.**  
+> `/dev/video1`을 점유하면 카메라·모니터·`/debug/aruco`가 모두 멈춥니다.
 
 ---
 
@@ -151,18 +158,36 @@ ros2 launch inference auto_driving.launch.py
 | `/joystick` | `joystick_msgs/Joystick` | 조이스틱 (E-Stop) |
 | `/battery_status` | `battery_msgs/Battery` | 배터리 |
 
-ArUco 인쇄물 보드 확인:
+### ArUco 인쇄물 보드 확인 (실차 검증됨)
+
+- Dictionary: **`DICT_6X6_50`**
+- Stop ID: **`3`만** 정지 (한 변 10 cm / 15 cm 모두 OK — 크기는 실물만, 코드에 cm 파라미터 없음)
 
 ```bash
+cd ~/2026-SMH
+source install/setup.bash
 ros2 launch inference auto_driving.launch.py
-# 다른 터미널
+
+# 다른 터미널들
+ros2 topic hz /camera/image/compressed    # ~30 Hz여야 함
 ros2 topic echo /debug/aruco
-# 타이밍 (혼동 주의):
-#   ENTER 0.15초 — 마커가 보이기 시작한 뒤 should_stop=1 까지 (빨리 정지)
-#   EXIT  1.5 초 — 마커가 사라진 뒤 should_stop=0 까지 (재출발, 더 길게)
-# 기대: detected=1 marker_id=3 → ~0.15s 후 should_stop=1
-#       치우면 detected=0, ~1.5s 후 should_stop=0
+# 브라우저: http://10.0.0.23:5000
 ```
+
+타이밍 (혼동 주의):
+
+- **ENTER 0.15초** — 마커가 보이기 시작한 뒤 `should_stop=1`까지 (빨리 정지)
+- **EXIT 1.5초** — 마커가 사라진 뒤 `should_stop=0`까지 (재출발)
+
+기대:
+
+```text
+detected=1 should_stop=0 marker_id=3   # 보이기 시작
+detected=1 should_stop=1 marker_id=3   # ~0.15s 후 정지
+detected=0 should_stop=0 marker_id=None # 치운 뒤 ~1.5s
+```
+
+카메라·모니터가 비면: [board-workflow.md §8](./board-workflow.md) 트러블슈팅 참고.
 
 ---
 
