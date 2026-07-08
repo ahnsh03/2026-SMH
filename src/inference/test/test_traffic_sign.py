@@ -40,6 +40,12 @@ def test_detect_unlit_lens_is_unknown():
     assert detect_signal(frame) == TrafficSignal.UNKNOWN
 
 
+def test_detect_non_round_green_blob_is_unknown():
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    cv2.rectangle(frame, (20, 90), (180, 115), (0, 255, 0), -1)
+    assert detect_signal(frame) == TrafficSignal.UNKNOWN
+
+
 def test_detect_empty_frame():
     assert detect_signal(np.zeros((0, 0), dtype=np.uint8)) == TrafficSignal.UNKNOWN
     assert detect_signal(np.full((64, 64, 3), 255, dtype=np.uint8)) == TrafficSignal.UNKNOWN

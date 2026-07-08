@@ -17,6 +17,8 @@ _GREEN_RANGE = ((40, 80, 120), (90, 255, 255))
 
 _MIN_RED_PIXELS = 50
 _MIN_GREEN_PIXELS = 50
+_MIN_CIRCULARITY = 0.35
+_MAX_ASPECT_RATIO = 3.0
 _MORPH_KERNEL = np.ones((5, 5), dtype=np.uint8)
 
 
@@ -29,6 +31,32 @@ def _clean_mask(mask: np.ndarray) -> np.ndarray:
 def _mask_pixels(mask: np.ndarray) -> int:
     """Return the number of selected pixels in a binary mask."""
     return int(cv2.countNonZero(mask))
+
+
+def _has_loose_round_blob(mask: np.ndarray) -> bool:
+    """Return True when the largest mask blob is plausibly traffic-light shaped."""
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    best_contour = None
+    best_area = 0.0
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area > best_area:
+            best_area = area
+            best_contour = contour
+    if best_contour is None:
+        return False
+
+    perimeter = cv2.arcLength(best_contour, True)
+    if perimeter == 0:
+        return False
+    circularity = 4 * np.pi * best_area / (perimeter**2)
+
+    _, _, width, height = cv2.boundingRect(best_contour)
+    if width == 0 or height == 0:
+        return False
+    aspect_ratio = max(width, height) / min(width, height)
+
+    return circularity >= _MIN_CIRCULARITY and aspect_ratio <= _MAX_ASPECT_RATIO
 
 
 def detect_signal(frame: np.ndarray) -> TrafficSignal:
@@ -54,8 +82,8 @@ def detect_signal(frame: np.ndarray) -> TrafficSignal:
     red_pixels = _mask_pixels(red_mask)
     green_pixels = _mask_pixels(green_mask)
 
-    red_ok = red_pixels >= _MIN_RED_PIXELS
-    green_ok = green_pixels >= _MIN_GREEN_PIXELS
+    red_ok = red_pixels >= _MIN_RED_PIXELS and _has_loose_round_blob(red_mask)
+    green_ok = green_pixels >= _MIN_GREEN_PIXELS and _has_loose_round_blob(green_mask)
 
     if red_ok:
         return TrafficSignal.RED
