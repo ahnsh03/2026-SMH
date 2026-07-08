@@ -5,6 +5,10 @@ Subscribes to camera images, runs perception/planning pipeline, publishes /contr
 
 Integration is handled in pipeline.py — assignees edit modules/ only.
 See docs/collaboration.md for branch and PR rules.
+
+ArUco 보드 확인:
+  ros2 topic echo /debug/aruco
+  # 또는 launch 로그에서 [aruco] 상태 변경만 출력
 """
 
 from __future__ import annotations
@@ -15,13 +19,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 import rclpy
+import yaml
 from control_msgs.msg import Control
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
-import yaml
+from std_msgs.msg import String
 
 from inference.pipeline import fuse_control, run_perception
+from inference.types import ArucoResult
 
 
 def get_default_vehicle_config_path() -> str:
@@ -39,6 +45,8 @@ class InferenceNode(Node):
         self.declare_parameter('vehicle_config_file', get_default_vehicle_config_path())
         self.declare_parameter('image_topic', '/camera/image/compressed')
         self.declare_parameter('control_topic', '/control')
+        self.declare_parameter('aruco_debug_topic', '/debug/aruco')
+        self.declare_parameter('aruco_debug_log', True)
         self.declare_parameter('publish_hz', 10.0)
         self.declare_parameter('default_throttle', 0.0)
         self.declare_parameter('cruise_throttle', 0.35)
@@ -49,6 +57,8 @@ class InferenceNode(Node):
         )
         image_topic = str(self.get_parameter('image_topic').value)
         control_topic = str(self.get_parameter('control_topic').value)
+        aruco_debug_topic = str(self.get_parameter('aruco_debug_topic').value)
+        self.aruco_debug_log = bool(self.get_parameter('aruco_debug_log').value)
         publish_hz = float(self.get_parameter('publish_hz').value)
         self.default_throttle = float(self.get_parameter('default_throttle').value)
         self.cruise_throttle = float(self.get_parameter('cruise_throttle').value)
@@ -67,6 +77,7 @@ class InferenceNode(Node):
         self.latest_frame: np.ndarray | None = None
         self.steering = self.steer_trim
         self.throttle = self.default_throttle
+        self._last_aruco_log_key: tuple[bool, bool, int | None] | None = None
 
         self.create_subscription(
             CompressedImage,
@@ -75,11 +86,13 @@ class InferenceNode(Node):
             image_qos,
         )
         self.control_pub = self.create_publisher(Control, control_topic, 10)
+        self.aruco_debug_pub = self.create_publisher(String, aruco_debug_topic, 10)
         self.create_timer(1.0 / publish_hz, self.publish_control)
 
         self.get_logger().info(
             f'inference_node started: image_topic={image_topic}, '
-            f'control_topic={control_topic}, steer_trim={self.steer_trim}'
+            f'control_topic={control_topic}, aruco_debug_topic={aruco_debug_topic}, '
+            f'steer_trim={self.steer_trim}'
         )
 
     def image_callback(self, msg: CompressedImage):
@@ -96,12 +109,29 @@ class InferenceNode(Node):
 
     def run_pipeline(self, frame: np.ndarray):
         ctx = run_perception(frame)
+        self.publish_aruco_debug(ctx.aruco)
         return fuse_control(
             ctx,
             steer_trim=self.steer_trim,
             default_throttle=self.default_throttle,
             cruise_throttle=self.cruise_throttle,
         )
+
+    def publish_aruco_debug(self, aruco: ArucoResult) -> None:
+        """매 프레임 /debug/aruco 발행 + 상태 변경 시에만 로그."""
+        line = (
+            f'detected={int(aruco.detected)} '
+            f'should_stop={int(aruco.should_stop)} '
+            f'marker_id={aruco.marker_id}'
+        )
+        msg = String()
+        msg.data = line
+        self.aruco_debug_pub.publish(msg)
+
+        key = (aruco.detected, aruco.should_stop, aruco.marker_id)
+        if self.aruco_debug_log and key != self._last_aruco_log_key:
+            self.get_logger().info(f'[aruco] {line}')
+            self._last_aruco_log_key = key
 
     def publish_control(self):
         msg = Control()
