@@ -20,6 +20,8 @@ git clone https://github.com/ahnsh03/2026-SMH.git
 cd 2026-SMH
 chmod +x scripts/*.sh
 
+# external/D-Racer-Kit이 이미 clone 디렉터리면 먼저 제거
+rm -rf external/D-Racer-Kit
 mkdir -p external
 ln -sfn ~/D-Racer-Kit external/D-Racer-Kit
 
