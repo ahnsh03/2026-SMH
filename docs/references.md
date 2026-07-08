@@ -27,11 +27,24 @@ source install/setup.bash
 ros2 launch inference auto_driving.launch.py
 ```
 
+## 하드웨어 · 시뮬
+
+| 자료 | 링크 |
+|------|------|
+| C920e 카메라 스펙 | [hardware-camera.md](./hardware-camera.md) |
+| LIMO 시뮬 도입 요약 | [simulation.md](./simulation.md) |
+| limo_ros2 (Humble, `limo_car` Gazebo) | https://github.com/agilexrobotics/limo_ros2.git |
+| ugv_gazebo_sim (ROS1) | https://github.com/agilexrobotics/ugv_gazebo_sim.git |
+| limo_sim_code_v2 (작년 ROS1 앱) | https://github.com/ahnsh03/limo_sim_code_v2.git |
+| Logitech C920e Sync Hub 스펙 | https://hub.sync.logitech.com/c920e/post/specifications---c920e-business-webcam-TKnike7FetCzuAt |
+
+PC 상위 `external/`에 시뮬 레포가 클론되어 있습니다. 상세 평가: `docs/sim/limo-simulator-assessment.md`.
+
 ## D-Racer-Kit 주요 패키지
 
 | 패키지 | 역할 |
 |--------|------|
-| `camera` | 카메라 → `/camera/image/compressed` |
+| `camera` | C920e USB → `/camera/image/compressed` (기본 320×160) |
 | `control` | `/control` → 모터/서보 |
 | `joystick` | 조이스틱 + E-Stop |
 | `opencv` | OpenCV 데모 (차선 추종 참고) |

@@ -2,7 +2,7 @@
 
 > **PC(WSL) 전체 프로젝트** (`…/2026-seame-hackathon/2026-SMH` 형태)를 쓰는 경우에만: 동일 내용이 [`../../docs/competition/대회정보.md`](../../docs/competition/대회정보.md)에 있습니다. 수정 시 두 파일을 동기화하세요. **D3-G 보드 단독 clone**에서는 이 파일이 SSOT입니다.
 
-> 마지막 업데이트: 2026-07-01  
+> 마지막 업데이트: 2026-07-08  
 > Notion: [2026 SEA:ME 해커톤](https://app.notion.com/p/55e1b0cdce9b8292a19d81c5b1605983)
 
 ---
@@ -128,7 +128,20 @@
 
 ---
 
-## 7. 기술 구현 요구사항
+## 7. 하드웨어 — 카메라
+
+| 항목 | 내용 |
+|------|------|
+| 모델 | **Logitech C920e** (USB, UVC) |
+| 광학 | dFoV 78° / hFoV 70.42° / vFoV 43.3°, 초점거리 3.67 mm |
+| 최대 영상 | 1080p @ 30 fps |
+| D-Racer 기본 출력 | **320×160** JPEG → `/camera/image/compressed` |
+
+상세: [hardware-camera.md](./hardware-camera.md)
+
+---
+
+## 8. 기술 구현 요구사항
 
 | 영역 | 내용 |
 |------|------|
@@ -148,7 +161,7 @@
 
 ---
 
-## 8. 팀 역할 분담
+## 9. 팀 역할 분담
 
 | 역할 | 담당 |
 |------|------|
@@ -160,7 +173,7 @@
 
 ---
 
-## 9. 참고 자료
+## 10. 참고 자료
 
 | 자료 | 링크 |
 |------|------|
@@ -168,3 +181,5 @@
 | 팀 GitHub | https://github.com/ahnsh03/2026-SMH.git |
 | 참고 영상 (Google Drive) | https://drive.google.com/file/d/1QpnQdkiiYtEs1k2Ll4sRCjBB_1pBNbmG/view |
 | 작년 홍보영상 | 유튜브 없음, 파일만 존재 (추후 공지 예정) |
+| C920e 카메라 스펙 | [hardware-camera.md](./hardware-camera.md) |
+| LIMO 시뮬 메모 | [simulation.md](./simulation.md) |
