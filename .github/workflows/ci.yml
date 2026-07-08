@@ -16,6 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Match Dockerfile / D3-G: inference ArUco & camera decode need OpenCV.
+      - name: Install Python OpenCV
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3-opencv python3-numpy
+          rm -rf /var/lib/apt/lists/*
+
       - name: Init workspace
         run: |
           chmod +x scripts/init_workspace.sh

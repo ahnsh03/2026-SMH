@@ -70,6 +70,9 @@ def generate_launch_description():
                 {
                     'vehicle_config_file': vehicle_config_path,
                     'cruise_throttle': cruise_throttle,
+                    # ArUco 보드 테스트: ros2 topic echo /debug/aruco
+                    'aruco_debug_topic': '/debug/aruco',
+                    'aruco_debug_log': True,
                 },
             ],
         ),

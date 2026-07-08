@@ -147,8 +147,22 @@ ros2 launch inference auto_driving.launch.py
 |------|------|------|
 | `/camera/image/compressed` | `sensor_msgs/CompressedImage` | 카메라 영상 |
 | `/control` | `control_msgs/Control` | steering / throttle |
+| `/debug/aruco` | `std_msgs/String` | ArUco 디버그 (`detected` / `should_stop` / `marker_id`) |
 | `/joystick` | `joystick_msgs/Joystick` | 조이스틱 (E-Stop) |
 | `/battery_status` | `battery_msgs/Battery` | 배터리 |
+
+ArUco 인쇄물 보드 확인:
+
+```bash
+ros2 launch inference auto_driving.launch.py
+# 다른 터미널
+ros2 topic echo /debug/aruco
+# 타이밍 (혼동 주의):
+#   ENTER 0.15초 — 마커가 보이기 시작한 뒤 should_stop=1 까지 (빨리 정지)
+#   EXIT  1.5 초 — 마커가 사라진 뒤 should_stop=0 까지 (재출발, 더 길게)
+# 기대: detected=1 marker_id=3 → ~0.15s 후 should_stop=1
+#       치우면 detected=0, ~1.5s 후 should_stop=0
+```
 
 ---
 

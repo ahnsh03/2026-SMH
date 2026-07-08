@@ -13,6 +13,7 @@
 | 자료 | 링크 |
 |------|------|
 | 팀 GitHub | https://github.com/ahnsh03/2026-SMH |
+| PC 로컬 영상·트랙 자료 (`data/`, Git 밖) | WSL: `~/projects/2026-seame-hackathon/data/` |
 | PC Docker 개발 환경 | [dev-environment.md](./dev-environment.md) |
 | Notion 대시보드 | https://app.notion.com/p/55e1b0cdce9b8292a19d81c5b1605983 |
 | Notion 대회 정보 | https://app.notion.com/p/3901b0cdce9b81eaa6eff92ecd0f026b |
@@ -37,6 +38,16 @@ ros2 launch inference auto_driving.launch.py
 | `monitor` | 웹 대시보드 |
 | `battery` | 배터리 모니터링 |
 | **`inference`** | **팀 자율주행 패키지 (본 레포)** |
+
+## PC 로컬 `data/` 폴더 (Git 미포함)
+
+WSL 상위 프로젝트 `2026-seame-hackathon/data/`에 신호등·표지판 참고 영상을 둡니다.
+
+| 폴더명 | 설명 |
+|--------|------|
+| `offboard_handheld_videos/` | 로봇 시점 없이 손으로 직접 촬영한 참고 영상 |
+| `onboard_perspective_videos/` | 로봇 카메라 높이·각도를 맞춰 촬영한 영상 |
+| `organizer_provided_videos/` | 주최측 제공 영상 |
 
 ## ROS2 토픽
 
