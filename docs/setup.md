@@ -10,6 +10,24 @@
 
 ## D3-G 보드 (권장 — 단독 clone)
 
+### Case A — `~/D-Racer-Kit`이 이미 있는 경우
+
+공식 가이드로 D-Racer-Kit 세팅을 마쳤다면 **다시 clone하지 않고** 링크만 연결합니다.
+
+```bash
+cd ~
+git clone https://github.com/ahnsh03/2026-SMH.git
+cd 2026-SMH
+chmod +x scripts/*.sh
+
+mkdir -p external
+ln -sfn ~/D-Racer-Kit external/D-Racer-Kit
+
+./scripts/board_sync.sh --no-pull
+```
+
+### Case B — 처음부터 시작하는 경우
+
 ```bash
 cd ~
 git clone https://github.com/ahnsh03/2026-SMH.git
@@ -19,6 +37,8 @@ chmod +x scripts/*.sh
 ```
 
 D-Racer-Kit은 `<repo>/external/D-Racer-Kit`에 clone됩니다 (Git 추적 안 함).
+
+> 보드에서 개발·주행 전체 흐름: **[board-workflow.md](./board-workflow.md)** ★
 
 ### 코드 업데이트 (매번)
 

@@ -256,13 +256,19 @@ ros2 launch inference auto_driving.launch.py
 
 ## 5. D3-G 보드 셋업
 
-### 최초 1회
+> 전체 흐름(셋업·주행·Claude 사용): **[board-workflow.md](./board-workflow.md)** ★
+
+### 최초 1회 (`~/D-Racer-Kit`이 이미 있는 경우)
 
 ```bash
 cd ~
 git clone https://github.com/ahnsh03/2026-SMH.git
 cd 2026-SMH
 chmod +x scripts/*.sh
+
+mkdir -p external
+ln -sfn ~/D-Racer-Kit external/D-Racer-Kit
+
 ./scripts/board_sync.sh --no-pull   # clone 직후엔 pull 생략
 ```
 

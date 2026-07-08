@@ -18,10 +18,13 @@
 
 ## 빠른 시작 (D3-G 보드)
 
+`~/D-Racer-Kit`이 이미 있으면 링크만 연결합니다. 상세: [docs/board-workflow.md](docs/board-workflow.md)
+
 ```bash
 git clone https://github.com/ahnsh03/2026-SMH.git
 cd 2026-SMH
 chmod +x scripts/*.sh
+mkdir -p external && ln -sfn ~/D-Racer-Kit external/D-Racer-Kit
 ./scripts/board_sync.sh --no-pull   # 최초 1회
 ```
 
@@ -34,6 +37,7 @@ ros2 launch inference auto_driving.launch.py
 ```
 
 자세한 셋업: [docs/setup.md](docs/setup.md)  
+**보드 개발·주행 (팀원 필독)**: [docs/board-workflow.md](docs/board-workflow.md) ★  
 **PC Docker 환경 (팀 표준)**: [docs/dev-environment.md](docs/dev-environment.md)  
 협업 규칙: [docs/collaboration.md](docs/collaboration.md)
 
@@ -131,6 +135,7 @@ main → feature/wontae-lane → PR → merge → board_sync.sh
 ## 문서
 
 - [협업 가이드](docs/collaboration.md) ★
+- [보드 개발·주행 가이드](docs/board-workflow.md) ★
 - [역할 분담](docs/roles.md)
 - [셋업 가이드](docs/setup.md)
 - [개발 환경 규약 · Docker](docs/dev-environment.md) ★

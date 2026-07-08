@@ -180,7 +180,7 @@ ros2 launch inference manual_driving.launch.py   # 수동
 ros2 launch inference auto_driving.launch.py     # 자율
 ```
 
-상세: [setup.md](./setup.md)
+상세: [setup.md](./setup.md) · [board-workflow.md](./board-workflow.md)
 
 ---
 

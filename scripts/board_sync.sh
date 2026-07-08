@@ -38,14 +38,19 @@ if [ ! -f /opt/ros/humble/setup.bash ]; then
   exit 1
 fi
 
+# ROS setup scripts reference unset vars; incompatible with set -u.
+set +u
 # shellcheck source=/dev/null
 source /opt/ros/humble/setup.bash
+set -u
 
 echo "[SEA-Me] colcon build..."
 colcon build --symlink-install
 
+set +u
 # shellcheck source=/dev/null
 source "${ROOT}/install/setup.bash"
+set -u
 
 echo ""
 echo "[SEA-Me] Ready."
