@@ -191,7 +191,7 @@ ROS2 메시지 경로:
 |----|--------|------|
 | `USB_CAM` | `true` | USB 카메라 사용 |
 | `USB_CAM_DEVICE` | `/dev/video1` | 카메라 디바이스 |
-| `IMAGE_WIDTH` / `IMAGE_HEIGHT` | 320 / 160 | 카메라 출력 해상도 |
+| `IMAGE_WIDTH` / `IMAGE_HEIGHT` | 320 / 180 | 카메라 출력 해상도 (16:9) |
 | `STEER_TRIM` | 팀별 보정값 | 조향 중립 오프셋 |
 | `IMAGE_TOPIC` | `/camera/image/compressed` | 모니터·인지 입력 |
 
@@ -205,7 +205,7 @@ ROS2 메시지 경로:
 |------|------|
 | CPU | 8코어 Arm이나 vision + ROS2 + 웹 모니터 동시 시 **CPU·메모리 부하** 큼 |
 | 카메라 FPS | `publish_hz` 최대 ~30; 그 이상은 보드에서 불안정 ([Camera Package](https://github.com/topst-development/D-Racer-Kit/blob/release/v1.0.0/docs/%5B7%5D%20Camera%20Package.md)) |
-| 해상도 | 기본 **320×160** — 인지·성능 균형점; 올리면 latency 증가 |
+| 해상도 | **320×180** (16:9) — C920e 네이티브 비율 유지; 주최측 기본 320×160 대비 세로 왜곡 없음 |
 | 배터리 | INA219 기준 약 **12.0~16.8 V** → % 환산 |
 | PC vs 보드 | PC Docker는 **빌드·로직 검증**; **주행·카메라·I2C**는 D3-G에서만 |
 | 아키텍처 | aarch64 — PC x86 Docker 이미지와 바이너리 호환 안 됨 |

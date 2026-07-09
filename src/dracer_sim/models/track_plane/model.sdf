@@ -1,0 +1,42 @@
+<?xml version="1.0" ?>
+<!-- Physical size: image width = 12.0 m (see config/track_plane.yaml).
+     Use <plane> (not <box>) so the texture maps 1:1 without vertical stretch. -->
+<sdf version="1.6">
+  <model name="track_plane">
+    <static>true</static>
+    <link name="link">
+      <pose>0 0 0 0 0 0</pose>
+      <collision name="collision">
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>12.0 8.9975</size>
+          </plane>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.0</mu>
+              <mu2>1.0</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <plane>
+            <normal>0 0 1</normal>
+            <size>12.0 8.9975</size>
+          </plane>
+        </geometry>
+        <material>
+          <script>
+            <uri>model://track_plane/materials/scripts</uri>
+            <uri>model://track_plane/materials/textures</uri>
+            <name>TrackCWMaterial</name>
+          </script>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

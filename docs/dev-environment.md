@@ -10,18 +10,18 @@
 | 환경 | OS / ROS | 용도 | 필수 여부 |
 |------|----------|------|-----------|
 | **D3-G 보드** | Ubuntu 22.04 + Humble | `colcon build`, launch, 조이스틱·카메라·모터 테스트 | **필수** (주행 검증) |
-| **PC Docker** | Ubuntu 22.04 + Humble (컨테이너) | 코드 편집, `colcon build`, import 검증, PR 전 확인 | **권장** (WSL 버전 무관) |
-| **PC WSL 네이티브** | Ubuntu 22.04 + Humble 직접 설치 | Docker 없이 동일 작업 | 선택 (22.04만 해당) |
-| **PC WSL (24.04/26.04 등)** | ROS2 Humble 미지원 | Git 편집만 | Docker 또는 보드 빌드 병행 |
+| **PC Docker** | Ubuntu 22.04 + Humble (컨테이너) | 빌드, import 검증, **Gazebo 시뮬** | **권장** (WSL 버전 무관) |
+| **PC WSL 네이티브** | Ubuntu **22.04** + Humble 직접 설치 | Docker 없이 동일 작업 | 22.04만 해당 |
+| **PC WSL (24.04/26.04 등)** | 호스트 ROS **설치 불가** | Git 편집 + **Docker 필수** | **Docker 사용** |
 
 ### Docker로 할 수 있는 것 / 없는 것
 
 | 가능 | 불가능 (D3-G 전용) |
 |------|-------------------|
-| `init_workspace.sh` | 조이스틱 USB 입력 |
-| `colcon build --packages-up-to inference` | 카메라 하드웨어 스트리밍 |
-| `inference.pipeline` import 검증 | PCA9685 모터/조향 제어 |
-| PR 전 로컬 빌드 확인 | `ros2 launch` 실제 주행 |
+| `init_workspace.sh` | USB 조이스틱 (WSL USB 패스스루 별도) |
+| `colcon build` (inference, dracer_sim) | 실기 USB 카메라 스트리밍 |
+| `inference.pipeline` import 검증 | PCA9685 모터/조향 I2C 제어 |
+| **Gazebo 시뮬 + 카메라 토픽 검증** (`./scripts/dev_container.sh sim`) | 실차 주행 최종 튜닝 |
 
 ---
 
@@ -61,7 +61,10 @@ PC Docker와 D3-G가 같은 네트워크에서 ROS 통신을 시험할 때만 `R
 
 | 경로 | Git 추적 | 설명 |
 |------|----------|------|
-| `src/inference/` | O | 팀 코드 (유일한 직접 수정 대상) |
+| `src/inference/` | O | 팀 자율주행 코드 |
+| `src/dracer_sim/` | O | Gazebo 시뮬 패키지 |
+| `vendor/limo_car/` | O | LIMO URDF·mesh (시뮬용) |
+| `config/vehicle_config.yaml` | O | 팀 카메라 320×180 |
 | `src/camera`, `src/control` 등 | X | `init_workspace.sh` 심볼릭 링크 |
 | `external/D-Racer-Kit/` | X | clone 시 자동 생성 |
 | `build/`, `install/`, `log/` | X | colcon 산출물 |
@@ -150,7 +153,46 @@ exit
 
 `check`가 `ok`를 출력하면 CI `build-inference` job과 같은 검증을 통과한 것입니다.
 
-### 4.5 임의 명령 실행
+### 4.6 Gazebo 시뮬 (WSL 24.04 / 26.04 포함 — Docker 필수)
+
+> **팀원 재현 가이드**: [simulation-setup.md](./simulation-setup.md) ★
+
+호스트 WSL에 `ros-humble-desktop`을 설치할 수 **없습니다** (Humble은 Ubuntu 22.04 전용).  
+시뮬도 **같은 Docker 이미지** 안에서 실행합니다.
+
+```bash
+# 1) 베이스 이미지
+./scripts/dev_container.sh build
+
+# 2) Gazebo (최초 1회)
+./scripts/dev_container.sh install-gazebo
+
+# 3) 워크스페이스 + 빌드
+./scripts/dev_container.sh init
+./scripts/dev_container.sh build-sim
+
+# 4) 실행
+./scripts/dev_container.sh sim-bringup    # Gazebo + RViz
+./scripts/dev_container.sh sim            # + inference
+./scripts/dev_container.sh verify-sim     # 토픽 검증 (sim 실행 중)
+./scripts/dev_container.sh check-gpu      # GPU 렌더링 확인
+```
+
+**사전 조건**
+
+1. Docker Desktop 실행 + WSL Integration 활성화
+2. Windows **11** + WSLg (Gazebo·RViz GUI)
+3. Windows 10: VcXsrv 등 X 서버 + `export DISPLAY=...` 필요할 수 있음
+
+**시뮬 기본 설정**
+
+- 카메라: **320×180** JPEG (`config/vehicle_config.yaml`)
+- 시각화: **RViz2** (카메라 + 로봇 모델)
+- 웹 모니터: **OFF** (`use_monitor:=true`로 선택 가능)
+
+상세 트러블슈팅: [simulation.md](./simulation.md)
+
+### 4.7 임의 명령 실행
 
 ```bash
 ./scripts/dev_container.sh "colcon test --packages-select inference"
@@ -244,16 +286,21 @@ git clone --branch release/v1.0.0 --depth 1 \
 ## 9. 요약 치트시트
 
 ```bash
-# 최초 셋업
+# 최초 셋업 (WSL 22.04 / 24.04 / 26.04 동일)
 chmod +x scripts/*.sh
 ./scripts/dev_container.sh build
 ./scripts/dev_container.sh init
 
-# 매 작업 전/후
-./scripts/dev_container.sh check          # PR 전
-./scripts/dev_container.sh shell          # 개발 셸
+# 매 작업
+./scripts/dev_container.sh check          # PR 전 inference 검증
+./scripts/dev_container.sh shell          # 빌드·코드 셸
 
-# merge 후 (D3-G)
+# Gazebo 시뮬 (Docker 안에서 — 호스트에 ros-humble 불필요)
+./scripts/dev_container.sh install-gazebo   # 최초 1회
+./scripts/dev_container.sh build-sim
+./scripts/dev_container.sh sim-bringup
+
+# merge 후 (D3-G 실차)
 ./scripts/board_sync.sh
 ros2 launch inference auto_driving.launch.py
 ```

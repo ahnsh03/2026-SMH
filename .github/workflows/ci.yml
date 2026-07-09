@@ -17,10 +17,12 @@ jobs:
       - uses: actions/checkout@v4
 
       # Match Dockerfile / D3-G: inference ArUco & camera decode need OpenCV.
-      - name: Install Python OpenCV
+      - name: Install Python OpenCV and Gazebo ROS deps
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends python3-opencv python3-numpy
+          apt-get install -y --no-install-recommends \
+            python3-opencv python3-numpy \
+            ros-humble-gazebo-ros-pkgs ros-humble-robot-state-publisher
           rm -rf /var/lib/apt/lists/*
 
       - name: Init workspace
@@ -28,10 +30,10 @@ jobs:
           chmod +x scripts/init_workspace.sh
           ./scripts/init_workspace.sh
 
-      - name: Build inference package
+      - name: Build inference and dracer_sim packages
         run: |
           source /opt/ros/humble/setup.bash
-          colcon build --symlink-install --packages-up-to inference
+          colcon build --symlink-install --packages-up-to dracer_sim inference
 
       - name: Python import check
         run: |
