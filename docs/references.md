@@ -33,13 +33,14 @@ ros2 launch inference auto_driving.launch.py
 |------|------|
 | **D3-G / D-Racer 플랫폼 스펙** | [hardware-board.md](./hardware-board.md) |
 | C920e 카메라 스펙 | [hardware-camera.md](./hardware-camera.md) |
-| LIMO 시뮬 도입 요약 | [simulation.md](./simulation.md) |
-| limo_ros2 (Humble, `limo_car` Gazebo) | https://github.com/agilexrobotics/limo_ros2.git |
+| LIMO 시뮬 (팀 `dracer_sim`) | [simulation-setup.md](./simulation-setup.md) · [dracer_sim README](../src/dracer_sim/README.md) |
+| limo_ros2 upstream (참고) | https://github.com/agilexrobotics/limo_ros2.git — **팀은 `vendor/limo_car` 사용** |
 | ugv_gazebo_sim (ROS1) | https://github.com/agilexrobotics/ugv_gazebo_sim.git |
 | limo_sim_code_v2 (작년 ROS1 앱) | https://github.com/ahnsh03/limo_sim_code_v2.git |
 | Logitech C920e Sync Hub 스펙 | https://hub.sync.logitech.com/c920e/post/specifications---c920e-business-webcam-TKnike7FetCzuAt |
 
-PC 상위 `external/`에 시뮬 레포가 클론되어 있습니다. 상세 평가: `docs/sim/limo-simulator-assessment.md`.
+PC monorepo(`2026-seame-hackathon`)를 쓰는 경우 시뮬 레포 평가 메모: 상위 `docs/sim/limo-simulator-assessment.md`.  
+**레포만 clone** 시에는 [simulation-setup.md](./simulation-setup.md)가 SSOT입니다.
 
 ## D-Racer-Kit 주요 패키지
 
