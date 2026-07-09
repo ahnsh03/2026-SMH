@@ -148,7 +148,7 @@
 | 모델 | **Logitech C920e** (USB, UVC) |
 | 광학 | dFoV 78° / hFoV 70.42° / vFoV 43.3°, 초점거리 3.67 mm |
 | 최대 영상 | 1080p @ 30 fps |
-| D-Racer 기본 출력 | **320×160** JPEG → `/camera/image/compressed` |
+| D-Racer 팀 출력 | **320×180** JPEG → `/camera/image/compressed` (16:9) |
 
 상세: [hardware-camera.md](./hardware-camera.md)
 

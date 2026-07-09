@@ -1,0 +1,9 @@
+sim_camera_republish:
+  ros__parameters:
+    input_topic: /gazebo/camera/image_raw
+    output_topic: /camera/image/compressed
+    raw_output_topic: /camera/image_raw
+    image_width: 320
+    image_height: 180
+    jpeg_quality: 90
+    frame_id: camera

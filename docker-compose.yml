@@ -1,5 +1,9 @@
-# PC(WSL) 개발용 컨테이너 — 빌드·import 검증 전용.
-# 실제 로봇 주행(조이스틱·카메라·모터)은 D3-G 보드에서 수행합니다.
+# PC(WSL) 개발용 — Ubuntu 22.04 + ROS2 Humble (호스트 WSL 버전과 무관).
+# 실차 주행(조이스틱·USB 카메라·I2C)은 D3-G 보드에서만 수행합니다.
+#
+# 서비스:
+#   dev  — 빌드·셸·CI 검증 (기본)
+#   sim  — Gazebo GUI + dracer_sim (WSLg GPU + X11)
 services:
   dev:
     build:
@@ -14,4 +18,34 @@ services:
     tty: true
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
-    # PC 개발·빌드만 목적이므로 host 네트워크는 사용하지 않습니다.
+
+  sim:
+    image: 2026-smh-dev:latest
+    container_name: 2026-smh-dev-sim
+    working_dir: /workspace
+    network_mode: host
+    ipc: host
+    # WSLg vGPU — https://github.com/microsoft/wslg/blob/main/samples/container/Containers.md
+    devices:
+      - /dev/dxg
+    volumes:
+      - .:/workspace
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /mnt/wslg:/mnt/wslg
+      - /usr/lib/wsl:/usr/lib/wsl:ro
+    stdin_open: true
+    tty: true
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: "1"
+      WAYLAND_DISPLAY: ${WAYLAND_DISPLAY:-wayland-0}
+      XDG_RUNTIME_DIR: ${XDG_RUNTIME_DIR:-/mnt/wslg/runtime-dir}
+      PULSE_SERVER: ${PULSE_SERVER:-unix:/mnt/wslg/PulseServer}
+      # GPU OpenGL (D3D12 via WSL)
+      LD_LIBRARY_PATH: /usr/lib/wsl/lib
+      LIBGL_ALWAYS_SOFTWARE: "0"
+      LIBVA_DRIVER_NAME: d3d12
+      MESA_LOADER_DRIVER_OVERRIDE: d3d12
+      GALLIUM_DRIVER: d3d12
+      MESA_D3D12_DEFAULT_ADAPTER_NAME: NVIDIA
