@@ -4,6 +4,8 @@
 > **PC(WSL) 상위 프로젝트**를 쓰는 경우 동일 SSOT: [`../../docs/competition/camera-c920e.md`](../../docs/competition/camera-c920e.md) + PDF [`../../docs/competition/camera-c920e-datasheet.pdf`](../../docs/competition/camera-c920e-datasheet.pdf).  
 > **D3-G 보드 단독 clone**에서는 이 파일이 카메라 스펙 SSOT입니다.
 
+> 플랫폼·SBC·I2C·구동: [hardware-board.md](./hardware-board.md)
+
 SEA:ME 해커톤 D-Racer Kit 전방 USB 카메라: **Logitech C920e Business Webcam** (M/N: V-U0028).
 
 ---

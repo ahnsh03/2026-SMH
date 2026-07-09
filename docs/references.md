@@ -31,6 +31,7 @@ ros2 launch inference auto_driving.launch.py
 
 | 자료 | 링크 |
 |------|------|
+| **D3-G / D-Racer 플랫폼 스펙** | [hardware-board.md](./hardware-board.md) |
 | C920e 카메라 스펙 | [hardware-camera.md](./hardware-camera.md) |
 | LIMO 시뮬 도입 요약 | [simulation.md](./simulation.md) |
 | limo_ros2 (Humble, `limo_car` Gazebo) | https://github.com/agilexrobotics/limo_ros2.git |
