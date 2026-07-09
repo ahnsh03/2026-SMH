@@ -1,7 +1,7 @@
 # Gazebo simulator for D-Racer / LIMO (SEA:ME 2026-SMH)
 
 D-Racer 실기와 **동일한 ROS2 토픽**으로 개발·검증하기 위한 Gazebo Classic 시뮬레이터입니다.  
-기본 로봇은 **LIMO Ackermann** (`limo_ros2`의 `limo_car`)이며, 경량 D-Racer 박스 모델도 선택할 수 있습니다.
+기본 로봇은 **LIMO Ackermann** (`vendor/limo_car`, 레포 포함)이며, 경량 D-Racer 박스 모델도 선택할 수 있습니다.
 
 ## 인터페이스 (실기와 동일)
 

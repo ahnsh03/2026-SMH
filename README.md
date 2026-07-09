@@ -62,7 +62,7 @@ ros2 launch inference auto_driving.launch.py
 > **팀원 필독**: [docs/simulation-setup.md](docs/simulation-setup.md) — 단계별 스크린샷급 가이드
 
 상위 monorepo·`external/limo_ros2` 없이 **이 레포만** clone하면 됩니다.  
-`vendor/limo_car`는 포함되어 있고, D-Racer-Kit은 `init` 시 자동 clone됩니다.
+`vendor/limo_car`(mesh 포함, ~100MB)는 레포에 포함되어 있으며, D-Racer-Kit은 `init` 시 자동 clone됩니다.
 
 ```bash
 git clone https://github.com/ahnsh03/2026-SMH.git
@@ -95,8 +95,10 @@ chmod +x scripts/*.sh
 ```
 2026-SMH/
 ├── docs/
+│   ├── README.md          # 문서 목차
 │   ├── collaboration.md   # ★ 브랜치·PR·충돌 방지 (팀원 필독)
 │   ├── roles.md           # 역할 분담
+│   ├── meetings/          # 회의록
 │   ├── simulation-setup.md # ★ PC 시뮬 재현 가이드 (팀원 필독)
 │   ├── simulation.md       # 트러블슈팅·GPU
 │   └── competition.md     # 대회 정보
@@ -108,6 +110,7 @@ chmod +x scripts/*.sh
 │   ├── init_workspace.sh  # D-Racer-Kit clone + src/ 링크
 │   ├── dev_container.sh   # ★ PC: Docker 빌드·시뮬·검증
 │   ├── verify_sim.sh      # 시뮬 토픽 검증
+│   ├── check_sim_gpu.sh   # GPU 렌더링 확인
 │   └── board_sync.sh      # ★ 보드: pull + init + build
 ├── external/              # D-Racer-Kit (Git 제외, init 시 자동 clone)
 ├── vendor/
@@ -202,16 +205,17 @@ main → feature/wontae-lane → PR → merge → board_sync.sh
 
 ## 문서
 
+- [문서 목차](docs/README.md)
 - [협업 가이드](docs/collaboration.md) ★
+- [역할 분담](docs/roles.md) · [회의록 2026-07-10](docs/meetings/2026-07-10.md)
 - [보드 개발·주행 가이드](docs/board-workflow.md) ★
-- [역할 분담](docs/roles.md)
 - [셋업 가이드](docs/setup.md)
 - [개발 환경 규약 · Docker](docs/dev-environment.md) ★
+- [시뮬레이터 재현 가이드](docs/simulation-setup.md) ★
+- [시뮬레이터 트러블슈팅](docs/simulation.md)
 - [대회 정보](docs/competition.md)
 - [플랫폼·보드 스펙 (D3-G)](docs/hardware-board.md)
 - [카메라 스펙 (C920e)](docs/hardware-camera.md)
-- [시뮬레이터 재현 가이드](docs/simulation-setup.md) ★
-- [시뮬레이터 (Gazebo)](docs/simulation.md)
 - [참고 링크](docs/references.md)
 
 ---

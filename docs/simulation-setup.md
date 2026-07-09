@@ -93,7 +93,7 @@ echo $DISPLAY    # 보통 :0 (WSLg)
 
 - 호스트 WSL에 `sudo apt install ros-humble-*` 하지 마세요. **Humble은 Ubuntu 22.04 전용**이며, 팀은 Docker 안에서만 ROS를 씁니다.
 - `external/D-Racer-Kit/`은 Git에 없습니다. `./scripts/dev_container.sh init`이 자동 clone합니다.
-- `vendor/limo_car/`는 **레포에 포함**되어 있습니다. 별도 clone 불필요.
+- `vendor/limo_car/`는 **레포에 포함**되어 있습니다 (mesh ~100MB, clone 1–2분 더 걸릴 수 있음). 별도 clone 불필요.
 
 ---
 
