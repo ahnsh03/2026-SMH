@@ -128,7 +128,20 @@
 
 ---
 
-## 7. 하드웨어 — 카메라
+## 7. 하드웨어
+
+### 보드 (TOPST D3-G)
+
+| 항목 | 내용 |
+|------|------|
+| SoC | Dolphin3 (TCC8050/8051) — A72×4 + A53×4 + R5 |
+| RAM / eMMC | **8 GB** / **32 GB** (해커톤 키트) |
+| OS | Ubuntu 22.04 + ROS2 Humble |
+| 구동 | I2C PCA9685 — `throttle` + `steering` |
+
+상세: [hardware-board.md](./hardware-board.md)
+
+### 카메라 (Logitech C920e)
 
 | 항목 | 내용 |
 |------|------|
@@ -182,4 +195,5 @@
 | 참고 영상 (Google Drive) | https://drive.google.com/file/d/1QpnQdkiiYtEs1k2Ll4sRCjBB_1pBNbmG/view |
 | 작년 홍보영상 | 유튜브 없음, 파일만 존재 (추후 공지 예정) |
 | C920e 카메라 스펙 | [hardware-camera.md](./hardware-camera.md) |
+| D3-G / D-Racer 보드 스펙 | [hardware-board.md](./hardware-board.md) |
 | LIMO 시뮬 메모 | [simulation.md](./simulation.md) |

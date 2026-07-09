@@ -2,7 +2,7 @@
 
 ## 사전 요구사항
 
-- **보드**: D3-G (Ubuntu 22.04 + ROS2 Humble 공식 이미지)
+- **보드**: D3-G (Ubuntu 22.04 + ROS2 Humble 공식 이미지) — 스펙: [hardware-board.md](./hardware-board.md)
 - **PC**: Windows 10/11 + WSL2 (선택) 또는 D3-G 직접 작업
 - 공식 가이드: [D-Racer-Kit docs](https://github.com/topst-development/D-Racer-Kit/tree/release/v1.0.0/docs)
 

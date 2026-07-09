@@ -158,6 +158,7 @@ main → feature/wontae-lane → PR → merge → board_sync.sh
 - [셋업 가이드](docs/setup.md)
 - [개발 환경 규약 · Docker](docs/dev-environment.md) ★
 - [대회 정보](docs/competition.md)
+- [플랫폼·보드 스펙 (D3-G)](docs/hardware-board.md)
 - [카메라 스펙 (C920e)](docs/hardware-camera.md)
 - [시뮬레이터 메모 (LIMO)](docs/simulation.md)
 - [참고 링크](docs/references.md)
