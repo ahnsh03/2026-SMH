@@ -1,0 +1,5 @@
+sim_battery_stub:
+  ros__parameters:
+    publish_topic: /battery_status
+    battery_percent: 80.0
+    publish_hz: 10.0

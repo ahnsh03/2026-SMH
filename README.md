@@ -52,7 +52,41 @@ ros2 launch inference auto_driving.launch.py
 자세한 셋업: [docs/setup.md](docs/setup.md)  
 **보드 개발·주행 (팀원 필독)**: [docs/board-workflow.md](docs/board-workflow.md) ★  
 **PC Docker 환경 (팀 표준)**: [docs/dev-environment.md](docs/dev-environment.md)  
+**PC Gazebo 시뮬**: [docs/simulation-setup.md](docs/simulation-setup.md) ★  
 협업 규칙: [docs/collaboration.md](docs/collaboration.md)
+
+---
+
+## 빠른 시작 (PC 시뮬 — 레포만 clone)
+
+> **팀원 필독**: [docs/simulation-setup.md](docs/simulation-setup.md) — 단계별 스크린샷급 가이드
+
+상위 monorepo·`external/limo_ros2` 없이 **이 레포만** clone하면 됩니다.  
+`vendor/limo_car`(mesh 포함, ~100MB)는 레포에 포함되어 있으며, D-Racer-Kit은 `init` 시 자동 clone됩니다.
+
+```bash
+git clone https://github.com/ahnsh03/2026-SMH.git
+cd 2026-SMH
+chmod +x scripts/*.sh
+
+./scripts/dev_container.sh build
+./scripts/dev_container.sh install-gazebo   # Gazebo 최초 1회 (~5–10분)
+./scripts/dev_container.sh init
+./scripts/dev_container.sh build-sim
+./scripts/dev_container.sh check-gpu        # 선택: GPU 렌더링 확인
+./scripts/dev_container.sh sim-bringup      # Gazebo + RViz
+# inference 테스트: ./scripts/dev_container.sh sim
+# 검증 (다른 터미널): ./scripts/dev_container.sh verify-sim
+```
+
+| 명령 | 설명 |
+|------|------|
+| `sim-bringup` | Gazebo + 트랙 + LIMO + 카메라 브리지 + **RViz** |
+| `sim` | bringup + **inference** 자율주행 |
+| `sim-manual` | bringup + 조이스틱 수동주행 |
+| `verify-sim` | 토픽·카메라 동작 검증 (sim 실행 중) |
+
+시뮬 기본: 카메라 **320×180** (16:9), 웹 모니터 **OFF** (RViz로 확인).
 
 ---
 
@@ -61,27 +95,38 @@ ros2 launch inference auto_driving.launch.py
 ```
 2026-SMH/
 ├── docs/
+│   ├── README.md          # 문서 목차
 │   ├── collaboration.md   # ★ 브랜치·PR·충돌 방지 (팀원 필독)
 │   ├── roles.md           # 역할 분담
-│   ├── setup.md           # 셋업
+│   ├── meetings/          # 회의록
+│   ├── simulation-setup.md # ★ PC 시뮬 재현 가이드 (팀원 필독)
+│   ├── simulation.md       # 트러블슈팅·GPU
 │   └── competition.md     # 대회 정보
 ├── Dockerfile             # PC 개발용 (22.04 + Humble)
 ├── docker-compose.yml
+├── config/
+│   └── vehicle_config.yaml # 팀 카메라 320×180 (init → src/config 링크)
 ├── scripts/
 │   ├── init_workspace.sh  # D-Racer-Kit clone + src/ 링크
-│   ├── dev_container.sh   # ★ PC: Docker 빌드·셸·검증
+│   ├── dev_container.sh   # ★ PC: Docker 빌드·시뮬·검증
+│   ├── verify_sim.sh      # 시뮬 토픽 검증
+│   ├── check_sim_gpu.sh   # GPU 렌더링 확인
 │   └── board_sync.sh      # ★ 보드: pull + init + build
-├── external/              # D-Racer-Kit (Git 제외, init 시 생성)
+├── external/              # D-Racer-Kit (Git 제외, init 시 자동 clone)
+├── vendor/
+│   └── limo_car/          # LIMO Gazebo 모델 (레포 포함, 시뮬용)
 └── src/
-    └── inference/         # ★ 팀 자율주행 패키지 (Git 추적)
-        ├── inference/
-        │   ├── types.py           # 공통 타입
-        │   ├── pipeline.py        # 모듈 통합 (팀장)
-        │   ├── inference_node.py  # ROS2 노드
-        │   └── modules/           # ★ 담당자별 개발
-        └── launch/
-            ├── auto_driving.launch.py
-            └── manual_driving.launch.py
+    ├── inference/         # ★ 팀 자율주행 패키지 (Git 추적)
+    │   ├── inference/
+    │   │   ├── types.py
+    │   │   ├── pipeline.py
+    │   │   ├── inference_node.py
+    │   │   └── modules/
+    │   └── launch/
+    └── dracer_sim/        # ★ Gazebo 시뮬 (D-Racer 토픽 호환)
+        ├── launch/
+        ├── urdf/
+        └── models/
 ```
 
 주최측 패키지(camera, control 등)는 `init_workspace.sh`가 `src/`에 심볼릭 링크합니다.
@@ -116,17 +161,30 @@ ros2 launch inference auto_driving.launch.py
 
 ---
 
-## 실행
+## 실행 (Docker 권장)
+
+PC에서 시뮬로 inference를 검증할 때:
+
+```bash
+./scripts/dev_container.sh sim          # Gazebo + inference
+```
+
+실기(D3-G)에서:
 
 ```bash
 source install/setup.bash
 
-# 수동 주행
+# 수동 주행 (camera + monitor)
 ros2 launch inference manual_driving.launch.py
 
-# 자율주행
+# 자율주행 (camera + monitor + inference)
 ros2 launch inference auto_driving.launch.py
 ```
+
+웹 모니터: `http://<WEB_HOST>:5000` (`src/config/vehicle_config.yaml`)  
+ArUco 보드 확인: `ros2 topic echo /debug/aruco` — 상세는 [docs/board-workflow.md](docs/board-workflow.md) §3.3
+
+> `~/D-Racer-Kit`에서 camera/monitor를 따로 실행하지 마세요. 장치 충돌로 영상이 멈춥니다.
 
 ---
 
@@ -147,12 +205,17 @@ main → feature/wontae-lane → PR → merge → board_sync.sh
 
 ## 문서
 
+- [문서 목차](docs/README.md)
 - [협업 가이드](docs/collaboration.md) ★
+- [역할 분담](docs/roles.md) · [회의록 2026-07-10](docs/meetings/2026-07-10.md)
 - [보드 개발·주행 가이드](docs/board-workflow.md) ★
-- [역할 분담](docs/roles.md)
 - [셋업 가이드](docs/setup.md)
 - [개발 환경 규약 · Docker](docs/dev-environment.md) ★
+- [시뮬레이터 재현 가이드](docs/simulation-setup.md) ★
+- [시뮬레이터 트러블슈팅](docs/simulation.md)
 - [대회 정보](docs/competition.md)
+- [플랫폼·보드 스펙 (D3-G)](docs/hardware-board.md)
+- [카메라 스펙 (C920e)](docs/hardware-camera.md)
 - [참고 링크](docs/references.md)
 
 ---
