@@ -1,0 +1,41 @@
+# Mission signs — poses in worlds/track_cw.world
+#
+# Height: bottom edge = track_surface_z + clearance_above_track
+#   track_plane z = 0.01 m (not 0.10 — see track_cw.world)
+#   clearance = 0.10 m → bottom at world z = 0.11 m
+#
+# Turn sign link center z = bottom + board_radius (0.105)
+# ArUco link center z = bottom + board_height/2 (0.09)
+
+track_surface_z_m: 0.01
+clearance_above_track_m: 0.10
+
+turn_sign:
+  content_diameter_m: 0.20
+  board_diameter_m: 0.21
+  board_radius_m: 0.105
+  bottom_z_m: 0.11
+  center_z_m: 0.215
+
+aruco_stop_sign:
+  content_width_m: 0.15
+  board_size_m: 0.18
+  bottom_z_m: 0.11
+  center_z_m: 0.20
+
+placements:
+  turn_sign_left:
+    x: -3.14
+    y: 3.71
+    z: 0.215
+    yaw: -1.5707963267948966   # CW 90° from default (-Y face) → -X
+  turn_sign_right:
+    x: -3.00
+    y: 3.71
+    z: 0.215
+    yaw: -1.5707963267948966
+  aruco_stop_sign:
+    x: 4.5
+    y: 0.0
+    z: 0.20
+    yaw: 3.141592653589793     # 180° from default → faces +Y

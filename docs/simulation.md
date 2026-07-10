@@ -1,7 +1,7 @@
 # Gazebo 시뮬레이터 (D-Racer)
 
 > **팀원 재현 가이드**: [simulation-setup.md](./simulation-setup.md) ★  
-> 마지막 업데이트: 2026-07-10  
+> 마지막 업데이트: 2026-07-11  
 > 패키지 상세: [`../src/dracer_sim/README.md`](../src/dracer_sim/README.md)  
 > PC 개발 환경: [dev-environment.md](./dev-environment.md) ★  
 > 카메라 스펙: [hardware-camera.md](./hardware-camera.md)
@@ -15,8 +15,26 @@
 | 패키지 | `src/dracer_sim` + `vendor/limo_car` (레포 포함) |
 | 기본 로봇 | **LIMO Ackermann** (`robot:=limo`, 기본값) |
 | 트랙 크기 | 이미지 가로 **12.0 m** × 세로 **8.9975 m** (plane UV, 왜곡 없음) |
-| 실행 환경 | **Docker** (WSL 26.04 등 — 호스트에 Humble 설치 불필요) |
-| 명령 | `./scripts/dev_container.sh sim` |
+| 미션 표지판 | 좌/우회전 + ArUco **3종** (`track_cw.world` 고정 배치) |
+| 실행 환경 | **Docker** — 컨테이너 `2026-smh-sim` 1개 + 터미널 2개 |
+| 명령 (터미널1) | `./scripts/dev_container.sh sim-bringup` |
+| 셸 (터미널2) | `docker exec -it 2026-smh-sim bash` |
+
+---
+
+## 개발 워크플로 (터미널 2개)
+
+상세: [simulation-setup.md §4](./simulation-setup.md#4-일상-개발-워크플로-컨테이너-1개--터미널-2개)
+
+```
+터미널1  sim-bringup     →  Gazebo + /camera/* + /control 브리지
+터미널2  docker exec     →  inference 빌드·실행 (use_sim_time:=true)
+```
+
+- 터미널1 **Ctrl+C**: launch만 종료, 컨테이너 유지
+- 터미널2에서 `sim_bringup` launch **재실행 금지** (Gazebo 중복)
+- 통합 테스트만: `./scripts/dev_container.sh sim`
+- **스크립트 없이 docker/ros2만**: [simulation-setup.md §4.8](./simulation-setup.md#48-직접-명령어-치트시트-스크립트-없이)
 
 ---
 
@@ -48,19 +66,21 @@ chmod +x scripts/*.sh
 # 2) 워크스페이스 초기화 (D-Racer-Kit 자동 clone + vendor/limo_car 링크)
 ./scripts/dev_container.sh init
 
-# 3) dracer_sim + inference 빌드
-./scripts/dev_container.sh build-sim
+# 3) 시뮬 개발 (터미널 2개)
+./scripts/dev_container.sh sim-up
+./scripts/dev_container.sh sim-bringup      # 터미널1
+docker exec -it 2026-smh-sim bash           # 터미널2 → inference
 
-# 4) Gazebo 자율주행 시뮬 실행 (GUI)
-./scripts/dev_container.sh sim
+# 통합 테스트 한 번에: ./scripts/dev_container.sh sim
 ```
 
 | 명령 | 설명 |
 |------|------|
-| `sim-bringup` | Gazebo + 트랙 + 브리지만 |
-| `sim` | bringup + inference 자율주행 |
-| `sim-manual` | bringup + 조이스틱 수동 (USB 별도) |
-| `sim-shell` | 시뮬용 셸 (수동 `ros2 launch`) |
+| `sim-up` / `sim-down` | `2026-smh-sim` 생성·삭제 |
+| `sim-bringup` | **터미널1**: Gazebo + 브리지 + 카메라 프리뷰 |
+| `docker exec -it 2026-smh-sim bash` | **터미널2**: inference 개발 셸 |
+| `sim` | bringup + inference (한 터미널) |
+| `sim-manual` | bringup + 조이스틱 수동 |
 
 ---
 
@@ -71,7 +91,10 @@ chmod +x scripts/*.sh
 | 이미지 | `track_cw_real.png` (1211 × 908 px) |
 | 실제 가로 | **12.0 m** (대회 도면 기준) |
 | Gazebo 평면 | 12.0 m × 8.9975 m (`<plane>`, box 아님 — 세로 늘어남 방지) |
+| 트랙 바닥 z | **0.01 m** (`track_plane` pose, 지면 z=0 위 1 cm) |
 | 기본 스폰 | `spawn_x=2.6`, `spawn_y=-3.92`, `spawn_yaw=-3.14`, LIMO `spawn_z=0.15` |
+
+미션 표지판(좌/우회전·ArUco) 배치·크기·높이: [simulation-setup.md § 미션 표지판](./simulation-setup.md#미션-표지판-갈림길--aruco)
 
 ---
 
@@ -88,7 +111,7 @@ docker compose version
 
 ---
 
-## 동작 확인 (sim-shell 또는 sim 실행 중)
+## 동작 확인 (`sim-bringup` 실행 중, 터미널2 `docker exec` 또는 호스트)
 
 컨테이너 안 또는 `network_mode: host`이므로 **WSL 호스트 터미널**에서도:
 
@@ -99,7 +122,7 @@ ros2 topic pub /control control_msgs/msg/Control "{steering: 0.0, throttle: 0.25
 
 웹 모니터: `http://127.0.0.1:5000` — 시뮬 기본 **OFF** (`use_monitor:=true`로 켤 수 있으나 Docker Flask 버전 이슈 가능)
 
-RViz2 (기본 ON): 로봇 + `/camera/image_raw` 320×180 · 검증: `./scripts/dev_container.sh verify-sim`
+카메라 프리뷰 (`sim_camera_preview`, 기본 ON): `/camera/image_raw` 320×180 → 창 640×360 · 검증: `./scripts/dev_container.sh verify-sim`
 
 ---
 
@@ -130,11 +153,11 @@ WSL2 Docker에서 **GPU가 컨테이너에 전달되지 않으면** Gazebo GUI(`
 렉이 계속되면:
 
 ```bash
-# Gazebo 3D 창 없이 (물리·카메라·RViz 유지)
+# Gazebo 3D 창 없이 (물리·카메라·프리뷰 유지)
 ros2 launch dracer_sim sim_bringup.launch.py headless:=true
 ```
 
-`headless:=true`면 Gazebo GUI는 끄고, **RViz**(`/camera/image_raw` 320×180)로 카메라를 보는 것을 권장합니다.
+`headless:=true`면 Gazebo GUI는 끄고, **OpenCV 카메라 프리뷰**(`/camera/image_raw` 320×180)로 카메라를 보는 것을 권장합니다.
 
 ---
 
@@ -146,6 +169,8 @@ ros2 launch dracer_sim sim_bringup.launch.py headless:=true
 | Gazebo 창 안 뜸 | Docker Desktop 재시작, `echo $DISPLAY` → `:0` 확인 |
 | `cannot open display` | Win11 WSLg 업데이트 / Win10은 VcXsrv + DISPLAY 설정 |
 | 텍스처 없음 | `build-sim` 후 `sim` 재실행 |
+| 표지판 3개가 같아 보임 | 예전 `sign.png` 캐시 — `build-sim` 후 Gazebo 완전 재시작 |
+| 표지판 이미지 안 보임 | `prepare_mission_signs.py` 실행 여부 확인, `killall gzserver gzclient` 후 재실행 |
 | `control_msgs` 없음 | `./scripts/dev_container.sh init` 먼저 |
 
 ---

@@ -1,6 +1,6 @@
 # Ubuntu 22.04 + ROS2 Humble (가벼운 베이스, ~3분)
 # Gazebo는 Hash mismatch 회피를 위해 별도 1회 설치: ./scripts/dev_container.sh install-gazebo
-# GPU(Mesa D3D12) + rviz2는 이미지에 포함
+# GPU(Mesa D3D12) + rqt_image_view(카메라 프리뷰)는 이미지에 포함
 FROM ros:humble
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -16,7 +16,7 @@ RUN set -eux; \
       python3-pip python3-flask \
       libgl1-mesa-dri libgl1-mesa-glx libglvnd0 libegl1 libglx0 mesa-utils \
       ros-humble-cv-bridge ros-humble-robot-state-publisher \
-      ros-humble-rviz2 ros-humble-xacro \
+      ros-humble-rqt-image-view ros-humble-xacro \
     "; \
     success=0; \
     for attempt in 1 2 3 4 5 6 7 8 9 10; do \

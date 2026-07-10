@@ -59,10 +59,12 @@ ros2 launch inference auto_driving.launch.py
 
 ## 빠른 시작 (PC 시뮬 — 레포만 clone)
 
-> **팀원 필독**: [docs/simulation-setup.md](docs/simulation-setup.md) — 단계별 스크린샷급 가이드
+> **팀원 필독**: [docs/simulation-setup.md](docs/simulation-setup.md) §4 — **터미널 1·2 개발 방법**
 
 상위 monorepo·`external/limo_ros2` 없이 **이 레포만** clone하면 됩니다.  
 `vendor/limo_car`(mesh 포함, ~100MB)는 레포에 포함되어 있으며, D-Racer-Kit은 `init` 시 자동 clone됩니다.
+
+### 최초 1회 (이미지·Gazebo)
 
 ```bash
 git clone https://github.com/ahnsh03/2026-SMH.git
@@ -72,21 +74,45 @@ chmod +x scripts/*.sh
 ./scripts/dev_container.sh build
 ./scripts/dev_container.sh install-gazebo   # Gazebo 최초 1회 (~5–10분)
 ./scripts/dev_container.sh init
-./scripts/dev_container.sh build-sim
 ./scripts/dev_container.sh check-gpu        # 선택: GPU 렌더링 확인
-./scripts/dev_container.sh sim-bringup      # Gazebo + RViz
-# inference 테스트: ./scripts/dev_container.sh sim
-# 검증 (다른 터미널): ./scripts/dev_container.sh verify-sim
+```
+
+### 매일 개발 (컨테이너 1개 + 터미널 2개)
+
+> **빌드 구분**: `build` = Docker **이미지** (`Dockerfile`) · `build-sim` / `colcon` = **ROS 코드** (`src/`). 시뮬 매일 켤 때는 후자만.
+
+| 터미널 | 명령 | 역할 |
+|--------|------|------|
+| — | `./scripts/dev_container.sh sim-up` | `2026-smh-sim` 생성 (없을 때만) |
+| **1** | `./scripts/dev_container.sh sim-bringup` | Gazebo + 브리지 + 카메라 프리뷰 |
+| **2** | `docker exec -it 2026-smh-sim bash` | inference 빌드·실행 |
+| — | `./scripts/dev_container.sh sim-down` | 하루 작업 끝 |
+
+```bash
+# 터미널 1
+./scripts/dev_container.sh sim-bringup
+
+# 터미널 2
+docker exec -it 2026-smh-sim bash
+source /opt/ros/humble/setup.bash && source install/setup.bash
+ros2 run inference inference_node --ros-args -p use_sim_time:=true
+
+# 검증 (호스트, bringup 실행 중)
+./scripts/dev_container.sh verify-sim
 ```
 
 | 명령 | 설명 |
 |------|------|
-| `sim-bringup` | Gazebo + 트랙 + LIMO + 카메라 브리지 + **RViz** |
-| `sim` | bringup + **inference** 자율주행 |
-| `sim-manual` | bringup + 조이스틱 수동주행 |
-| `verify-sim` | 토픽·카메라 동작 검증 (sim 실행 중) |
+| `sim-up` | 시뮬 컨테이너 `2026-smh-sim` 생성·시작 |
+| `sim-bringup` | 터미널1: build-sim + Gazebo launch (Ctrl+C → launch만 종료) |
+| `sim-down` | 시뮬 컨테이너 삭제 |
+| `build-sim` | **ROS 워크스페이스** colcon (`src/` 코드 변경 후) |
+| `build` | Docker **이미지** (`Dockerfile`, 최초·드묾) |
+| `sim` | bringup + inference 자율주행 (한 터미널 통합 테스트) |
+| `verify-sim` | 토픽·카메라 검증 (bringup 실행 중) |
 
-시뮬 기본: 카메라 **320×180** (16:9), 웹 모니터 **OFF** (RViz로 확인).
+시뮬 기본: 카메라 **320×180** (16:9). 터미널2는 **`docker exec`만** 쓰면 됩니다.  
+**직접 docker/ros2 명령**: [simulation-setup.md §4.8](docs/simulation-setup.md#48-직접-명령어-치트시트-스크립트-없이)
 
 ---
 

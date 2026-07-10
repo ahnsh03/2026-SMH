@@ -3,7 +3,7 @@
 
 camera:
   compressed_topic: /camera/image/compressed
-  raw_topic: /camera/image/raw          # RViz only (320x180)
+  raw_topic: /camera/image/raw          # rqt 프리뷰 (320x180)
   gazebo_source: /gazebo/camera/image_raw
   gazebo_native_width_px: 640
   gazebo_native_height_px: 360          # 16:9 (C920e)

@@ -3,7 +3,7 @@
 > **이 문서만 따라하면** `git clone` 한 대로 Docker에서 LIMO + CW 트랙 시뮬을 실행할 수 있습니다.  
 > 트러블슈팅·GPU: [simulation.md](./simulation.md) · 패키지 상세: [../src/dracer_sim/README.md](../src/dracer_sim/README.md)
 
-마지막 업데이트: 2026-07-10
+마지막 업데이트: 2026-07-11
 
 ---
 
@@ -15,9 +15,11 @@
 | 호스트 ROS | **설치 불필요** (WSL 24.04/26.04도 OK) |
 | 로봇 모델 | LIMO Ackermann (`vendor/limo_car`) |
 | 트랙 | CW 팀 트랙, 가로 **12 m** |
+| 미션 표지판 | 좌회전 · 우회전 · ArUco 정지 마커 (**3종**, 월드에 고정) |
 | 카메라 | C920e FOV, **320×180** JPEG (16:9) |
-| 시각화 | **Gazebo** (3D) + **RViz2** (카메라·로봇 모델) |
+| 시각화 | **Gazebo** (3D) + **카메라 프리뷰** (320×180, 16:9 창) |
 | 웹 모니터 | 시뮬 기본 **OFF** (실기용 D-Racer monitor) |
+| **개발 방식** | **컨테이너 1개** (`2026-smh-sim`) + **터미널 2개** (시뮬 / 코드) |
 
 ```bash
 git clone https://github.com/ahnsh03/2026-SMH.git
@@ -25,8 +27,9 @@ cd 2026-SMH && chmod +x scripts/*.sh
 ./scripts/dev_container.sh build
 ./scripts/dev_container.sh install-gazebo   # 최초 1회
 ./scripts/dev_container.sh init
-./scripts/dev_container.sh build-sim
-./scripts/dev_container.sh sim-bringup
+./scripts/dev_container.sh sim-up           # 컨테이너 생성 (1회)
+./scripts/dev_container.sh sim-bringup      # 터미널1: Gazebo
+# 터미널2: docker exec -it 2026-smh-sim bash
 ```
 
 ---
@@ -36,25 +39,26 @@ cd 2026-SMH && chmod +x scripts/*.sh
 | 항목 | 내용 |
 |------|------|
 | 로봇 | LIMO Ackermann (`vendor/limo_car`, ROS2 Humble) |
-| 트랙 | CW 팀 트랙 텍스처 (`track_cw_real.png`), 가로 **12 m** |
+| 트랙 | CW 팀 트랙 텍스처 (`track_cw_real.png`), 가로 **12 m**, 바닥 z=**0.01 m** |
+| 미션 표지판 | 좌/우회전(Ø21 cm 원판) + ArUco(15 cm) — `track_cw.world`에 포함 |
 | 인터페이스 | **D-Racer 실기와 동일 토픽** (`src/dracer_sim/config/sim_interface.yaml`) |
 | 참고 레포 | `ahns_limo_sim`은 ROS1·라이다 등 **미사용** — 트랙 plane·Ackermann만 참고 |
 
 ### 아키텍처
 
 ```
-Gazebo (LIMO + 트랙 + C920e 카메라 640×360)
+Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
     │
     ├─ /gazebo/camera/image_raw
     │       └─ sim_camera_republish → /camera/image/compressed (320×180 JPEG)
-    │                              → /camera/image_raw (RViz용)
+    │                              → /camera/image_raw (프리뷰 창용)
     │
     ├─ /control (Control) ← sim_control_bridge ← inference 또는 수동 pub
     │       └─ /cmd_vel → Ackermann Gazebo plugin
     │
     └─ /battery_status ← sim_battery_stub (80% 고정)
 
-RViz2: RobotModel (/robot_description) + Image (/camera/image_raw)
+카메라 프리뷰(`sim_camera_preview`): `/camera/image_raw` 320×180 → **640×360** 창 (16:9, 2배)
 ```
 
 ### D-Racer 호환 토픽
@@ -62,10 +66,10 @@ RViz2: RobotModel (/robot_description) + Image (/camera/image_raw)
 | 토픽 | 타입 | 용도 |
 |------|------|------|
 | `/camera/image/compressed` | `sensor_msgs/CompressedImage` | **inference_node** 입력 (320×180 JPEG) |
-| `/camera/image_raw` | `sensor_msgs/Image` | RViz 카메라 뷰 |
+| `/camera/image_raw` | `sensor_msgs/Image` | 카메라 프리뷰 창 |
 | `/control` | `control_msgs/Control` | throttle / steering (-1~1) |
 | `/battery_status` | `battery_msgs/Battery` | monitor 스텁 |
-| `/joint_states` | `sensor_msgs/JointState` | RViz 로봇 관절 |
+| `/joint_states` | `sensor_msgs/JointState` | Gazebo 관절 |
 | `/odom` | `nav_msgs/Odometry` | Gazebo Ackermann 플러그인 |
 
 내부 전용: `/cmd_vel` ← `sim_control_bridge`
@@ -76,7 +80,7 @@ RViz2: RobotModel (/robot_description) + Image (/camera/image_raw)
 
 ### 2.1 필수 소프트웨어
 
-1. **Windows 11** (WSLg 내장 — Gazebo/RViz GUI에 유리)
+1. **Windows 11** (WSLg 내장 — Gazebo·카메라 프리뷰 GUI에 유리)
 2. **WSL2** Ubuntu 배포판 (22.04 / 24.04 / 26.04 모두 가능)
 3. **Docker Desktop** — 설치 후 실행 상태 유지
 4. Docker Desktop → **Settings → Resources → WSL Integration** → 사용 중인 배포판 **ON**
@@ -107,11 +111,15 @@ chmod +x scripts/*.sh
 
 | 순서 | 명령 | 소요 | 설명 |
 |------|------|------|------|
-| 1 | `./scripts/dev_container.sh build` | ~3–8분 | Ubuntu 22.04 + Humble 베이스 이미지 |
-| 2 | `./scripts/dev_container.sh install-gazebo` | ~5–10분 | Gazebo + gazebo-ros-pkgs (**최초 1회**) |
+| 1 | `./scripts/dev_container.sh build` | ~3–8분 | **Docker 이미지** 빌드 (`Dockerfile` → `2026-smh-dev:latest`) |
+| 2 | `./scripts/dev_container.sh install-gazebo` | ~5–10분 | 이미지 안에 Gazebo apt 설치 (**최초 1회**) |
 | 3 | `./scripts/dev_container.sh init` | ~30초 | D-Racer-Kit clone + `src/` 링크 + 팀 `vehicle_config` |
-| 4 | `./scripts/dev_container.sh build-sim` | ~1–2분 | `dracer_sim` + `inference` + 의존 패키지 빌드 |
+| 4 | `./scripts/dev_container.sh build-sim` | ~1–2분 | **ROS 워크스페이스** `colcon build` (dracer_sim, inference 등) |
 | 5 | `./scripts/dev_container.sh check-gpu` | 수초 | GPU 렌더링 확인 (선택, 권장) |
+
+> **「빌드」가 두 가지입니다** — 헷갈리기 쉬워서 구분합니다.  
+> - **이미지 빌드** (`build`): `Dockerfile` 수정·최초 clone 시만. 시뮬을 매일 켤 때 **안 함**.  
+> - **워크스페이스 빌드** (`build-sim` / `colcon build`): Python·launch·URDF 등 **레포 코드**를 바꾼 뒤. `sim-bringup`이 **자동**으로 해 줌.
 
 > `sim-bringup` 실행 시 Gazebo가 없으면 **자동 설치**를 시도하지만, 네트워크 안정을 위해 `install-gazebo`를 먼저 실행하는 것을 권장합니다.
 
@@ -124,51 +132,197 @@ chmod +x scripts/*.sh
 
 ---
 
-## 4. 시뮬 실행
+## 4. 일상 개발 워크플로 (컨테이너 1개 + 터미널 2개)
 
-### 4.1 기본 (Gazebo + RViz)
+### 4.0 왜 이렇게 하나
+
+예전에는 `docker compose run --rm`으로 Gazebo를 띄웠기 때문에 **launch를 끄면 컨테이너도 같이 사라졌습니다.**  
+모듈을 고치고 inference를 다시 돌릴 때마다 전체를 재시작해야 했고, 컨테이너가 2개면 `network_mode` 차이로 ROS 토픽이 안 맞을 수도 있었습니다.
+
+지금은 다음 원칙으로 통일합니다.
+
+| 원칙 | 내용 |
+|------|------|
+| **컨테이너 1개** | 이름 고정 `2026-smh-sim`, `network_mode: host` |
+| **터미널 1** | Gazebo·브리지·카메라 프리뷰 (`sim-bringup`) |
+| **터미널 2** | inference 빌드·실행 (`docker exec`) |
+| **launch만 끔** | 터미널1에서 Ctrl+C → Gazebo 종료, **컨테이너는 유지** |
+| **셸 진입** | `docker exec -it 2026-smh-sim bash` 한 줄이면 충분 (별도 sh 래퍼 없음) |
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Docker 컨테이너: 2026-smh-sim  (sleep infinity, 백그라운드) │
+│  network_mode: host  →  WSL과 같은 ROS 도메인               │
+├──────────────────────────┬──────────────────────────────────┤
+│  터미널 1 (호스트 WSL)    │  터미널 2 (호스트 WSL)            │
+│  sim-bringup             │  docker exec -it 2026-smh-sim bash│
+│  ├ build-sim (자동)      │  ├ source ROS + workspace         │
+│  ├ Gazebo + 트랙         │  ├ colcon build (필요 시)         │
+│  ├ 토픽 브리지           │  └ ros2 run inference ...         │
+│  └ 카메라 프리뷰 창      │                                   │
+│  Ctrl+C → launch만 종료  │  exit → 셸만 종료 (컨테이너 유지) │
+└──────────────────────────┴──────────────────────────────────┘
+         sim-down 으로 컨테이너 전체 삭제 (하루 작업 끝)
+```
+
+### 4.1 컨테이너 생성·종료
+
+고정 컨테이너 이름: **`2026-smh-sim`** (`SMH_SIM_CONTAINER` 환경변수로 변경 가능)
+
+```bash
+# 컨테이너 생성·시작 (PC 켜고 처음 1회, 또는 sim-down 이후)
+./scripts/dev_container.sh sim-up
+
+# 하루 작업 끝 — 컨테이너 삭제
+./scripts/dev_container.sh sim-down
+```
+
+`sim-up`은 컨테이너 안에서 `sleep infinity`만 돌립니다. Gazebo는 아직 안 뜹니다.
+
+직접 명령·launch·수동 워크플로 전체: **[§4.8 직접 명령어 치트시트](#48-직접-명령어-치트시트-스크립트-없이)**
+
+```bash
+# 생성
+docker compose run -d --name 2026-smh-sim sim sleep infinity
+
+# 중지됐을 때 재시작
+docker start 2026-smh-sim
+
+# 삭제
+docker rm -f 2026-smh-sim
+```
+
+> `sim-bringup`을 처음 실행할 때 컨테이너가 없으면 **자동으로 `sim-up`까지** 합니다.  
+> 매일 `sim-up`을 먼저 칠 필요는 없지만, 터미널 역할을 나누려면 `sim-up` → `sim-bringup` 순서가 읽기 쉽습니다.
+
+### 4.2 터미널 1 — 시뮬 실행 (`sim-bringup`)
+
+**역할**: Gazebo 월드, D-Racer 토픽 브리지, 카메라 프리뷰를 켜고 끕니다.
 
 ```bash
 ./scripts/dev_container.sh sim-bringup
 ```
 
+내부적으로 다음을 **한 번에** 수행합니다.
+
+1. `sim-up` (컨테이너 없으면 생성)
+2. **워크스페이스 빌드** (`build-sim`) — `init_workspace` + `colcon build` ← **Dockerfile 빌드 아님**
+3. `ros2 launch dracer_sim sim_bringup.launch.py`
+
 **정상이면 다음이 보입니다:**
 
 | 창 | 내용 |
 |----|------|
-| **Gazebo** | CW 트랙 바닥 + LIMO 본체·바퀴 mesh |
-| **RViz2** | 로봇 모델 + D-Racer 카메라 영상 (320×180) |
+| **Gazebo** | CW 트랙 바닥 + LIMO + **좌/우회전·ArUco 표지판** |
+| **D-Racer Camera** | 320×180 영상, 기본 창 **640×360** (16:9, 2배) |
 
-RViz TF 표시는 기본 **OFF**입니다. 필요 시 Displays → TF 를 켜세요.
+**중지 방법**
 
-### 4.2 자율주행 (inference 포함)
+- **Ctrl+C** → launch 프로세스만 종료. **`2026-smh-sim` 컨테이너는 살아 있음**
+- 다시 켤 때: `sim-bringup` 재실행 **또는** 컨테이너 안에서 `ros2 launch dracer_sim sim_bringup.launch.py` ([§4.8](#48-직접-명령어-치트시트-스크립트-없이))
+- 월드·스폰 위치를 바꿨거나 Gazebo가 이상하면 터미널1에서 launch 재실행
+- 터미널2의 inference 셸은 그대로 두고 시뮬만 재시작 가능
+
+창 크기 변경 (16:9 유지):
+
+```bash
+./scripts/dev_container.sh sim-bringup camera_view_width:=800 camera_view_height:=450
+./scripts/dev_container.sh sim-bringup use_camera_view:=false   # 프리뷰 창 끔
+```
+
+### 4.3 터미널 2 — 코드 개발·실행 (`docker exec`)
+
+**역할**: `src/inference/modules/` 수정, 빌드, `inference_node` 실행.
+
+```bash
+docker exec -it 2026-smh-sim bash
+```
+
+컨테이너에 들어간 뒤 ROS 환경을 source합니다 (매 셸마다 1회).
+
+```bash
+source /opt/ros/humble/setup.bash
+source /workspace/install/setup.bash    # 또는 cd /workspace && source install/setup.bash
+```
+
+inference 실행 (시뮬 시간 사용):
+
+```bash
+ros2 run inference inference_node --ros-args -p use_sim_time:=true
+```
+
+또는 팀 launch:
+
+```bash
+ros2 launch inference auto_driving.launch.py use_sim_time:=true
+```
+
+**주의**
+
+- 터미널2에서 **`ros2 launch dracer_sim sim_bringup.launch.py`를 또 실행하지 마세요.** Gazebo·카메라 창이 **중복**으로 뜹니다. 시뮬은 **터미널1만** 담당합니다.
+- `exit`로 셸만 빠져나옵니다. 컨테이너는 계속 실행 중입니다.
+- 호스트(WSL)에서 코드를 편집해도 됩니다. `/workspace`는 레포가 **볼륨 마운트**되어 있어 컨테이너 안에서 바로 반영됩니다.
+
+### 4.4 일상 개발 루프 (코드 수정 → 빌드 → 재실행)
+
+| 단계 | 터미널 | 할 일 |
+|------|--------|--------|
+| 1 | 1 | `sim-bringup` 으로 시뮬 켜기 (이미 켜져 있으면 생략) |
+| 2 | 2 | `docker exec -it 2026-smh-sim bash` |
+| 3 | 호스트 | Cursor/에디터로 `src/inference/modules/*.py` 수정 |
+| 4 | 2 | 빌드 후 inference 재실행 (아래 참고) |
+| 5 | 1 | Gazebo에서 주행·카메라·표지판 확인 |
+| 6 | 호스트 (선택) | `./scripts/dev_container.sh verify-sim` |
+
+**터미널2에서 빌드** — `2026-smh-sim`이 떠 있는 동안 (**ROS 워크스페이스** 빌드, Dockerfile 아님):
+
+```bash
+# 컨테이너 안에서
+cd /workspace
+colcon build --symlink-install --packages-select inference
+source install/setup.bash
+ros2 run inference inference_node --ros-args -p use_sim_time:=true
+```
+
+**호스트에서 빌드** (같은 컨테이너에 반영):
+
+```bash
+./scripts/dev_container.sh build-sim
+# 이후 터미널2에서 inference만 다시 실행
+```
+
+inference를 멈출 때: 터미널2에서 **Ctrl+C**.
+
+### 4.5 자율주행 한 번에 (`sim`)
+
+시뮬 + inference를 **한 터미널**에서 통합 테스트할 때:
 
 ```bash
 ./scripts/dev_container.sh sim
 ```
 
 `sim_bringup` + `inference_node` + 조이스틱 노드(캘리브레이션 off).  
-모듈 개발 시 카메라 토픽과 `/control` 출력을 시뮬에서 바로 검증할 수 있습니다.
+**모듈 개발 중**에는 터미널 2개 방식(§4.2–4.4)이 더 편합니다.
 
-### 4.3 수동 주행 (USB 조이스틱)
+### 4.6 수동 주행 (USB 조이스틱)
 
 ```bash
 ./scripts/dev_container.sh sim-manual
 ```
 
-WSL USB 패스스루 설정이 필요할 수 있습니다. 조이스틱 없이 테스트:
+WSL USB 패스스루 설정이 필요할 수 있습니다. 조이스틱 없이 테스트 (터미널2 또는 호스트):
 
 ```bash
 ros2 topic pub /control control_msgs/msg/Control "{steering: 0.0, throttle: 0.3}" -r 10
 ```
 
-### 4.4 launch 옵션
+### 4.7 launch 옵션
 
 `sim-bringup` 뒤에 ROS launch 인자를 그대로 전달할 수 있습니다.
 
 ```bash
 ./scripts/dev_container.sh sim-bringup headless:=true
-./scripts/dev_container.sh sim-bringup use_rviz:=false
+./scripts/dev_container.sh sim-bringup use_camera_view:=false
 ./scripts/dev_container.sh sim-bringup use_monitor:=true   # 웹 모니터 (Docker Flask 이슈 가능)
 ./scripts/dev_container.sh sim-bringup spawn_x:=0.0 spawn_y:=-3.6
 ```
@@ -176,14 +330,337 @@ ros2 topic pub /control control_msgs/msg/Control "{steering: 0.0, throttle: 0.3}
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
 | `headless` | `false` | `true`면 Gazebo 3D 창 끔 (물리·카메라는 동작) |
-| `use_rviz` | `true` | RViz2 카메라·로봇 모델 |
+| `use_camera_view` | `true` | OpenCV 카메라 프리뷰 (`/camera/image_raw`) |
+| `camera_view_width` | `640` | 프리뷰 창 가로 (16:9) |
+| `camera_view_height` | `360` | 프리뷰 창 세로 |
 | `use_monitor` | `false` | D-Racer 웹 모니터 (시뮬에서는 보통 불필요) |
 | `robot` | `limo` | `dracer` = 경량 박스 모델 |
 | `spawn_x/y/z/yaw` | 2.6 / -3.92 / 0.15 / -3.14 | 트랙 위 스폰 위치 |
 
+### 4.8 직접 명령어 치트시트 (스크립트 없이)
+
+`./scripts/dev_container.sh` 없이 **docker / ros2 명령만**으로 같은 작업을 할 때의 참고표입니다.  
+레포 루트(`2026-SMH/`)에서 실행한다고 가정합니다.
+
+#### 「빌드」 종류 — Docker 이미지 vs ROS 워크스페이스
+
+팀 문서에서 **빌드**는 맥락에 따라 다릅니다. 시뮬 launch 직전에 말하는 빌드는 **아래 ③**입니다.
+
+| 구분 | 명령 예 | 무엇을 하나 | 언제 하나 |
+|------|---------|-------------|-----------|
+| ① **Docker 이미지** | `./scripts/dev_container.sh build`<br>`docker compose build` | `Dockerfile` → `2026-smh-dev:latest` 이미지 생성 | **최초 clone**, `Dockerfile` / 베이스 apt 변경 시 |
+| ② **Gazebo 설치** | `./scripts/dev_container.sh install-gazebo` | 이미지 **안에** Gazebo apt 패키지 추가 | **최초 1회** (이미지에 Gazebo 없을 때) |
+| ③ **ROS 워크스페이스** | `./scripts/dev_container.sh build-sim`<br>`colcon build …` | `src/` 코드 → `build/`, `install/` | **코드 수정 후**, 또는 최초 `init` 다음 |
+| — launch만 | `ros2 launch dracer_sim …` | Gazebo·노드 실행 | ③이 끝난 뒤 (또는 코드 안 바꿨으면 ③ 생략) |
+
+- `sim-bringup` = ③ 워크스페이스 빌드 + launch **한꺼번에**
+- `ros2 launch`만 직접 치면 = ③을 **직접** 해야 함 (`Dockerfile` 다시 빌드할 필요 **없음**)
+- `modules/lane_detection.py` 등 **Python만** 고쳤으면 ③에서 `inference`만 다시 빌드해도 됨
+
+#### `ros2 launch`만 직접 할 때 — 빌드를 언제 다시 하나
+
+| 상황 | 워크스페이스 빌드(③) 필요? | 할 일 |
+|------|---------------------------|--------|
+| 시뮬만 껐다 켬 (코드 변경 없음) | **아니오** | `source install/setup.bash` 후 `ros2 launch …` |
+| `src/inference/` Python 수정 | **예** (inference만) | `colcon build --packages-select inference` → `source install/setup.bash` |
+| `src/dracer_sim/` (launch, URDF, world) 수정 | **예** (dracer_sim) | `colcon build --packages-select dracer_sim` → `source install/setup.bash` |
+| 처음 clone / `init` 안 함 / `install/` 없음 | **예** (전체) | 아래 §4.8 「최초 워크스페이스 빌드」 전체 |
+| `Dockerfile` 수정 | ① 이미지 빌드 | `./scripts/dev_container.sh build` (드묾) |
+
+#### 스크립트 ↔ 직접 명령 대응
+
+| 하고 싶은 일 | 스크립트 | 직접 명령 |
+|--------------|----------|-----------|
+| **Docker 이미지** 빌드 | `build` | `docker compose build` |
+| Gazebo apt 설치 | `install-gazebo` | (수동 비권장 — 스크립트 사용) |
+| 시뮬 컨테이너 생성 | `sim-up` | `docker compose run -d --name 2026-smh-sim sim sleep infinity` |
+| 컨테이너 상태 확인 | — | `docker ps -a --filter name=2026-smh-sim` |
+| 중지된 컨테이너 시작 | (sim-up이 자동) | `docker start 2026-smh-sim` |
+| 컨테이너 셸 진입 | — | `docker exec -it 2026-smh-sim bash` |
+| 워크스페이스 링크 | `init` | 컨테이너 안 `./scripts/init_workspace.sh` |
+| **ROS 워크스페이스** 빌드 | `build-sim` | 컨테이너 안 `colcon build …` (아래 §3) |
+| Gazebo 시뮬 실행 | `sim-bringup` | 컨테이너 안 `ros2 launch dracer_sim sim_bringup.launch.py` |
+| 시뮬만 끄기 | Ctrl+C (launch 터미널) | launch 실행 중인 셸에서 **Ctrl+C** |
+| 컨테이너 삭제 | `sim-down` | `docker rm -f 2026-smh-sim` |
+| 토픽 검증 | `verify-sim` | 호스트 `./scripts/verify_sim.sh` (편의 스크립트) |
+
+> `sim-bringup`을 다시 실행해도 **`2026-smh-sim`은 새로 만들지 않습니다.**  
+> 실행 중이면 그대로 쓰고, 중지됐으면 `docker start`만 합니다.
+
+#### 1) 컨테이너 생성 (최초 1회)
+
+```bash
+cd ~/projects/2026-seame-hackathon/2026-SMH   # 본인 clone 경로
+
+# WSLg GUI (보통 자동)
+export DISPLAY=${DISPLAY:-:0}
+
+docker compose run -d --name 2026-smh-sim sim sleep infinity
+```
+
+확인:
+
+```bash
+docker ps --filter name=2026-smh-sim
+# STATUS 가 Up 이면 OK
+```
+
+이미 있으면 `Error: container name already in use` → **삭제하지 말고** `docker start 2026-smh-sim` 또는 그대로 `docker exec` 사용.
+
+#### 2) 컨테이너 진입
+
+```bash
+docker exec -it 2026-smh-sim bash
+```
+
+프롬프트가 `root@…:/workspace#` 형태면 성공. 이후 명령은 **컨테이너 안**에서 실행합니다.
+
+ROS 환경 (셸 열 때마다 1회):
+
+```bash
+source /opt/ros/humble/setup.bash
+source /workspace/install/setup.bash
+```
+
+#### 3) 워크스페이스 빌드 (컨테이너 안) — `sim-bringup`이 하는 「빌드」
+
+**Dockerfile / `docker compose build`가 아닙니다.** 레포의 ROS 패키지를 `colcon`으로 컴파일·설치하는 단계입니다.  
+`sim-bringup` 없이 `ros2 launch`만 직접 실행할 때는 **launch 전에** 이 단계를 직접 해야 합니다.
+
+**최초 1회 (전체)** — `build-sim`과 동일:
+
+```bash
+cd /workspace
+./scripts/init_workspace.sh
+python3 scripts/prepare_mission_signs.py
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-up-to dracer_sim limo_car inference monitor joystick topst_utils opencv
+source install/setup.bash
+```
+
+**코드 수정 후 (일상)** — 바꾼 패키지만:
+
+```bash
+cd /workspace
+source /opt/ros/humble/setup.bash
+
+# inference 모듈만 고쳤을 때 (가장 흔함)
+colcon build --symlink-install --packages-select inference
+source install/setup.bash
+
+# dracer_sim (launch, URDF, world) 고쳤을 때
+colcon build --symlink-install --packages-select dracer_sim
+source install/setup.bash
+```
+
+**호스트에서** 같은 워크스페이스 빌드 (`2026-smh-sim` 실행 중이면 그 컨테이너 안에서 빌드됨):
+
+```bash
+./scripts/dev_container.sh build-sim
+```
+
+빌드가 끝난 뒤에야 `ros2 launch` / `ros2 run`이 최신 코드를 씁니다.
+
+#### 4) 시뮬 launch 실행 (컨테이너 안)
+
+launch 파일 위치: `src/dracer_sim/launch/`
+
+| launch 파일 | 용도 |
+|-------------|------|
+| `sim_bringup.launch.py` | Gazebo + 트랙 + 브리지 + 카메라 프리뷰 (**기본**) |
+| `sim_auto_driving.launch.py` | bringup + inference 자율주행 |
+| `sim_manual_driving.launch.py` | bringup + 조이스틱 수동주행 |
+
+**기본 시뮬** (터미널 1 — 이 셸은 launch 전용으로 두는 것을 권장):
+
+```bash
+ros2 launch dracer_sim sim_bringup.launch.py
+```
+
+옵션 예:
+
+```bash
+ros2 launch dracer_sim sim_bringup.launch.py headless:=true
+ros2 launch dracer_sim sim_bringup.launch.py use_camera_view:=false
+ros2 launch dracer_sim sim_bringup.launch.py camera_view_width:=800 camera_view_height:=450
+```
+
+**종료**: launch가 돌아가는 터미널에서 **Ctrl+C** → Gazebo·브리지만 종료, **`2026-smh-sim` 컨테이너는 유지**.
+
+**다시 켜기** (코드 변경 없음 → 워크스페이스 빌드 생략):
+
+```bash
+docker exec -it 2026-smh-sim bash
+source /opt/ros/humble/setup.bash && source /workspace/install/setup.bash
+ros2 launch dracer_sim sim_bringup.launch.py
+```
+
+**다시 켜기** (코드 수정 있음 → launch **전에** colcon, [위 §3](#3-워크스페이스-빌드-컨테이너-안--sim-bringup이-하는-빌드) 참고):
+
+```bash
+docker exec -it 2026-smh-sim bash
+source /opt/ros/humble/setup.bash
+cd /workspace
+colcon build --symlink-install --packages-select inference   # 예시
+source install/setup.bash
+ros2 launch dracer_sim sim_bringup.launch.py
+```
+
+#### 5) 터미널 2 — inference (컨테이너 안, 별도 셸)
+
+시뮬 launch가 **이미 터미널 1에서 돌아가는 중**일 때, **새 WSL 터미널**에서:
+
+```bash
+docker exec -it 2026-smh-sim bash
+source /opt/ros/humble/setup.bash && source /workspace/install/setup.bash
+ros2 run inference inference_node --ros-args -p use_sim_time:=true
+```
+
+또는:
+
+```bash
+ros2 launch inference auto_driving.launch.py use_sim_time:=true
+```
+
+#### 6) 컨테이너 삭제 (하루 작업 끝)
+
+```bash
+docker rm -f 2026-smh-sim
+```
+
+#### 전체 수동 워크플로 예시 (터미널 2개)
+
+```bash
+# === 호스트 WSL — 최초 1회 ===
+cd 2026-SMH
+docker compose run -d --name 2026-smh-sim sim sleep infinity
+
+# === 터미널 1 — 시뮬 ===
+docker exec -it 2026-smh-sim bash
+source /opt/ros/humble/setup.bash
+cd /workspace && ./scripts/init_workspace.sh
+colcon build --symlink-install --packages-up-to dracer_sim inference
+source install/setup.bash
+ros2 launch dracer_sim sim_bringup.launch.py
+# Ctrl+C 로 시뮬만 끔
+
+# === 터미널 2 — inference (시뮬 켜진 상태) ===
+docker exec -it 2026-smh-sim bash
+source /opt/ros/humble/setup.bash && source /workspace/install/setup.bash
+ros2 run inference inference_node --ros-args -p use_sim_time:=true
+
+# === 호스트 — 작업 끝 ===
+docker rm -f 2026-smh-sim
+```
+
 ---
 
-## 5. 동작 검증
+## 5. 미션 표지판 (갈림길 · ArUco)
+
+대회 미션 검증용 표지판 **3종**이 기본 월드에 포함됩니다. **별도 맵 파일·launch 인자 없이** `sim-bringup` / `sim`만 실행하면 함께 로드됩니다.
+
+### 5.1 무엇이 배치되나
+
+| Gazebo 모델 | 대회 의미 | 실물 크기 | 판자 |
+|-------------|-----------|-----------|------|
+| `turn_sign_left` | 갈림길 좌회전 | 파란 원 **Ø 20 cm** | 흰 원 **Ø 21 cm** |
+| `turn_sign_right` | 갈림길 우회전 | 파란 원 **Ø 20 cm** | 흰 원 **Ø 21 cm** |
+| `aruco_stop_sign` | 동적 장애물 정지 | 마커 **15 cm** | 흰 사각 **18 cm** (DICT_6X6_50 **ID 3**) |
+
+### 5.2 현재 위치·방향 (2026-07-11)
+
+좌표는 Gazebo world 기준 (트랙 중심 원점, 가로 12 m).
+
+| 표지판 | x | y | 링크 중심 z | yaw | 향함 |
+|--------|---|---|-------------|-----|------|
+| 좌회전 | -3.14 | 3.71 | 0.215 | -90° | **-X** (옆) |
+| 우회전 | -3.00 | 3.71 | 0.215 | -90° | **-X** |
+| ArUco | 4.5 | 0.0 | 0.20 | +180° | **+Y** |
+
+> yaw는 위에서 내려다본 기준. 기본 모델은 **-Y** 면에 텍스처가 붙어 있음.
+
+### 5.3 높이 계산 (아랫선 기준)
+
+트랙 텍스처 평면(`track_plane`)은 **z = 0.01 m** (지면 z=0보다 1 cm 위).  
+**10 cm는 트랙 바닥 높이가 아니라**, 트랙 위로 띄우는 **여유 높이**입니다.
+
+```
+표지판 아랫선 z = track_surface_z + clearance
+                 = 0.01 + 0.10 = 0.11 m
+```
+
+| 표지판 | world pose의 z (링크 **중심**) | 계산 |
+|--------|-------------------------------|------|
+| 좌/우회전 | **0.215** | 0.11 + 원판 반지름 0.105 |
+| ArUco | **0.20** | 0.11 + 판 높이/2 0.09 |
+
+`worlds/track_cw.world`의 `<include><pose>`에 **중심 z**를 넣습니다.  
+참고 수치·수식은 `src/dracer_sim/config/mission_signs.yaml`에도 동일하게 적어 두었습니다.
+
+### 5.4 위치·방향 바꾸는 방법
+
+1. Gazebo에서 대략적인 x, y, yaw 확인 (Insert / 좌표 표시)
+2. **`worlds/track_cw.world`** 의 해당 `<pose>x y z roll pitch yaw</pose>` 수정
+3. **`config/mission_signs.yaml`** 도 같이 갱신 (팀 참고용)
+4. `build-sim`은 world 파일만 바꿨다면 생략 가능, **Gazebo 재시작** 필수
+
+yaw 빠른 참고 (기본 텍스처 면 = -Y):
+
+| 목표 방향 | yaw (rad) | yaw (deg) |
+|-----------|-----------|-----------|
+| -Y (출발 쪽) | 0 | 0° |
+| -X (옆) | -π/2 | -90° (시계방향 90°) |
+| +Y | π | 180° |
+| +X | π/2 | 90° |
+
+### 5.5 이미지·텍스처 (팀원 clone)
+
+외부 `data/` 폴더 **불필요**. 레포 안에 모두 포함됩니다.
+
+```
+src/dracer_sim/
+├── assets/signs/                    # 원본 PNG (Git)
+│   ├── trun_left.png
+│   ├── trun_right.png
+│   └── ArUco_stop.png
+├── models/
+│   ├── turn_sign_left/              # SDF + materials/
+│   ├── turn_sign_right/
+│   └── aruco_stop_sign/
+├── worlds/track_cw.world            # ★ 실제 스폰 위치
+├── config/mission_signs.yaml        # 크기·좌표 참고
+└── (repo root) scripts/prepare_mission_signs.py
+```
+
+`./scripts/dev_container.sh build-sim` 시 `prepare_mission_signs.py`가 자동 실행되어:
+
+- 좌/우: Ø21 cm **원형** 흰 배경 + Ø20 cm 표지 (PNG 알파)
+- ArUco: 15 cm 마커를 18 cm 흰 사각 판에 합성
+- 모델별 **고유 파일명** (`turn_sign_left.png` 등) — Gazebo 전역 캐시 충돌 방지
+
+PNG 원본을 바꿨을 때만:
+
+```bash
+python3 scripts/prepare_mission_signs.py
+./scripts/dev_container.sh build-sim
+```
+
+### 5.6 inference 연동
+
+| 모듈 | 담당 | 시뮬에서 확인 |
+|------|------|----------------|
+| `modules/traffic_sign.py` | 장원정 | 좌/우 표지판 YOLO |
+| `modules/aruco/detector.py` | 안승현 | ArUco ID 검출 |
+| `modules/aruco/stop_logic.py` | 박성준 | ID 3 정지 판단 |
+
+```bash
+./scripts/dev_container.sh sim
+ros2 topic echo /debug/aruco    # ArUco 디버그 (auto launch 시)
+```
+
+---
+
+## 6. 동작 검증
 
 시뮬 실행 중 **다른 WSL 터미널**에서:
 
@@ -218,7 +695,7 @@ GPU 확인 (렉이 심할 때):
 
 ---
 
-## 6. `dev_container.sh` 명령 전체
+## 7. `dev_container.sh` 명령 전체
 
 ```bash
 ./scripts/dev_container.sh help
@@ -226,28 +703,30 @@ GPU 확인 (렉이 심할 때):
 
 | 명령 | 용도 |
 |------|------|
-| `build` | Docker 이미지 빌드 |
-| `install-gazebo` | Gazebo 1회 설치 |
+| `build` | **Docker 이미지** 빌드 (`Dockerfile`) |
+| `install-gazebo` | Gazebo 1회 설치 (이미지 안) |
 | `init` | D-Racer-Kit + 워크스페이스 링크 |
-| `build-inference` | inference만 빌드 |
-| `build-sim` | dracer_sim + inference 빌드 |
+| `build-inference` | inference만 `colcon build` |
+| `build-sim` | **ROS 워크스페이스** `colcon build` (dracer_sim + inference 등) |
 | `check` | CI와 동일 import 검증 |
-| `shell` | dev 컨테이너 bash (코드 편집·빌드) |
-| `sim-shell` | sim 컨테이너 bash (Gazebo GUI 환경) |
-| `sim-bringup` | Gazebo + 트랙 + 브리지 + RViz |
-| `sim` | bringup + inference 자율주행 |
+| `sim-up` | `2026-smh-sim` 생성·시작 (백그라운드) |
+| `sim-down` | 시뮬 컨테이너 삭제 |
+| `sim-bringup` | **터미널1**: build-sim + Gazebo launch |
+| `sim` | bringup + inference (한 터미널 통합 테스트) |
 | `sim-manual` | bringup + 조이스틱 수동주행 |
+| `build-sim` | 호스트에서 빌드 (`sim-up` 중이면 같은 컨테이너) |
 | `check-gpu` | OpenGL 렌더러 확인 |
-| `check-rviz` | rviz2 설치 확인 |
-| `verify-sim` | 시뮬 토픽 검증 (sim 실행 중) |
+| `verify-sim` | 토픽 검증 (bringup 실행 중, 호스트에서) |
+
+**터미널2 셸** (스크립트 없음): `docker exec -it 2026-smh-sim bash`
 
 ---
 
-## 7. 레포 구조 (시뮬 관련)
+## 8. 레포 구조 (시뮬 관련)
 
 ```
 2026-SMH/
-├── Dockerfile                  # 베이스 이미지 (Gazebo 제외, Mesa+rviz2)
+├── Dockerfile                  # 베이스 이미지 (Gazebo 제외, Mesa + OpenCV 프리뷰)
 ├── docker-compose.yml          # dev / sim 서비스, WSL GPU 마운트
 ├── config/
 │   └── vehicle_config.yaml     # 팀 카메라 320×180 (init → src/config 링크)
@@ -263,16 +742,20 @@ GPU 확인 (렉이 심할 때):
     ├── dracer_sim/             # ★ Gazebo 시뮬 패키지
     │   ├── launch/             # sim_bringup, sim_auto_driving …
     │   ├── urdf/               # limo_dracer_sim.xacro
-    │   ├── models/track_plane/ # CW 트랙 텍스처
+    │   ├── assets/signs/       # 표지판 원본 PNG
+    │   ├── models/
+    │   │   ├── track_plane/    # CW 트랙 텍스처
+    │   │   ├── turn_sign_left/
+    │   │   ├── turn_sign_right/
+    │   │   └── aruco_stop_sign/
     │   ├── worlds/track_cw.world
-    │   ├── config/             # camera, control, sim_interface
-    │   └── rviz/sim_camera.rviz
+    │   ├── config/             # camera, control, mission_signs, sim_interface
     └── inference/              # 팀 자율주행 (시뮬에서 동일 코드 실행)
 ```
 
 ---
 
-## 8. inference 모듈 개발 워크플로
+## 9. inference 모듈 개발 워크플로
 
 ```bash
 # 1) 모듈 코드 수정 (예: modules/lane_detection.py)
@@ -292,7 +775,7 @@ ros2 launch inference auto_driving.launch.py
 
 ---
 
-## 9. 카메라 설정 (320×180)
+## 10. 카메라 설정 (320×180)
 
 | 환경 | 설정 파일 | 해상도 |
 |------|-----------|--------|
@@ -305,23 +788,26 @@ C920e 네이티브는 **1920×1080 (16:9)** 입니다. 주최측 기본 320×160
 
 ---
 
-## 10. 자주 하는 실수
+## 11. 자주 하는 실수
 
 | 증상 | 원인 | 해결 |
 |------|------|------|
 | `ros2: command not found` | 호스트 WSL에서 직접 실행 | `./scripts/dev_container.sh sim-bringup` |
-| RViz에 로봇 mesh 없음 | 구 빌드 / mesh URI | `build-sim` 후 재실행 |
+| 카메라 프리뷰 검은 화면 | 토픽 미수신 / 구 빌드 | `build-sim` 후 재실행, `verify-sim` |
 | Gazebo에 카메라만 떠 있음 | Gazebo가 `package://` mesh 미지원 | `build-sim` 후 재실행 (`file://` URDF spawn) |
 | Gazebo 없음 | 베이스 이미지만 빌드 | `install-gazebo` 1회 |
 | apt Hash Sum mismatch | WSL Docker 미러 | `build`·`install-gazebo` 재시도 (자동) |
 | 렉 심함 | CPU 소프트웨어 렌더링 | `check-gpu`, `headless:=true` |
-| monitor_node 죽음 | Docker Flask 버전 충돌 | 시뮬 기본 OFF — RViz 사용 |
+| monitor_node 죽음 | Docker Flask 버전 충돌 | 시뮬 기본 OFF — OpenCV 카메라 프리뷰 사용 |
 | 트랙 텍스처 없음 | `build-sim` 안 함 | `build-sim` 후 재실행 |
+| 표지판 3개가 전부 좌회전 | Gazebo `sign.png` 캐시 | `build-sim` + Gazebo 완전 재시작 |
+| 표지판 판만 보이고 그림 없음 | plane 뒷면 / 텍스처 미로드 | 최신 `dracer_sim` pull 후 `build-sim`, `killall gzserver gzclient` |
+| Gazebo·카메라 창 2세트 | bringup을 두 터미널에서 동시 실행 | 터미널1만 `sim-bringup`, 터미널2는 `docker exec` |
 | `control_msgs` 없음 | init 안 함 | `./scripts/dev_container.sh init` |
 
 ---
 
-## 11. 일상 워크플로
+## 12. 일상 워크플로
 
 ```bash
 git pull
@@ -335,7 +821,7 @@ git pull
 
 ---
 
-## 12. 관련 문서
+## 13. 관련 문서
 
 | 문서 | 내용 |
 |------|------|

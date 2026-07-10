@@ -50,8 +50,8 @@ def launch_setup(context, *args, **kwargs):
   pkg_share = get_package_share_directory('dracer_sim')
   control_config = os.path.join(pkg_share, 'config', 'control_bridge.yaml')
   camera_config = os.path.join(pkg_share, 'config', 'camera_republish.yaml')
+  camera_preview_config = os.path.join(pkg_share, 'config', 'camera_preview.yaml')
   battery_config = os.path.join(pkg_share, 'config', 'battery_stub.yaml')
-  rviz_config = os.path.join(pkg_share, 'rviz', 'sim_camera.rviz')
   vehicle_config_path = get_vehicle_config_path()
 
   robot = LaunchConfiguration('robot').perform(context)
@@ -60,7 +60,10 @@ def launch_setup(context, *args, **kwargs):
   spawn_y = LaunchConfiguration('spawn_y')
   spawn_yaw = LaunchConfiguration('spawn_yaw')
   use_monitor = LaunchConfiguration('use_monitor').perform(context)
-  use_rviz = LaunchConfiguration('use_rviz').perform(context)
+  use_camera_view = LaunchConfiguration('use_camera_view').perform(context)
+  camera_view_topic = LaunchConfiguration('camera_view_topic').perform(context)
+  camera_view_width = int(LaunchConfiguration('camera_view_width').perform(context))
+  camera_view_height = int(LaunchConfiguration('camera_view_height').perform(context))
 
   robot_description = load_robot_description(robot)
   gazebo_urdf_path = write_gazebo_urdf(robot_description, robot)
@@ -146,15 +149,22 @@ def launch_setup(context, *args, **kwargs):
       )
     )
 
-  if use_rviz == 'true':
+  if use_camera_view == 'true':
     nodes.append(
       Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
+        package='dracer_sim',
+        executable='sim_camera_preview',
+        name='sim_camera_preview',
         output='screen',
-        arguments=['-d', rviz_config],
-        parameters=[{'use_sim_time': use_sim_time}],
+        parameters=[
+          camera_preview_config,
+          {
+            'use_sim_time': use_sim_time,
+            'image_topic': camera_view_topic,
+            'window_width': camera_view_width,
+            'window_height': camera_view_height,
+          },
+        ],
         additional_env={
           'QT_X11_NO_MITSHM': '1',
           'DISPLAY': os.environ.get('DISPLAY', ':0'),
@@ -186,11 +196,23 @@ def generate_launch_description():
     ),
     DeclareLaunchArgument(
       'use_monitor', default_value='false',
-      description='D-Racer 웹 모니터 (시뮬 기본 OFF — RViz 사용, 실기는 manual/auto launch)',
+      description='D-Racer 웹 모니터 (시뮬 기본 OFF — rqt 카메라 뷰 사용, 실기는 manual/auto launch)',
     ),
     DeclareLaunchArgument(
-      'use_rviz', default_value='true',
-      description='RViz2로 /camera/image_raw(320x180) + 로봇 모델 표시',
+      'use_camera_view', default_value='true',
+      description='OpenCV 카메라 프리뷰 창 (/camera/image_raw, 16:9)',
+    ),
+    DeclareLaunchArgument(
+      'camera_view_topic', default_value='/camera/image_raw',
+      description='카메라 프리뷰 구독 토픽',
+    ),
+    DeclareLaunchArgument(
+      'camera_view_width', default_value='640',
+      description='프리뷰 창 가로 (기본 640 = 320x180의 2배)',
+    ),
+    DeclareLaunchArgument(
+      'camera_view_height', default_value='360',
+      description='프리뷰 창 세로 (기본 360, 16:9)',
     ),
 
     SetEnvironmentVariable(
