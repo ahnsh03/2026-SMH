@@ -21,7 +21,7 @@ services:
 
   sim:
     image: 2026-smh-dev:latest
-    container_name: 2026-smh-dev-sim
+    # 고정 이름은 dev_container.sh sim-up (--name 2026-smh-sim) 에서 지정
     working_dir: /workspace
     network_mode: host
     ipc: host

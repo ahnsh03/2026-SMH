@@ -1,0 +1,19 @@
+material TurnSignLeftMaterial
+{
+  technique
+  {
+    pass
+    {
+      lighting off
+      scene_blend alpha_blend
+      depth_write off
+      ambient 1.0 1.0 1.0 1.0
+      diffuse 1.0 1.0 1.0 1.0
+      texture_unit
+      {
+        texture turn_sign_left.png
+        filtering trilinear
+      }
+    }
+  }
+}

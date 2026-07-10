@@ -29,7 +29,7 @@
 | [setup.md](./setup.md) | 보드·PC 셋업 (Case A/B) |
 | [board-workflow.md](./board-workflow.md) | D3-G 개발·주행 ★ |
 | [dev-environment.md](./dev-environment.md) | Docker·CI ★ |
-| [simulation-setup.md](./simulation-setup.md) | Gazebo 시뮬 재현 ★ |
+| [simulation-setup.md](./simulation-setup.md) | Gazebo 시뮬 재현 · 터미널 2개 · **§4.8 직접 명령** ★ |
 | [simulation.md](./simulation.md) | 시뮬 GPU·트러블슈팅 |
 
 ### 하드웨어·대회
@@ -45,7 +45,7 @@
 
 | 문서 | 내용 |
 |------|------|
-| [../src/dracer_sim/README.md](../src/dracer_sim/README.md) | Gazebo `dracer_sim` |
+| [../src/dracer_sim/README.md](../src/dracer_sim/README.md) | Gazebo `dracer_sim` (트랙·표지판·카메라) |
 | [../src/inference/](../src/inference/) | 팀 `inference` 소스 |
 
 ## 레포 구조 (요약)
@@ -57,7 +57,7 @@
 ├── scripts/dev_container.sh     # PC Docker·시뮬
 ├── scripts/board_sync.sh        # 보드 동기화
 ├── src/inference/               # 팀 자율주행 (Git)
-├── src/dracer_sim/              # Gazebo 시뮬 (Git)
+├── src/dracer_sim/              # Gazebo 시뮬 + 미션 표지판 3종 (Git)
 ├── vendor/limo_car/             # LIMO 모델 (Git)
 └── external/D-Racer-Kit/        # init 시 clone (Git 제외)
 ```

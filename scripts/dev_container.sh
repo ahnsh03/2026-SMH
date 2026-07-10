@@ -1,23 +1,68 @@
 #!/usr/bin/env bash
-# PC(WSL) 개발 컨테이너 — Ubuntu 22.04 + ROS2 Humble (호스트가 24.04/26.04여도 동일).
+# PC(WSL) 개발 컨테이너 — Ubuntu 22.04 + ROS2 Humble
 #
-# Usage:
-#   ./scripts/dev_container.sh build              # 이미지 빌드 (Gazebo 포함)
-#   ./scripts/dev_container.sh shell              # 빌드 전용 셸
-#   ./scripts/dev_container.sh build-inference    # inference 빌드
-#   ./scripts/dev_container.sh build-sim          # dracer_sim + inference 빌드
-#   ./scripts/dev_container.sh sim-shell          # Gazebo GUI용 셸
-#   ./scripts/dev_container.sh sim                # Gazebo 자율주행 시뮬 실행
-#   ./scripts/dev_container.sh sim-bringup        # Gazebo + 브리지만
+# 시뮬 개발 (컨테이너 1개 + 터미널 2개):
+#   ./scripts/dev_container.sh sim-up          # 2026-smh-sim 생성·시작 (1회)
+#   ./scripts/dev_container.sh sim-bringup     # 터미널1: Gazebo+브리지 (Ctrl+C → launch만 종료)
+#   docker exec -it 2026-smh-sim bash          # 터미널2: 코드 빌드·inference 실행
+#   ./scripts/dev_container.sh sim-down        # 컨테이너 제거
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
-COMPOSE=(docker compose)
-if ! docker compose version >/dev/null 2>&1; then
-  COMPOSE=(docker-compose)
-fi
+SIM_CONTAINER_NAME="${SMH_SIM_CONTAINER:-2026-smh-sim}"
+
+setup_compose() {
+  if ! command -v docker >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+[SEA-Me] docker 명령을 찾을 수 없습니다.
+
+WSL2 + Docker Desktop 사용 시:
+  1. Windows에서 Docker Desktop 실행
+  2. Settings → Resources → WSL Integration
+  3. 사용 중인 배포판(예: Ubuntu) 토글 ON → Apply & Restart
+  4. WSL 터미널을 닫았다가 다시 열기
+
+확인:
+  docker --version
+  docker compose version
+  docker ps
+EOF
+    exit 1
+  fi
+
+  if ! docker info >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+[SEA-Me] Docker 데몬에 연결할 수 없습니다.
+
+  - Docker Desktop이 Windows에서 실행 중인지 확인
+  - WSL Integration이 이 배포판에 켜져 있는지 확인
+  - 터미널 재시작 후: docker ps
+EOF
+    exit 1
+  fi
+
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE=(docker compose)
+    return 0
+  fi
+
+  if command -v docker-compose >/dev/null 2>&1 && docker-compose version >/dev/null 2>&1; then
+    COMPOSE=(docker-compose)
+    return 0
+  fi
+
+  cat >&2 <<'EOF'
+[SEA-Me] docker compose / docker-compose를 사용할 수 없습니다.
+
+Docker Desktop을 최신으로 업데이트하거나 WSL Integration을 다시 켜 주세요.
+확인: docker compose version
+EOF
+  exit 1
+}
+
+setup_compose
 
 READONLY_BUILD_SIM='
 set -eo pipefail
@@ -33,24 +78,100 @@ fi
 set +u
 source /opt/ros/humble/setup.bash
 set -u
+python3 scripts/prepare_mission_signs.py
 colcon build --symlink-install --packages-up-to dracer_sim limo_car inference monitor joystick topst_utils opencv
 set +u
 source install/setup.bash
 set -u
 '
 
+SIM_EXEC_PREAMBLE='
+set +u
+source /workspace/scripts/sim_gpu_env.sh 2>/dev/null || true
+source /opt/ros/humble/setup.bash
+if [ -f /workspace/install/setup.bash ]; then source /workspace/install/setup.bash; fi
+'
+
+# bash -lc "…${READONLY_BUILD_SIM}…" 는 스크립트 안의 set 이 $s 로 잘려 et 가 됨 → stdin 으로 전달
+
 run_dev() {
   "${COMPOSE[@]}" run --rm dev "$@"
-}
-
-run_sim() {
-  "${COMPOSE[@]}" run --rm sim "$@"
 }
 
 ensure_sim_display() {
   if [ -z "${DISPLAY:-}" ]; then
     export DISPLAY=:0
   fi
+}
+
+sim_container_running() {
+  docker ps --format '{{.Names}}' | grep -qx "${SIM_CONTAINER_NAME}"
+}
+
+sim_container_exists() {
+  docker ps -a --format '{{.Names}}' | grep -qx "${SIM_CONTAINER_NAME}"
+}
+
+sim_up() {
+  local quiet="${1:-}"
+  ensure_sim_display
+  ensure_gazebo
+  if sim_container_running; then
+    echo "[SEA-Me] ${SIM_CONTAINER_NAME} already running"
+    return 0
+  fi
+  if sim_container_exists; then
+    docker start "${SIM_CONTAINER_NAME}" >/dev/null
+    echo "[SEA-Me] Started ${SIM_CONTAINER_NAME}"
+    return 0
+  fi
+  "${COMPOSE[@]}" run -d --name "${SIM_CONTAINER_NAME}" sim sleep infinity >/dev/null
+  echo "[SEA-Me] Created ${SIM_CONTAINER_NAME}"
+  if [ -z "${quiet}" ]; then
+    cat <<EOF
+
+다음 단계:
+  터미널1  ./scripts/dev_container.sh sim-bringup
+
+  터미널2  docker exec -it ${SIM_CONTAINER_NAME} bash
+           source /opt/ros/humble/setup.bash && source install/setup.bash
+
+  종료     ./scripts/dev_container.sh sim-down
+EOF
+  fi
+}
+
+sim_down() {
+  if sim_container_exists; then
+    docker rm -f "${SIM_CONTAINER_NAME}" >/dev/null
+    echo "[SEA-Me] Removed ${SIM_CONTAINER_NAME}"
+  else
+    echo "[SEA-Me] ${SIM_CONTAINER_NAME} not found"
+  fi
+}
+
+sim_exec_launch() {
+  local launch_pkg="$1"
+  local launch_file="$2"
+  shift 2
+  local remote="/tmp/smh-launch-$$.sh"
+  sim_up quiet
+  {
+    printf '%s\n' "$READONLY_BUILD_SIM"
+    printf '%s\n' "$SIM_EXEC_PREAMBLE"
+    printf 'exec ros2 launch %q %q' "$launch_pkg" "$launch_file"
+    if [ "$#" -gt 0 ]; then
+      printf ' %q' "$@"
+    fi
+    printf '\n'
+  } | docker exec -i "${SIM_CONTAINER_NAME}" tee "${remote}" > /dev/null
+  # stdin 파이프와 -t 는 함께 쓸 수 없음 → 파일로 쓴 뒤 -it 로 실행
+  if [ -t 0 ]; then
+    docker exec -it "${SIM_CONTAINER_NAME}" bash "${remote}"
+  else
+    docker exec -i "${SIM_CONTAINER_NAME}" bash "${remote}"
+  fi
+  docker exec -i "${SIM_CONTAINER_NAME}" rm -f "${remote}" 2>/dev/null || true
 }
 
 ensure_gazebo() {
@@ -100,50 +221,59 @@ install_gazebo_in_image() {
   echo "[SEA-Me] Gazebo 설치 완료 → 2026-smh-dev:latest"
 }
 
+run_build_sim() {
+  if sim_container_running; then
+    printf '%s\n' "$READONLY_BUILD_SIM" | docker exec -i "${SIM_CONTAINER_NAME}" bash -s
+  else
+    printf '%s\n' "$READONLY_BUILD_SIM" | "${COMPOSE[@]}" run -T --rm dev bash -s
+  fi
+}
+
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage: ./scripts/dev_container.sh <command>
 
-Commands:
-  build            Docker 이미지 빌드 (Gazebo 제외, apt 재시도 포함)
-  install-gazebo   Gazebo + gazebo-ros-pkgs 1회 설치 (Hash mismatch 자동 재시도)
-  shell            dev 컨테이너 bash (빌드·코드 작업)
-  init             D-Racer-Kit clone + src/ 심볼릭 링크
-  build-inference  colcon build --packages-up-to inference
-  build-sim        colcon build (dracer_sim + inference + joystick + monitor)
-  check            inference.pipeline import 검증 (CI와 동일)
-  sim-shell        sim 컨테이너 bash (Gazebo GUI, WSLg/X11)
-  sim-bringup      Gazebo + 트랙 + 브리지 (추가 인자 전달 가능)
-  check-gpu        OpenGL 렌더러 확인 (CPU/GPU 판정)
-  check-rviz       rviz2 설치 여부 확인
-  verify-sim       시뮬 토픽·카메라 동작 검증 (sim 실행 중)
-  sim              sim-bringup + inference 자율주행
-  sim-manual       sim-bringup + 조이스틱 수동주행
-  help             이 도움말
+시뮬 (컨테이너 1개: ${SIM_CONTAINER_NAME}):
+  sim-up           시뮬 컨테이너 생성·시작 (백그라운드, sleep)
+  sim-down         시뮬 컨테이너 중지·삭제
+  sim-bringup      build-sim + Gazebo launch (Ctrl+C 시 launch만 종료, 컨테이너 유지)
+  sim              build-sim + 자율주행 launch
+  sim-manual       build-sim + 수동주행 launch
+  verify-sim       토픽 검증 (${SIM_CONTAINER_NAME} 실행 중)
 
-WSL 24.04/26.04: 호스트에 ros-humble 설치하지 말고 Docker만 사용하세요.
+빌드·검증 (일회성 dev 컨테이너, 시뮬 불필요):
+  build            Docker 이미지 빌드
+  install-gazebo   Gazebo 1회 설치
+  init             D-Racer-Kit clone + 링크
+  build-inference  inference만 colcon build
+  build-sim        dracer_sim + inference 빌드 (sim-up 중이면 같은 컨테이너에서 빌드)
+  check            inference.pipeline 검증 (CI 동일)
+  check-gpu        GPU 렌더링 확인
 
 Examples:
-  ./scripts/dev_container.sh build
-  ./scripts/dev_container.sh build-sim
-  ./scripts/dev_container.sh sim
+  ./scripts/dev_container.sh sim-up
+  ./scripts/dev_container.sh sim-bringup
+  docker exec -it ${SIM_CONTAINER_NAME} bash
+  ./scripts/dev_container.sh sim-bringup use_camera_view:=false headless:=true
 EOF
 }
 
-cmd="${1:-shell}"
+cmd="${1:-help}"
 
 case "${cmd}" in
   build)
-    # WSL/Docker Desktop에서 BuildKit TLS 오류 시 legacy builder 사용
     DOCKER_BUILDKIT=0 "${COMPOSE[@]}" build
     if ! docker compose run --rm dev bash -lc 'command -v gzserver >/dev/null 2>&1 || command -v gazebo >/dev/null 2>&1' 2>/dev/null; then
       echo ""
-      echo "[SEA-Me] 베이스 이미지 빌드 완료. Gazebo가 없으면 다음을 실행하세요:"
-      echo "  ./scripts/dev_container.sh install-gazebo   # 1회, Hash mismatch 시 자동 재시도"
+      echo "[SEA-Me] 베이스 이미지 빌드 완료. Gazebo가 없으면:"
+      echo "  ./scripts/dev_container.sh install-gazebo"
     fi
     ;;
-  shell)
-    run_dev bash
+  sim-up)
+    sim_up
+    ;;
+  sim-down)
+    sim_down
     ;;
   init)
     run_dev bash -lc './scripts/init_workspace.sh'
@@ -159,7 +289,7 @@ case "${cmd}" in
     '
     ;;
   build-sim)
-    run_dev bash -lc "${READONLY_BUILD_SIM}"
+    run_build_sim
     ;;
   install-gazebo)
     install_gazebo_in_image
@@ -178,45 +308,31 @@ case "${cmd}" in
       python3 -c "from inference.pipeline import fuse_control, run_perception; print(\"ok\")"
     '
     ;;
-  sim-shell)
-    ensure_sim_display
-    ensure_gazebo
-    run_sim bash -lc '
-      set +u
-      source /opt/ros/humble/setup.bash
-      if [ -f install/setup.bash ]; then source install/setup.bash; fi
-      set -u
-      exec bash
-    '
-    ;;
   sim-bringup)
     ensure_sim_display
-    ensure_gazebo
     shift || true
-    sim_extra_args="$*"
-    run_sim bash -lc "${READONLY_BUILD_SIM}
-      exec ros2 launch dracer_sim sim_bringup.launch.py ${sim_extra_args}"
+    sim_exec_launch dracer_sim sim_bringup.launch.py "$@"
     ;;
   sim)
     ensure_sim_display
-    ensure_gazebo
-    run_sim bash -lc "${READONLY_BUILD_SIM}
-      exec ros2 launch dracer_sim sim_auto_driving.launch.py"
+    sim_exec_launch dracer_sim sim_auto_driving.launch.py
     ;;
   sim-manual)
     ensure_sim_display
-    ensure_gazebo
-    run_sim bash -lc "${READONLY_BUILD_SIM}
-      exec ros2 launch dracer_sim sim_manual_driving.launch.py"
+    sim_exec_launch dracer_sim sim_manual_driving.launch.py
     ;;
   check-gpu)
     bash "${ROOT}/scripts/check_sim_gpu.sh"
     ;;
-  check-rviz)
-    bash "${ROOT}/scripts/check_sim_rviz.sh"
-    ;;
   verify-sim)
     bash "${ROOT}/scripts/verify_sim.sh"
+    ;;
+  shell|sim-shell|sim-exec|check-rviz)
+    echo "[SEA-Me] '${cmd}' 는 제거되었습니다." >&2
+    echo "  시뮬: ./scripts/dev_container.sh sim-up → sim-bringup" >&2
+    echo "  셸:  docker exec -it ${SIM_CONTAINER_NAME} bash" >&2
+    echo "  빌드: ./scripts/dev_container.sh build-sim" >&2
+    exit 1
     ;;
   help|-h|--help)
     usage

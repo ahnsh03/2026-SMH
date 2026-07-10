@@ -124,21 +124,19 @@ docker compose build
 
 `external/D-Racer-Kit` clone + `src/` 심볼릭 링크가 생성됩니다. **인터넷 연결 필요.**
 
-### 4.3 컨테이너 셸 진입 (일상 개발)
+### 4.3 inference 빌드·검증 (시뮬 불필요)
+
+시뮬 컨테이너 없이 **일회성 dev 컨테이너**로 빌드합니다.
 
 ```bash
-./scripts/dev_container.sh shell
+./scripts/dev_container.sh build-inference
+./scripts/dev_container.sh check
 ```
 
-컨테이너 안에서 ROS가 자동으로 source됩니다. `install/setup.bash`가 있으면 워크스페이스 overlay도 자동 로드됩니다.
+컨테이너 셸이 필요하면:
 
 ```bash
-# 컨테이너 안 예시
-./scripts/init_workspace.sh          # 링크 재생성 (필요 시)
-colcon build --symlink-install --packages-up-to inference
-source install/setup.bash
-python3 -c "from inference.pipeline import fuse_control; print('ok')"
-exit
+docker compose run --rm dev bash
 ```
 
 ### 4.4 CI와 동일한 빌드·검증 (PR 전 권장)
@@ -155,39 +153,53 @@ exit
 
 ### 4.6 Gazebo 시뮬 (WSL 24.04 / 26.04 포함 — Docker 필수)
 
-> **팀원 재현 가이드**: [simulation-setup.md](./simulation-setup.md) ★
+> **팀원 재현 가이드**: [simulation-setup.md](./simulation-setup.md) §4 ★  
+> **핵심**: 컨테이너 `2026-smh-sim` 1개 + 터미널 2개 (시뮬 / 코드)
 
 호스트 WSL에 `ros-humble-desktop`을 설치할 수 **없습니다** (Humble은 Ubuntu 22.04 전용).  
 시뮬도 **같은 Docker 이미지** 안에서 실행합니다.
 
+#### 최초 1회
+
 ```bash
-# 1) 베이스 이미지
 ./scripts/dev_container.sh build
-
-# 2) Gazebo (최초 1회)
 ./scripts/dev_container.sh install-gazebo
-
-# 3) 워크스페이스 + 빌드
 ./scripts/dev_container.sh init
-./scripts/dev_container.sh build-sim
-
-# 4) 실행
-./scripts/dev_container.sh sim-bringup    # Gazebo + RViz
-./scripts/dev_container.sh sim            # + inference
-./scripts/dev_container.sh verify-sim     # 토픽 검증 (sim 실행 중)
-./scripts/dev_container.sh check-gpu      # GPU 렌더링 확인
+./scripts/dev_container.sh check-gpu      # 선택
 ```
+
+#### 매일 개발 — 터미널 2개
+
+| 터미널 | 할 일 |
+|--------|--------|
+| **1** | `./scripts/dev_container.sh sim-bringup` — Gazebo·브리지·카메라 (Ctrl+C로 launch만 중지) |
+| **2** | `docker exec -it 2026-smh-sim bash` — `modules/` 수정 후 inference 빌드·실행 |
+| 호스트 | `./scripts/dev_container.sh verify-sim` — 토픽 검증 (bringup 실행 중) |
+
+```bash
+./scripts/dev_container.sh sim-up          # 컨테이너 없을 때만
+./scripts/dev_container.sh sim-bringup     # 터미널1
+
+docker exec -it 2026-smh-sim bash          # 터미널2
+source /opt/ros/humble/setup.bash && source install/setup.bash
+ros2 run inference inference_node --ros-args -p use_sim_time:=true
+
+./scripts/dev_container.sh sim-down        # 작업 끝
+```
+
+코드 수정 루프: 호스트에서 편집 → 터미널2에서 `colcon build --packages-select inference` → inference 재실행.  
+상세: [simulation-setup.md §4.4](./simulation-setup.md#44-일상-개발-루프-코드-수정--빌드--재실행) · **직접 명령**: [§4.8](./simulation-setup.md#48-직접-명령어-치트시트-스크립트-없이)
 
 **사전 조건**
 
 1. Docker Desktop 실행 + WSL Integration 활성화
-2. Windows **11** + WSLg (Gazebo·RViz GUI)
+2. Windows **11** + WSLg (Gazebo·카메라 프리뷰 GUI)
 3. Windows 10: VcXsrv 등 X 서버 + `export DISPLAY=...` 필요할 수 있음
 
 **시뮬 기본 설정**
 
 - 카메라: **320×180** JPEG (`config/vehicle_config.yaml`)
-- 시각화: **RViz2** (카메라 + 로봇 모델)
+- 시각화: **OpenCV 카메라 프리뷰** (`sim_camera_preview`, 기본 640×360)
 - 웹 모니터: **OFF** (`use_monitor:=true`로 선택 가능)
 
 상세 트러블슈팅: [simulation.md](./simulation.md)
@@ -293,12 +305,11 @@ chmod +x scripts/*.sh
 
 # 매 작업
 ./scripts/dev_container.sh check          # PR 전 inference 검증
-./scripts/dev_container.sh shell          # 빌드·코드 셸
 
 # Gazebo 시뮬 (Docker 안에서 — 호스트에 ros-humble 불필요)
-./scripts/dev_container.sh install-gazebo   # 최초 1회
-./scripts/dev_container.sh build-sim
-./scripts/dev_container.sh sim-bringup
+./scripts/dev_container.sh sim-up
+./scripts/dev_container.sh sim-bringup      # 터미널1
+docker exec -it 2026-smh-sim bash           # 터미널2
 
 # merge 후 (D3-G 실차)
 ./scripts/board_sync.sh

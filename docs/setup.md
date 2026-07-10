@@ -74,12 +74,15 @@ chmod +x scripts/*.sh
 # inference PR 전 검증
 ./scripts/dev_container.sh check
 
-# Gazebo 시뮬 (모듈·카메라 검증)
-./scripts/dev_container.sh build-sim
-./scripts/dev_container.sh sim-bringup
+# Gazebo 시뮬 (모듈·카메라 검증) — 상세: simulation-setup.md §4
+./scripts/dev_container.sh sim-up
+./scripts/dev_container.sh sim-bringup      # 터미널1
+docker exec -it 2026-smh-sim bash           # 터미널2
 
-# 개발 셸
-./scripts/dev_container.sh shell
+# inference만 (Docker 일회성)
+docker compose run --rm dev bash
+
+# 시뮬 직접 명령 전체: simulation-setup.md §4.8
 ```
 
 상세: **[dev-environment.md](./dev-environment.md)** · 시뮬: **[simulation-setup.md](./simulation-setup.md)**  

@@ -56,7 +56,8 @@ PC monorepo(`2026-seame-hackathon`)를 쓰는 경우 시뮬 레포 평가 메모
 
 ## PC 로컬 `data/` 폴더 (Git 미포함)
 
-WSL 상위 프로젝트 `2026-seame-hackathon/data/`에 신호등·표지판 참고 영상을 둡니다.
+WSL 상위 프로젝트 `2026-seame-hackathon/data/`에 신호등·표지판 **참고 영상** 등을 둡니다.  
+Gazebo 시뮬에 쓰는 표지판 PNG는 **`src/dracer_sim/assets/signs/`** (팀 레포 Git 포함) — clone만으로 시뮬 가능.
 
 | 폴더명 | 설명 |
 |--------|------|

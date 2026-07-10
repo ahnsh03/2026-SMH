@@ -1,0 +1,37 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <model name="turn_sign_left">
+    <static>true</static>
+    <link name="board_link">
+      <visual name="white_disk">
+        <pose>0 0 0 1.5707963267948966 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.105</radius>
+            <length>0.008</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>1 1 1 1</ambient>
+          <diffuse>1 1 1 1</diffuse>
+        </material>
+      </visual>
+      <visual name="sign_face">
+        <!-- Thin box in XZ (faces ±Y); offset to -Y side for spawn approach -->
+        <pose>0 -0.0046 0 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.21 0.001 0.21</size>
+          </box>
+        </geometry>
+        <material>
+          <script>
+            <uri>model://turn_sign_left/materials/scripts</uri>
+            <uri>model://turn_sign_left/materials/textures</uri>
+            <name>TurnSignLeftMaterial</name>
+          </script>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
-# 시뮬 토픽·노드 동작 검증 (sim-bringup 실행 중 또는 sim-shell에서)
+# 시뮬 토픽·노드 동작 검증 (2026-smh-sim 실행 중, sim-bringup launch 동작 중)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
-COMPOSE=(docker compose)
-if ! docker compose version >/dev/null 2>&1; then
-  COMPOSE=(docker-compose)
+SIM_CONTAINER_NAME="${SMH_SIM_CONTAINER:-2026-smh-sim}"
+
+if ! docker ps --format '{{.Names}}' | grep -qx "${SIM_CONTAINER_NAME}"; then
+  echo "[SEA-Me] ${SIM_CONTAINER_NAME} not running."
+  echo "  ./scripts/dev_container.sh sim-up"
+  echo "  ./scripts/dev_container.sh sim-bringup   # 다른 터미널"
+  exit 1
 fi
 
-echo "[SEA-Me] Simulation interface verification"
+echo "[SEA-Me] Simulation interface verification (${SIM_CONTAINER_NAME})"
 echo ""
 
-"${COMPOSE[@]}" run --rm sim bash -lc '
+docker exec "${SIM_CONTAINER_NAME}" bash -lc '
   set -e
   source /workspace/scripts/sim_gpu_env.sh 2>/dev/null || true
   source /opt/ros/humble/setup.bash
@@ -41,12 +45,12 @@ echo ""
   if timeout 5 ros2 topic echo /camera/image/compressed --once >/dev/null 2>&1; then
     echo "[OK] /camera/image/compressed publishes data"
   else
-    echo "[WARN] /camera/image/compressed no data yet (Gazebo running?)"
+    echo "[WARN] /camera/image/compressed no data yet (sim-bringup running?)"
     fail=1
   fi
 
   if timeout 5 ros2 topic echo /camera/image_raw --once >/dev/null 2>&1; then
-    echo "[OK] /camera/image_raw publishes data (RViz)"
+    echo "[OK] /camera/image_raw publishes data"
   else
     echo "[WARN] /camera/image_raw no data yet"
     fail=1
@@ -55,8 +59,7 @@ echo ""
   exit "${fail}"
 ' || {
   echo ""
-  echo "시뮬이 꺼져 있으면 먼저 다른 터미널에서:"
-  echo "  ./scripts/dev_container.sh sim-bringup"
+  echo "sim-bringup이 다른 터미널에서 실행 중인지 확인하세요."
   exit 1
 }
 

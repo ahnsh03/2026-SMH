@@ -37,7 +37,7 @@ setup(
   + collect_data_files('worlds', 'worlds')
   + collect_data_files('models', 'models')
   + collect_data_files('config', 'config')
-  + collect_data_files('rviz', 'rviz'),
+  + collect_data_files('assets', 'assets'),
   install_requires=['setuptools'],
   zip_safe=True,
   maintainer='SEA-ME Team',
@@ -52,6 +52,7 @@ setup(
       'sim_battery_stub = dracer_sim.battery_stub:main',
       'sim_joystick_bridge = dracer_sim.joystick_bridge:main',
       'sim_robot_description_publisher = dracer_sim.robot_description_publisher:main',
+      'sim_camera_preview = dracer_sim.camera_preview:main',
     ],
   },
 )
