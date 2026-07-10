@@ -72,6 +72,10 @@ if [ -f build/limo_car/CMakeCache.txt ] && grep -q external/limo_ros2 build/limo
   echo "[SEA-Me] Cleaning stale limo_car build cache (vendor path migration)..."
   rm -rf build/limo_car install/limo_car
 fi
+if [ -d build/dracer_sim/launch/__pycache__ ] || find build/dracer_sim -path "*/__pycache__" -print -quit 2>/dev/null | grep -q .; then
+  echo "[SEA-Me] Cleaning stale dracer_sim build cache (__pycache__)..."
+  rm -rf build/dracer_sim install/dracer_sim
+fi
 if ! python3 -c "import flask" 2>/dev/null; then
   apt-get update -qq && apt-get install -y -qq python3-flask
 fi

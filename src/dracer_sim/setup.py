@@ -11,7 +11,9 @@ def collect_data_files(source_subdir: str, install_subdir: str):
   base = os.path.join(os.path.dirname(__file__), source_subdir)
   if not os.path.isdir(base):
     return files
-  for root, _dirs, filenames in os.walk(base):
+  for root, dirs, filenames in os.walk(base):
+    dirs[:] = [d for d in dirs if d != '__pycache__']
+    filenames = [f for f in filenames if not f.endswith('.pyc')]
     if not filenames:
       continue
     rel = os.path.relpath(root, base)
