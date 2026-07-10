@@ -1,4 +1,4 @@
-# WSL2 Docker에서 Gazebo/RViz OpenGL GPU(D3D12) 사용 — microsoft/wslg container 가이드
+# WSL2 Docker에서 Gazebo/OpenCV 프리뷰 OpenGL GPU(D3D12) — microsoft/wslg container 가이드
 # https://github.com/microsoft/wslg/blob/main/samples/container/Containers.md
 export LD_LIBRARY_PATH="/usr/lib/wsl/lib:${LD_LIBRARY_PATH:-}"
 export LIBGL_ALWAYS_SOFTWARE=0

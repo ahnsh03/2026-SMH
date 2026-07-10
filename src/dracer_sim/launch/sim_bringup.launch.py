@@ -196,7 +196,7 @@ def generate_launch_description():
     ),
     DeclareLaunchArgument(
       'use_monitor', default_value='false',
-      description='D-Racer 웹 모니터 (시뮬 기본 OFF — rqt 카메라 뷰 사용, 실기는 manual/auto launch)',
+      description='D-Racer 웹 모니터 (시뮬 기본 OFF — OpenCV 카메라 프리뷰 사용, 실기는 manual/auto launch)',
     ),
     DeclareLaunchArgument(
       'use_camera_view', default_value='true',
