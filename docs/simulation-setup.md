@@ -146,6 +146,7 @@ chmod +x scripts/*.sh
 | **컨테이너 1개** | 이름 고정 `2026-smh-sim`, `network_mode: host` |
 | **터미널 1** | Gazebo·브리지·카메라 프리뷰 (`sim-bringup`) |
 | **터미널 2** | inference 빌드·실행 (`docker exec`) |
+| **빌드·검증** | `sim-up` 중이면 `build-sim` / `check`도 **같은 컨테이너** (없을 때만 일회성 dev) |
 | **launch만 끔** | 터미널1에서 Ctrl+C → Gazebo 종료, **컨테이너는 유지** |
 | **셸 진입** | `docker exec -it 2026-smh-sim bash` 한 줄이면 충분 (별도 sh 래퍼 없음) |
 
@@ -705,17 +706,16 @@ GPU 확인 (렉이 심할 때):
 |------|------|
 | `build` | **Docker 이미지** 빌드 (`Dockerfile`) |
 | `install-gazebo` | Gazebo 1회 설치 (이미지 안) |
-| `init` | D-Racer-Kit + 워크스페이스 링크 |
-| `build-inference` | inference만 `colcon build` |
-| `build-sim` | **ROS 워크스페이스** `colcon build` (dracer_sim + inference 등) |
-| `check` | CI와 동일 import 검증 |
+| `init` | D-Racer-Kit + 링크 (`sim-up` 중이면 같은 컨테이너) |
+| `build-inference` | inference만 `colcon build` (같은 컨테이너 우선) |
+| `build-sim` | **ROS 워크스페이스** `colcon build` (같은 컨테이너 우선) |
+| `check` | CI와 동일 import 검증 (같은 컨테이너 우선) |
 | `sim-up` | `2026-smh-sim` 생성·시작 (백그라운드) |
 | `sim-down` | 시뮬 컨테이너 삭제 |
 | `sim-bringup` | **터미널1**: build-sim + Gazebo launch |
 | `sim` | bringup + inference (한 터미널 통합 테스트) |
 | `sim-manual` | bringup + 조이스틱 수동주행 |
-| `build-sim` | 호스트에서 빌드 (`sim-up` 중이면 같은 컨테이너) |
-| `check-gpu` | OpenGL 렌더러 확인 |
+| `check-gpu` | OpenGL 렌더러 확인 (`2026-smh-sim` 우선) |
 | `verify-sim` | 토픽 검증 (bringup 실행 중, 호스트에서) |
 
 **터미널2 셸** (스크립트 없음): `docker exec -it 2026-smh-sim bash`

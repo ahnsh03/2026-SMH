@@ -221,33 +221,40 @@ install_gazebo_in_image() {
   echo "[SEA-Me] Gazebo 설치 완료 → 2026-smh-dev:latest"
 }
 
-run_build_sim() {
+run_in_sim_or_dev() {
+  local script="$1"
   if sim_container_running; then
-    printf '%s\n' "$READONLY_BUILD_SIM" | docker exec -i "${SIM_CONTAINER_NAME}" bash -s
+    printf '%s\n' "$script" | docker exec -i "${SIM_CONTAINER_NAME}" bash -s
   else
-    printf '%s\n' "$READONLY_BUILD_SIM" | "${COMPOSE[@]}" run -T --rm dev bash -s
+    printf '%s\n' "$script" | "${COMPOSE[@]}" run -T --rm dev bash -s
   fi
+}
+
+run_build_sim() {
+  run_in_sim_or_dev "${READONLY_BUILD_SIM}"
 }
 
 usage() {
   cat <<EOF
 Usage: ./scripts/dev_container.sh <command>
 
-시뮬 (컨테이너 1개: ${SIM_CONTAINER_NAME}):
+시뮬 개발 (컨테이너 1개: ${SIM_CONTAINER_NAME}):
   sim-up           시뮬 컨테이너 생성·시작 (백그라운드, sleep)
   sim-down         시뮬 컨테이너 중지·삭제
   sim-bringup      build-sim + Gazebo launch (Ctrl+C 시 launch만 종료, 컨테이너 유지)
   sim              build-sim + 자율주행 launch
   sim-manual       build-sim + 수동주행 launch
-  verify-sim       토픽 검증 (${SIM_CONTAINER_NAME} 실행 중)
+  verify-sim       토픽 검증 (bringup 실행 중)
 
-빌드·검증 (일회성 dev 컨테이너, 시뮬 불필요):
-  build            Docker 이미지 빌드
-  install-gazebo   Gazebo 1회 설치
+워크스페이스 (${SIM_CONTAINER_NAME} 실행 중이면 같은 컨테이너, 없으면 일회성 dev):
   init             D-Racer-Kit clone + 링크
+  build-sim        dracer_sim + inference colcon build
   build-inference  inference만 colcon build
-  build-sim        dracer_sim + inference 빌드 (sim-up 중이면 같은 컨테이너에서 빌드)
-  check            inference.pipeline 검증 (CI 동일)
+  check            CI와 동일 inference.pipeline 검증
+
+이미지·호스트 (컨테이너 밖):
+  build            Docker 이미지 빌드 (Dockerfile)
+  install-gazebo   Gazebo 1회 설치 (이미지에 반영)
   check-gpu        GPU 렌더링 확인
 
 Examples:
@@ -276,10 +283,13 @@ case "${cmd}" in
     sim_down
     ;;
   init)
-    run_dev bash -lc './scripts/init_workspace.sh'
+    run_in_sim_or_dev '
+      set -eo pipefail
+      ./scripts/init_workspace.sh
+    '
     ;;
   build-inference)
-    run_dev bash -lc '
+    run_in_sim_or_dev '
       set -eo pipefail
       ./scripts/init_workspace.sh
       set +u
@@ -295,7 +305,7 @@ case "${cmd}" in
     install_gazebo_in_image
     ;;
   check)
-    run_dev bash -lc '
+    run_in_sim_or_dev '
       set -eo pipefail
       ./scripts/init_workspace.sh
       set +u
@@ -338,6 +348,7 @@ case "${cmd}" in
     usage
     ;;
   *)
-    run_dev bash -lc "$*"
+    run_in_sim_or_dev "set -eo pipefail
+$*"
     ;;
 esac

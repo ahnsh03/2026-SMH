@@ -117,7 +117,7 @@ ros2 launch dracer_sim sim_bringup.launch.py spawn_x:=0.0 spawn_y:=-3.6 spawn_ya
 | C920e 네이티브 (USB) | 1920×1080 | 16:9 |
 | Gazebo 렌더 | **640×360** | `limo_dracer_sim.xacro` |
 | `sim_camera_republish` | **320×180** | 균일 다운스케일 + JPEG |
-| 토픽 | `/camera/image/compressed`, `/camera/image_raw` (rqt) | |
+| 토픽 | `/camera/image/compressed`, `/camera/image_raw` (OpenCV 프리뷰) | |
 
 실기: `config/vehicle_config.yaml`의 `IMAGE_HEIGHT: 180` — `init_workspace.sh` 후 `camera_node`가 동일 해상도로 publish합니다.
 

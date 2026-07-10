@@ -71,16 +71,13 @@ chmod +x scripts/*.sh
 ./scripts/dev_container.sh install-gazebo   # Gazebo (시뮬용, 1회)
 ./scripts/dev_container.sh init
 
-# inference PR 전 검증
+# inference PR 전 검증 (sim-up 중이면 2026-smh-sim 안에서 실행)
+./scripts/dev_container.sh sim-up
 ./scripts/dev_container.sh check
 
-# Gazebo 시뮬 (모듈·카메라 검증) — 상세: simulation-setup.md §4
-./scripts/dev_container.sh sim-up
+# Gazebo 시뮬 — simulation-setup.md §4
 ./scripts/dev_container.sh sim-bringup      # 터미널1
 docker exec -it 2026-smh-sim bash           # 터미널2
-
-# inference만 (Docker 일회성)
-docker compose run --rm dev bash
 
 # 시뮬 직접 명령 전체: simulation-setup.md §4.8
 ```

@@ -124,11 +124,13 @@ docker compose build
 
 `external/D-Racer-Kit` clone + `src/` 심볼릭 링크가 생성됩니다. **인터넷 연결 필요.**
 
-### 4.3 inference 빌드·검증 (시뮬 불필요)
+### 4.3 inference 빌드·검증
 
-시뮬 컨테이너 없이 **일회성 dev 컨테이너**로 빌드합니다.
+`2026-smh-sim`이 **실행 중**이면 `init` / `build-sim` / `build-inference` / `check`도 **같은 컨테이너**에서 실행됩니다.  
+시뮬 없이 inference만 검증할 때는 sim 컨테이너가 없으면 일회성 `dev` 컨테이너로 폴백합니다.
 
 ```bash
+./scripts/dev_container.sh sim-up          # 권장: 시뮬 개발 시 먼저 생성
 ./scripts/dev_container.sh build-inference
 ./scripts/dev_container.sh check
 ```
@@ -136,7 +138,7 @@ docker compose build
 컨테이너 셸이 필요하면:
 
 ```bash
-docker compose run --rm dev bash
+docker exec -it 2026-smh-sim bash
 ```
 
 ### 4.4 CI와 동일한 빌드·검증 (PR 전 권장)
@@ -205,6 +207,8 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 상세 트러블슈팅: [simulation.md](./simulation.md)
 
 ### 4.7 임의 명령 실행
+
+`2026-smh-sim`이 실행 중이면 **같은 컨테이너**에서 실행됩니다 (`sim-up` 없으면 일회성 dev).
 
 ```bash
 ./scripts/dev_container.sh "colcon test --packages-select inference"
@@ -303,7 +307,8 @@ chmod +x scripts/*.sh
 ./scripts/dev_container.sh build
 ./scripts/dev_container.sh init
 
-# 매 작업
+# 매 작업 (sim-up 중이면 init/check/build도 같은 컨테이너)
+./scripts/dev_container.sh sim-up
 ./scripts/dev_container.sh check          # PR 전 inference 검증
 
 # Gazebo 시뮬 (Docker 안에서 — 호스트에 ros-humble 불필요)
