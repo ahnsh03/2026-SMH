@@ -25,6 +25,16 @@ sudo apt install ros-humble-gazebo-ros-pkgs ros-humble-robot-state-publisher
 
 `init_workspace.sh`가 D-Racer-Kit을 자동 clone하고, `vendor/limo_car`(레포 포함)를 링크합니다.
 
+## 월드 콘텐츠
+
+| 모델 | 설명 |
+|------|------|
+| `track_plane` | CW 대회 트랙 텍스처 (12×9 m) |
+| `bev_calib_mat` | 트랙 **남쪽** (spawn 근처) **4×2 m** 격자 매트 — 0.1 m / 0.5 m, 0.35 m 차로폭 바. BEV 종·횡 스케일 튜닝용 |
+| turn / ArUco signs | 미션 표지판 |
+
+격자 PNG는 `python3 scripts/prepare_bev_calib_mat.py` (build-sim 시 자동). 설정: `config/bev_calib_mat.yaml`.
+
 ## 실행 (Docker — 팀 PC 시뮬)
 
 상세: [docs/simulation-setup.md](../../docs/simulation-setup.md) §4 · **직접 명령**: [§4.8](../../docs/simulation-setup.md#48-직접-명령어-치트시트-스크립트-없이)

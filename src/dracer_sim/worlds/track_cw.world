@@ -47,6 +47,13 @@
       <pose>0 0 0.01 0 0 0</pose>
     </include>
 
+    <!-- BEV scale calib mat (0.1 / 0.5 m grid) just south of the track near spawn X -->
+    <include>
+      <uri>model://bev_calib_mat</uri>
+      <name>bev_calib_mat</name>
+      <pose>2.5 -6.5 0.012 0 0 0</pose>
+    </include>
+
     <!-- Mission signs: bottom edge 10 cm above track_plane (z=0.01) → bottom z=0.11 -->
     <include>
       <uri>model://turn_sign_left</uri>

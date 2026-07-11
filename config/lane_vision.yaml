@@ -1,23 +1,34 @@
 # Lane vision parameters (Phase 0+)
 # Tuned by: scripts/vision_tune/tune_bev_roi.py
-# Consumed later by lane planner / optional IPM overrides.
+# Gazebo provisional: crop 39%, bottom 635, BEV 500x370, guide 44 px,
+# target forward coverage ≈ 1.5 m, track_width 0.35 m.
 
 image:
-  # Expected D-Racer / sim pipeline resolution (informational)
   width: 320
   height: 180
 
 bev_roi:
-  # Fraction of image height to drop from the top (0.0–0.5).
-  crop_top_ratio: 0.15
-  # Bottom trapezoid half-width / (image_width/2).
-  # 1.0 = bottom edge equals image width; >1.0 extends outside the frame.
-  bottom_half_width_ratio: 1.35
-  # Destination BEV canvas size (pixels).
-  bev_width: 320
-  bev_height: 240
+  crop_top_ratio: 0.39
+  # Bottom trapezoid half-width / (W/2). Trackbar 635 → ratio 6.35.
+  bottom_half_width_ratio: 6.35
+  # Pixel resolution only (not meters).
+  bev_width: 500
+  bev_height: 370
 
-# Filled in by Phase 1 HSV tuning tools.
+bev_scale:
+  # Fixed competition track width between L/R lane markings.
+  track_width_m: 0.35
+  guide_half_width_px: 44
+  # 0.35 / (2 * 44) when green guides align to lane markings.
+  meters_per_pixel_lateral: 0.0039772727
+  meters_per_pixel_longitudinal: null
+  # Tuned so BEV shows ~1.5 m ahead (provisional; refine with calib mat / metric IPM).
+  forward_range_m_approx: 1.5
+  note: >
+    Lateral: align green guides to lane markings;
+    m/px_lat = 0.35 / (2 * guide_half_width_px).
+    Longitudinal ≠ lateral under trapezoid — use Gazebo bev_calib_mat or metric IPM.
+
 hsv:
   white: null
   yellow: null
