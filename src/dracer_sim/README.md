@@ -10,7 +10,7 @@ D-Racer 실기와 **동일한 ROS2 토픽**으로 개발·검증하기 위한 Ga
 | 토픽 | 타입 | 설명 |
 |------|------|------|
 | `/camera/image/compressed` | `sensor_msgs/CompressedImage` | 320×180 JPEG (C920e FOV, 16:9) |
-| `/control` | `control_msgs/Control` | throttle / steering (-1~1) |
+| `/control` | `control_msgs/Control` | throttle (−1=후/+1=전) / steering (−1=좌/+1=우) — 실차와 동일 |
 | `/battery_status` | `battery_msgs/Battery` | 시뮬 스텁 (80%) |
 | `/joint_states` | `sensor_msgs/JointState` | Gazebo 관절 |
 | `/robot_description` | `std_msgs/String` | (디버그용, 기본 시각화 없음) |

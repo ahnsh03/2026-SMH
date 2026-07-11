@@ -2,6 +2,9 @@ sim_control_bridge:
   ros__parameters:
     control_topic: /control
     cmd_vel_topic: /cmd_vel
+    joystick_topic: joystick          # E-Stop latch (실차 control_node와 동일)
     max_linear_speed: 1.2
-    max_steer_angle_rad: 0.5236
-    wheelbase_m: 0.24
+    max_steer_angle_rad: 0.5236       # LIMO Ackermann max_steer / joint limit
+    cmd_mode: ackermann_steer         # limo 기본; robot:=dracer 시 launch가 diff_yaw_rate로 덮어씀
+    wheelbase_m: 0.24                 # diff_yaw_rate 모드에서만 사용
+    # D-Racer: +steering=right → Gazebo 좌(+) 대비 부호 반전은 control_mapping에서 처리

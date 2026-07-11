@@ -111,7 +111,14 @@ def launch_setup(context, *args, **kwargs):
       executable='sim_control_bridge',
       name='sim_control_bridge',
       output='screen',
-      parameters=[control_config, {'use_sim_time': use_sim_time}],
+      parameters=[
+        control_config,
+        {
+          'use_sim_time': use_sim_time,
+          # limo = Ackermann (steer angle); lightweight box = diff_drive (yaw rate)
+          'cmd_mode': 'diff_yaw_rate' if robot == 'dracer' else 'ackermann_steer',
+        },
+      ],
     ),
     Node(
       package='dracer_sim',
