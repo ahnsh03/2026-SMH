@@ -21,7 +21,13 @@ def generate_launch_description():
             executable='camera_node',
             name='camera_node',
             output='screen',
-            parameters=[{'vehicle_config_file': vehicle_config_path}],
+            parameters=[
+                {
+                    'vehicle_config_file': vehicle_config_path,
+                    # Board is CPU-bound: a log line per frame is 30 writes/sec.
+                    'debug_log': False,
+                },
+            ],
         ),
         Node(
             package='control',

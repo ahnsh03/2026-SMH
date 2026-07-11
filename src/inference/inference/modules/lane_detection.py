@@ -62,7 +62,7 @@ VISUALIZE_ON = "on"
 # │    "control"  주행 확인용 3개만 (아래 CONTROL_WINDOWS)    │
 # │    "on"       디버그 창 전부                              │
 # └──────────────────────────────────────────────────────────┘
-VISUALIZE_MODE = "on"
+VISUALIZE_MODE = "off"
 
 # 보드/SSH/headless에서는 창을 띄우면 죽는다. 코드를 안 고치고 끄려면
 # 환경변수로 덮어쓴다(있을 때만 우선).
