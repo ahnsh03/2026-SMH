@@ -1,7 +1,8 @@
 # Lane vision parameters (Phase 0+)
-# Tuned by: scripts/vision_tune/tune_bev_roi.py
-# Gazebo provisional: crop 39%, bottom 635, BEV 500x370, guide 44 px,
-# target forward coverage ≈ 1.5 m, track_width 0.35 m.
+# Team lock (2026-07-12): Metric IPM is the provisional BEV / planner SSOT.
+# Trapezoid tune remains a visual reference only (tune_bev_roi.py).
+# Metric IPM: scripts/vision_tune/tune_metric_ipm.py
+# Gazebo: crop 39% ↔ x_max 1.5 m, y_half 0.77 m, track_width 0.35 m.
 
 image:
   width: 320
@@ -11,7 +12,7 @@ bev_roi:
   crop_top_ratio: 0.39
   # Bottom trapezoid half-width / (W/2). Trackbar 635 → ratio 6.35.
   bottom_half_width_ratio: 6.35
-  # Pixel resolution only (not meters).
+  # Pixel resolution only (not meters). Visual reference only.
   bev_width: 500
   bev_height: 370
 
@@ -22,12 +23,42 @@ bev_scale:
   # 0.35 / (2 * 44) when green guides align to lane markings.
   meters_per_pixel_lateral: 0.0039772727
   meters_per_pixel_longitudinal: null
-  # Tuned so BEV shows ~1.5 m ahead (provisional; refine with calib mat / metric IPM).
   forward_range_m_approx: 1.5
   note: >
-    Lateral: align green guides to lane markings;
-    m/px_lat = 0.35 / (2 * guide_half_width_px).
-    Longitudinal ≠ lateral under trapezoid — use Gazebo bev_calib_mat or metric IPM.
+    Trapezoid reference only. Prefer metric_ipm for runtime / planner.
+
+# Metric IPM — team provisional SSOT (isotropic m/px).
+# Geometric check (320×180, h=0.13 m, pitch=10°, HFoV=70.42°):
+#   x=1.50 m → image row ≈ 0.389·H  (= crop_top 0.39)
+#   image bottom → x ≈ 0.22 m
+metric_ipm:
+  camera:
+    hfov_deg: 70.42
+    height_ground_m: 0.13
+    pitch_down_deg: 10.0
+  range:
+    x_min_m: 0.22
+    x_max_m: 1.5
+    # false → use y_half_width_m as locked (0.77 m). true would expand to ~±1.05 m.
+    full_image_width: false
+    y_half_width_m: 0.77
+  # Ground resolution of one BEV pixel (isotropic: same for forward & lateral).
+  # 0.004 m = 4 mm/px → BEV ≈386×321, lane 0.35 m ≈ 87.5 px, guide_half ≈ 44.
+  # Finer (e.g. 0.002) ≈4× pixels / little gain on 320×180. Coarser (0.005, WonTae)
+  # is also fine; 0.004 matches trapezoid lateral scale (~3.98 mm/px) closely.
+  meters_per_pixel: 0.004
+  crop_top_ratio: 0.39
+  # Derived: (2*0.77)/0.004+1 × (1.50-0.22)/0.004+1 = 386 × 321
+  bev_width: 386
+  bev_height: 321
+  track_width_m: 0.35
+  # 0.35/2 / 0.004 = 43.75 → 44
+  guide_half_width_px: 44
+  note: >
+    Team lock 2026-07-12: Metric IPM is provisional SSOT (WonTae pipeline).
+    y_half_width_m=0.77. crop_top≈0.39 marks x_max≈1.5 m on 320×180.
+    meters_per_pixel sets BEV grid resolution only — not the look-ahead distance
+    (that is x_max_m). Keep 0.004 unless CPU-bound or you need coarser/finer maps.
 
 hsv:
   white: null
