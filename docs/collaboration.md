@@ -54,10 +54,19 @@ git commit -m "feat(aruco): add marker detection with cv2.aruco"
 # 5. push
 git push -u origin feature/seunghyun-aruco-detect
 
-# 6. Pull Request 생성 (GitHub 웹 또는 gh CLI)
+# 6. Pull Request 생성 — GitHub CLI 권장 (설치·본문 예시: §1.7)
 gh pr create \
   --title "feat(aruco): marker detection 초기 구현" \
-  --body "## 변경\n- detector.py: ArUco 검출 추가\n\n## 테스트\n- [ ] colcon build --packages-select inference"
+  --body "$(cat <<'EOF'
+## Summary
+- detector.py: ArUco 검출 추가
+
+## 테스트
+- [ ] colcon build --packages-select inference
+EOF
+)"
+
+# 웹 UI로 만들어도 됨. merge는 팀장.
 
 # 7. merge 후 로컬 정리
 git checkout main
@@ -65,7 +74,8 @@ git pull origin main
 git branch -d feature/seunghyun-aruco-detect
 ```
 
-PR은 GitHub 웹에서 생성해도 됩니다. merge 권한은 **팀장**이 수행합니다.
+PR은 GitHub 웹에서 생성해도 됩니다. merge 권한은 **팀장**이 수행합니다.  
+`gh` 설치·상세 본문·에이전트 사용법은 **§1.7**.
 
 ### 1.3 브랜치 이름 규칙
 
@@ -123,9 +133,138 @@ PR 생성 시 `.github/pull_request_template.md` 체크리스트를 채웁니다
 
 | 도구 | 역할 |
 |------|------|
-| **Cursor / 터미널** | 브랜치 생성, commit, push, `gh pr create` |
-| **GitHub 웹** | PR 생성·리뷰·merge |
+| **Cursor / Claude / Codex** | 브랜치·commit·push · **`gh`로 상세 PR 본문 작성** |
+| **GitHub CLI (`gh`)** | PR 생성·상태·CI·코멘트 (터미널·에이전트 공통) |
+| **GitHub 웹** | 리뷰·merge · PR 보완 편집 |
 | **Git GUI** (Sublime Merge 등) | 히스토리·diff·merge conflict 해결 |
+
+> **Cursor / Claude Code / Codex**로 PR을 맡길 때는 **`gh`가 설치·로그인되어 있어야** 합니다.  
+> 없으면 에이전트가 웹 UI만 안내하거나, 제목만 짧은 PR을 올리기 쉽습니다. 설치·사용은 **§1.7**.
+
+### 1.7 GitHub CLI (`gh`) 설치 · 인증 · PR
+
+에이전트·사람이 같은 방식으로 **상세한 PR**을 올리기 위한 팀 표준입니다.
+
+#### 왜 필요한가
+
+| 상황 | `gh` 있을 때 | 없을 때 |
+|------|--------------|---------|
+| Cursor / Claude / Codex에 “PR 올려줘” | `gh pr create`로 **Summary·Test plan·체크리스트**까지 작성 | 웹 링크만 안내하거나 본문이 빈약한 PR |
+| CI·리뷰 확인 | `gh pr checks`, `gh pr view` | 브라우저만 |
+| 보드에서 push/PR | `gh auth login` 후 동일 명령 | 인증 없으면 로컬 커밋만 남음 |
+
+#### 설치 (PC WSL / Ubuntu)
+
+```bash
+# 이미 있으면 스킵
+gh --version
+
+# Ubuntu/WSL — GitHub 공식 apt 저장소 (권장)
+(type -p wget >/dev/null || (sudo apt update && sudo apt-get install wget -y)) \
+  && sudo mkdir -p -m 755 /etc/apt/keyrings \
+  && out=$(mktemp) && wget -nv -O"$out" https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  && cat "$out" | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+  && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+  && sudo apt update \
+  && sudo apt install gh -y
+```
+
+대안 (버전이 오래될 수 있음): `sudo apt update && sudo apt install gh`
+
+Windows 네이티브(선택): [GitHub CLI 설치](https://cli.github.com/) 또는 `winget install GitHub.cli`  
+D3-G(aarch64)에서도 위 apt 방식이 동작합니다. 보드에서 PR까지 할 때만 설치하면 됩니다.
+
+#### 인증 (최초 1회)
+
+```bash
+cd ~/projects/2026-seame-hackathon/2026-SMH   # 또는 ~/2026-SMH
+gh auth login
+```
+
+권장 선택:
+
+1. **GitHub.com**
+2. **HTTPS** (또는 이미 SSH 키를 쓰면 SSH)
+3. **Login with a web browser** (또는 Personal Access Token)
+4. 완료 후: `gh auth status` → `Logged in to github.com as <you>`
+
+> private 레포·`gh pr create`는 **로그인된 계정이 `ahnsh03/2026-SMH`에 push/PR 권한**이 있어야 합니다.  
+> 초대가 안 되어 있으면 팀장에게 collaborator 추가를 요청하세요.
+
+#### 일상 명령
+
+```bash
+# 브랜치 push 후 PR 생성 (본문은 HEREDOC — 에이전트·사람 공통)
+git push -u origin HEAD
+
+gh pr create --title "feat(lane): HSV 차선 중심 추정" --body "$(cat <<'EOF'
+## Summary
+- `lane_detection.py`: HSV + 중심선 오프셋 출력
+
+## Git 규약 확인
+- [x] feature 브랜치에서 작업 (`main` 직접 push 아님)
+- [x] main과 rebase/pull로 맞춤
+
+## 담당 모듈
+- [x] `lane_detection.py` (장원태)
+
+## 변경 범위 확인
+- [x] 담당 파일만 수정
+- [x] `pipeline.py` / `inference_node.py` 미수정
+
+## 테스트
+- [x] `./scripts/dev_container.sh check` (또는 colcon build inference)
+- [ ] (보드) `board_sync.sh` 후 launch — merge 후
+
+## 스크린샷 / 로그 (선택)
+- (있으면 첨부)
+EOF
+)"
+
+# 상태·URL
+gh pr status
+gh pr view --web          # 브라우저로 열기
+gh pr checks              # CI
+gh pr view --comments     # 리뷰 코멘트
+```
+
+Draft PR:
+
+```bash
+gh pr create --draft --title "WIP: feat(aruco): detector 초안" --body "## Summary
+- 진행 중 — 방향 피드백 요청
+"
+```
+
+기존 PR에 커밋만 추가할 때: **같은 feature 브랜치에 commit → `git push`** 하면 PR에 자동 반영됩니다. (`gh pr create` 다시 하지 않음)
+
+#### Cursor / Claude / Codex에게 시킬 때
+
+에이전트가 `gh`를 쓰도록 **한 번에** 요청하는 편이 좋습니다.
+
+예시 프롬프트:
+
+```text
+feature 브랜치에서 작업 끝난 상태야.
+1) 변경사항 확인 후 commit
+2) origin에 push
+3) gh pr create로 PR 생성해줘.
+   - .github/pull_request_template.md 항목을 채울 것
+   - Summary / Test plan을 구체적 불릿으로 쓸 것
+   - 담당 모듈·변경 파일만 명시
+gh가 없거나 미로그인이면 설치·gh auth login 안내만 하고 멈춰.
+```
+
+| 주의 | 설명 |
+|------|------|
+| 작업 디렉터리 | PC: `.../2026-SMH`, 보드: `~/2026-SMH` (`D-Racer-Kit` 아님) |
+| `main` 직접 push | 금지 — feature 브랜치만 |
+| 비밀값 | `.env`, 토큰, 키를 commit/PR에 넣지 말 것 |
+| merge | 팀장이 GitHub에서 수행 (`gh pr merge`는 팀장만) |
+
+PR 템플릿 원본: [`.github/pull_request_template.md`](../.github/pull_request_template.md)
 
 ---
 
@@ -321,7 +460,8 @@ git push --force-with-lease
 - [ ] **`main`에 직접 push하지 않았는가**
 - [ ] 담당 `modules/` 파일만 변경했는가
 - [ ] `colcon build --packages-select inference` 성공 (보드 또는 Humble 환경)
-- [ ] PR template 체크
+- [ ] PR template 체크 (또는 `gh pr create` 본문에 동일 항목)
+- [ ] (권장) PC/보드에 `gh` 설치·로그인 — [§1.7](#17-github-cli-gh-설치--인증--pr)
 - [ ] merge 후 로컬 feature 브랜치 삭제
 
 ---

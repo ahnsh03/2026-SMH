@@ -10,7 +10,7 @@
 | **D3-G 보드 주행** | [board-workflow.md](./board-workflow.md) ★ | [setup.md](./setup.md) |
 | **역할·과제** | [roles.md](./roles.md) | [meetings/2026-07-10.md](./meetings/2026-07-10.md) |
 | **차선·기본 주행** | [lane-drive-strategy.md](./lane-drive-strategy.md) ★ | [vehicle-geometry.md](./vehicle-geometry.md) |
-| **Git·PR** | [collaboration.md](./collaboration.md) | — |
+| **Git·PR** | [collaboration.md](./collaboration.md) ★ (`gh` §1.7) | — |
 
 ## 전체 목록
 
@@ -18,7 +18,7 @@
 
 | 문서 | 내용 |
 |------|------|
-| [collaboration.md](./collaboration.md) | 브랜치·PR·충돌 방지 ★ |
+| [collaboration.md](./collaboration.md) | 브랜치·PR·충돌 방지 · **`gh` 설치/PR** ★ |
 | [roles.md](./roles.md) | 역할 분담·데이터 흐름 |
 | [lane-drive-strategy.md](./lane-drive-strategy.md) | 기본 주행 루프 구조·BEV 규약·external 참고 ★ |
 | [vehicle-geometry.md](./vehicle-geometry.md) | D-Racer ↔ LIMO 휠베이스·트레드·조향 스펙 (제어 튜닝) ★ |
