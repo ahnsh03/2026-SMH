@@ -99,6 +99,9 @@ def generate_launch_description():
                     'vehicle_config_file': vehicle_config_path,
                     'planner_config_file': planner_config_path,
                     'route_mode': route_mode,
+                    # Real car: measured geometry + timing for the board's
+                    # ~2.2 Hz perception. See profiles.real in main_planner.yaml.
+                    'planner_profile': 'real',
                     # ArUco 보드 테스트: ros2 topic echo /debug/aruco
                     'aruco_debug_topic': '/debug/aruco',
                     'planner_debug_topic': '/debug/planner',

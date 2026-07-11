@@ -93,9 +93,73 @@ signals:
 
 safety:
   command_watchdog_sec: 0.5
+  # Upper clamp on the measured step dt. Must stay above the real perception
+  # period or every per-second limit silently de-rates. See profiles.real.
+  max_step_dt_sec: 0.25
 
 debug:
   log_state_changes: true
   log_decision_changes: true
   # State/path changes publish immediately; numeric snapshots use this rate.
   publish_hz: 2.0
+
+# ---------------------------------------------------------------------------
+# Profiles — same code, different plant.
+#
+# Everything above is the SIM-tuned baseline and stays authoritative for Gazebo,
+# so a profile-less load behaves exactly as it always has. The board selects
+# `profile: real` (set in src/inference/launch/auto_driving.launch.py) and the
+# block below is deep-merged over the sections above.
+#
+# Why a real profile is needed at all — measured on the D3-G board 2026-07-11:
+#   sim perception period  = 33 ms  (30 Hz)
+#   real perception period = 455 ms (2.2 Hz)   -> 13.6x
+# Every frame-counted and fixed-dt constant above was tuned on the left side of
+# that ratio. See docs/board-latency-and-sim2real.md for the full measurements.
+# ---------------------------------------------------------------------------
+profiles:
+  # Gazebo LIMO. No overrides: the base sections above ARE the sim values.
+  sim: {}
+
+  real:
+    pure_pursuit:
+      # Measured on the real car 2026-07-12 (docs/vehicle-geometry.md).
+      # The sim LIMO is 0.24 m / 30 deg; copying it costs ~20% understeer.
+      wheelbase_m: 0.175
+      max_steer_angle_rad: 0.3054   # 17.5 deg tire angle
+      # Perception runs at ~2.2 Hz, so the nominal dt is the real frame period.
+      nominal_control_dt_sec: 0.45
+
+    path:
+      # rear axle -> camera = wheelbase + camera_ahead_front_axle
+      #            = 0.175 + 0.025 = 0.20 m  (sim value 0.265 assumes L=0.24)
+      perception_to_rear_axle_x_m: 0.20
+      # Frame counts below are scaled to keep roughly the wall-clock behaviour
+      # the sim values were tuned for. At 2.2 Hz one frame is already 0.45 s,
+      # so sim's 3-frame (0.10 s) filters cannot be reproduced exactly — these
+      # are the closest usable values, not a translation.
+      yellow_valid_on_frames: 1   # sim 3 (0.10 s) -> 0.45 s
+      path_lost_hold_frames: 1    # sim 2 (0.07 s) -> 0.45 s
+      path_lost_stop_frames: 2    # sim 10 (0.33 s) -> 0.91 s, NOT 4.55 s
+      fork_exit_off_frames: 2     # sim 8 (0.27 s) -> 0.91 s
+
+    route:
+      # sim 3 = 1.36 s of unbroken YOLO detection on the board, which the sign
+      # will not survive; it would never latch and the car would always take
+      # default_out_branch_rank. 2 frames = 0.91 s.
+      sign_confirm_frames: 2
+      fork_path_hold_frames: 1
+
+    roundabout:
+      branch_on_frames: 1     # sim 3 -> 0.45 s
+      branch_off_frames: 2    # sim 8 -> 0.91 s
+      crossing_on_frames: 1   # sim 2 -> 0.45 s
+      crossing_off_frames: 2  # sim 5 -> 0.91 s
+
+    safety:
+      # The real perception period is 0.455 s. A 0.5 s watchdog leaves 10%
+      # margin, so one slow frame snaps the wheels straight and cuts throttle
+      # mid-corner. This branch is unreachable in sim (33 ms frames).
+      command_watchdog_sec: 1.5
+      # Must exceed the 0.455 s period, else the steering rate limit runs at 55%.
+      max_step_dt_sec: 0.6

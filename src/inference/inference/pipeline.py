@@ -41,6 +41,37 @@ def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Overlay override onto base, recursing into nested dicts."""
+    merged = dict(base)
+    for key, value in override.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def apply_profile(data: dict[str, Any], profile: str | None) -> dict[str, Any]:
+    """Overlay ``profiles.<profile>`` onto the base config sections.
+
+    Sim and real run the same code; only the plant they drive differs. The base
+    sections stay the sim-tuned values so a profile-less load behaves exactly as
+    before, and the real board asks for ``profile='real'`` to pull in the
+    measured car geometry and the timing that a 2.2 Hz perception rate needs.
+    """
+    name = (profile or '').strip().lower()
+    if not name:
+        return data
+    profiles = _section(data, 'profiles')
+    override = profiles.get(name)
+    if not isinstance(override, dict):
+        known = ', '.join(sorted(profiles)) or 'none'
+        raise ValueError(f"unknown planner profile '{name}' (known: {known})")
+    return _deep_merge(data, override)
+
+
 @dataclass(frozen=True)
 class PlannerConfig:
     route_mode: RouteMode = RouteMode.OUT
@@ -99,6 +130,12 @@ class PlannerConfig:
     require_green_to_start: bool = False
     stop_on_red: bool = False
     command_watchdog_sec: float = 0.5
+    # Upper clamp on the measured step dt. Anything above this is treated as a
+    # pause, not a real interval. It must stay ABOVE the actual perception
+    # period or every per-second limit silently de-rates: on the board a
+    # 0.455 s period against a 0.25 s clamp runs the steering rate limit at 55%
+    # of its configured value.
+    max_step_dt_sec: float = 0.25
     log_state_changes: bool = True
     log_decision_changes: bool = True
     debug_publish_hz: float = 2.0
@@ -108,6 +145,7 @@ def load_planner_config(
     path: str | Path | None = None,
     *,
     route_mode: str | None = None,
+    profile: str | None = None,
 ) -> PlannerConfig:
     cfg_path = Path(path).expanduser() if path else default_planner_config_path()
     data: dict[str, Any] = {}
@@ -116,6 +154,8 @@ def load_planner_config(
             loaded = yaml.safe_load(stream) or {}
         if isinstance(loaded, dict):
             data = loaded
+
+    data = apply_profile(data, profile)
 
     route = _section(data, 'route')
     pp = _section(data, 'pure_pursuit')
@@ -171,7 +211,7 @@ def load_planner_config(
             float(pp.get('path_lost_steering_return_rate_per_sec', 2.5)),
         ),
         nominal_control_dt_sec=float(
-            np.clip(pp.get('nominal_control_dt_sec', 0.10), 0.01, 0.25)
+            np.clip(pp.get('nominal_control_dt_sec', 0.10), 0.01, 1.0)
         ),
         cte_gain=max(0.0, float(pp.get('cte_gain', 0.12))),
         cte_softening_m=max(0.01, float(pp.get('cte_softening_m', 0.20))),
@@ -222,6 +262,7 @@ def load_planner_config(
         require_green_to_start=bool(signals.get('require_green_to_start', False)),
         stop_on_red=bool(signals.get('stop_on_red', False)),
         command_watchdog_sec=max(0.1, float(safety.get('command_watchdog_sec', 0.5))),
+        max_step_dt_sec=max(0.05, float(safety.get('max_step_dt_sec', 0.25))),
         log_state_changes=bool(debug.get('log_state_changes', True)),
         log_decision_changes=bool(debug.get('log_decision_changes', True)),
         debug_publish_hz=max(0.1, float(debug.get('publish_hz', 2.0))),
@@ -329,7 +370,7 @@ class MainPlanner:
             dt = now_sec - self._last_step_time_sec
         self._last_step_time_sec = now_sec
         # Avoid a long callback pause allowing an unconstrained steering jump.
-        return float(np.clip(dt, 0.001, 0.25))
+        return float(np.clip(dt, 0.001, self.config.max_step_dt_sec))
 
     def _return_steering_to_neutral(self, dt_sec: float) -> float:
         maximum_delta = self.config.path_lost_steering_return_rate_per_sec * dt_sec
