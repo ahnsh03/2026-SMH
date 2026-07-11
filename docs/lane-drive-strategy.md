@@ -177,7 +177,7 @@ SSOT: [`config/lane_vision.yaml`](../config/lane_vision.yaml) → **`metric_ipm:
 | `crop_top_ratio` | **0.39** | ≈ `x_max` 행 (기하 일치) |
 | `x_min_m` / `x_max_m` | **0.22 / 1.5** | 이미지 하단 ~ 전방 1.5 m |
 | `y_half_width_m` | **0.77** | `y_half_cm=77`, `full_image_width: false` |
-| `meters_per_pixel` | **0.004** | 종·횡 등방 |
+| `meters_per_pixel` | **0.004** (4 mm/px) | 종·횡 **등방** 격자 해상도. look-ahead 거리(`x_max`)와 별개 |
 | BEV | **≈ 386 × 321** | `(2·y_half)/mpp+1` × `(x_max−x_min)/mpp+1` |
 | `track_width_m` / guide | **0.35** / **≈44 px** | 차로 마크 정렬 |
 | 카메라 | 0.13 m · 10° · HFoV 70.42° | C920e / sim_interface |
