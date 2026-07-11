@@ -20,8 +20,9 @@
 |------|------|
 | [collaboration.md](./collaboration.md) | 브랜치·PR·충돌 방지 · **`gh` 설치/PR** ★ |
 | [roles.md](./roles.md) | 역할 분담·데이터 흐름 |
-| [lane-drive-strategy.md](./lane-drive-strategy.md) | 기본 주행 루프 구조·BEV 규약·external 참고 ★ |
-| [../scripts/vision_tune/README.md](../scripts/vision_tune/README.md) | Phase 0 BEV ROI·카메라 캡처 툴 |
+| [lane-drive-strategy.md](./lane-drive-strategy.md) | 기본 주행 루프·**Metric IPM SSOT**·external 참고 ★ |
+| [../scripts/vision_tune/README.md](../scripts/vision_tune/README.md) | Phase 0 **`tune_bev.py`(IPM)** · 캡처 · 사다리꼴 레거시 |
+| [../config/lane_vision.yaml](../config/lane_vision.yaml) | `metric_ipm:` 잠정 파라미터 (`y_half=0.77`) |
 | [vehicle-geometry.md](./vehicle-geometry.md) | D-Racer ↔ LIMO 휠베이스·트레드·조향 스펙 (제어 튜닝) ★ |
 | [meetings/2026-07-10.md](./meetings/2026-07-10.md) | 최근 회의록 (역할 재분배) |
 | [ANNOUNCEMENT.md](./ANNOUNCEMENT.md) | 대회 공지 요약 |

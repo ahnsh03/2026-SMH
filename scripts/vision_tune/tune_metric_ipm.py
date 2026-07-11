@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Legacy extended-trapezoid BEV ROI tune (reference only).
+"""Live / offline viewer for metric IPM (team BEV SSOT).
 
-Team BEV SSOT is Metric IPM — use tune_bev.py instead.
+Preferred entry: scripts/vision_tune/tune_bev.py
+(also: tune_metric_ipm.py, tune_bev_roi.py without --trapezoid)
 
-  python3 scripts/vision_tune/tune_bev.py                 # Metric IPM (SSOT)
-  python3 scripts/vision_tune/tune_bev_roi.py             # this file: trapezoid only
-  python3 scripts/vision_tune/tune_bev_roi.py --folder data/captures/sim
+Default coverage (locked 2026-07-12):
+  crop_top ≈ 39%  →  x_max ≈ 1.5 m
+  image bottom    →  x_min ≈ 0.22 m
+  ±y_half         →  locked ±0.77 m (y_half_cm=77)
 
-Keys: s=save YAML  q/ESC=quit  (folder: n/p)
+Examples (inside 2026-smh-sim):
 
-See docs/lane-drive-strategy.md §4.2 (참고) · §4.3 (SSOT).
+  python3 scripts/vision_tune/tune_bev.py
+  python3 scripts/vision_tune/tune_bev.py --compare
+  python3 scripts/vision_tune/tune_metric_ipm.py --topic /camera/image/compressed
+  python3 scripts/vision_tune/tune_bev.py --folder data/captures/sim
+
+Keys: s=save YAML  f=snap y_half to full image width  q/ESC=quit  (folder: n/p)
 """
 
 from __future__ import annotations
@@ -25,34 +32,28 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from bev_roi import (  # noqa: E402
+from metric_ipm import (  # noqa: E402
     DEFAULT_CONFIG_PATH,
-    BevRoiParams,
-    draw_bev_guides,
-    draw_roi_overlay,
-    load_bev_roi,
-    save_bev_roi,
-    warp_bev,
+    MetricIpmParams,
+    draw_crop_overlay,
+    draw_metric_guides,
+    load_metric_ipm,
+    save_metric_ipm,
+    warp_metric_ipm,
 )
 
-WIN_ORIGIN = 'bev_tune_origin'
-WIN_ROI = 'bev_tune_roi'
-WIN_BEV = 'bev_tune_bev'
-WIN_CTRL = 'bev_tune_controls'
+WIN_ORIGIN = 'ipm_tune_origin'
+WIN_BEV = 'ipm_tune_bev'
+WIN_TRAP = 'ipm_tune_trapezoid'
+WIN_CTRL = 'ipm_tune_controls'
 
-# Match sim_bringup D-Racer Camera preview (320×180 shown at 2×).
 PREVIEW_W = 640
 PREVIEW_H = 360
 
 
 def _list_images(folder: Path) -> list[Path]:
     if not folder.is_dir():
-        raise FileNotFoundError(
-            f'No such folder: {folder}\n'
-            'Capture with hotkey first:\n'
-            '  source /opt/ros/humble/setup.bash\n'
-            '  python3 scripts/vision_tune/capture_camera.py --out data/captures/sim'
-        )
+        raise FileNotFoundError(f'No such folder: {folder}')
     exts = {'.png', '.jpg', '.jpeg', '.bmp', '.webp'}
     return sorted(
         p for p in folder.iterdir() if p.suffix.lower() in exts and p.is_file()
@@ -69,68 +70,113 @@ def _scale_to_preview(frame: np.ndarray) -> np.ndarray:
 
 
 class TrackbarState:
-    def __init__(self, params: BevRoiParams):
+    def __init__(self, params: MetricIpmParams):
         self.params = params.clamp()
-        self._last_bev_size: tuple[int, int] | None = None
 
-    def sync_from_trackbars(self) -> BevRoiParams:
+    def sync_from_trackbars(self) -> MetricIpmParams:
         crop_pct = cv2.getTrackbarPos('crop_top_%', WIN_CTRL)
-        bottom_pct = cv2.getTrackbarPos('bottom_half_%', WIN_CTRL)
-        bev_w = cv2.getTrackbarPos('bev_w', WIN_CTRL)
-        bev_h = cv2.getTrackbarPos('bev_h', WIN_CTRL)
-        guide_half = cv2.getTrackbarPos('guide_half_px', WIN_CTRL)
-        self.params = BevRoiParams(
+        x_min_cm = cv2.getTrackbarPos('x_min_cm', WIN_CTRL)
+        x_max_cm = cv2.getTrackbarPos('x_max_cm', WIN_CTRL)
+        y_half_cm = cv2.getTrackbarPos('y_half_cm', WIN_CTRL)
+        mpp_mm = cv2.getTrackbarPos('mpp_mm', WIN_CTRL)
+        pitch_ddeg = cv2.getTrackbarPos('pitch_x10', WIN_CTRL)
+        height_cm = cv2.getTrackbarPos('height_cm', WIN_CTRL)
+        self.params = MetricIpmParams(
+            hfov_deg=self.params.hfov_deg,
+            camera_height_m=max(height_cm, 5) / 100.0,
+            pitch_down_deg=max(pitch_ddeg, 0) / 10.0,
+            x_min_m=max(x_min_cm, 5) / 100.0,
+            x_max_m=max(x_max_cm, 30) / 100.0,
+            y_half_width_m=max(y_half_cm, 15) / 100.0,
+            meters_per_pixel=max(mpp_mm, 1) / 1000.0,
             crop_top_ratio=crop_pct / 100.0,
-            bottom_half_width_ratio=max(bottom_pct, 50) / 100.0,
-            bev_width=max(bev_w, 64),
-            bev_height=max(bev_h, 64),
-            guide_half_width_px=max(guide_half, 5),
             track_width_m=0.35,
         ).clamp()
         return self.params
 
 
-def _init_ui(state: TrackbarState) -> None:
-    # Camera-like windows: free-ish NORMAL at D-Racer preview size.
-    for name in (WIN_ORIGIN, WIN_ROI):
-        cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(name, PREVIEW_W, PREVIEW_H)
-
-    # BEV follows parameter size; AUTOSIZE so the client area matches the image.
+def _init_ui(state: TrackbarState, compare: bool) -> None:
+    cv2.namedWindow(WIN_ORIGIN, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WIN_ORIGIN, PREVIEW_W, PREVIEW_H)
     cv2.namedWindow(WIN_BEV, cv2.WINDOW_AUTOSIZE)
-
+    if compare:
+        cv2.namedWindow(WIN_TRAP, cv2.WINDOW_AUTOSIZE)
     cv2.namedWindow(WIN_CTRL, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WIN_CTRL, 480, 200)
+    cv2.resizeWindow(WIN_CTRL, 520, 260)
 
     p = state.params
     cv2.createTrackbar(
-        'crop_top_%', WIN_CTRL, int(round(p.crop_top_ratio * 100)), 50, lambda _v: None
+        'crop_top_%', WIN_CTRL, int(round(p.crop_top_ratio * 100)), 60, lambda _v: None
     )
-    # Large expansion so small crop_top can still flatten the ground plane.
     cv2.createTrackbar(
-        'bottom_half_%',
+        'x_min_cm', WIN_CTRL, int(round(p.x_min_m * 100)), 100, lambda _v: None
+    )
+    cv2.createTrackbar(
+        'x_max_cm', WIN_CTRL, int(round(p.x_max_m * 100)), 300, lambda _v: None
+    )
+    cv2.createTrackbar(
+        'y_half_cm', WIN_CTRL, int(round(p.y_half_width_m * 100)), 200, lambda _v: None
+    )
+    cv2.createTrackbar(
+        'mpp_mm',
         WIN_CTRL,
-        int(round(p.bottom_half_width_ratio * 100)),
-        1500,
+        int(round(p.meters_per_pixel * 1000)),
+        20,
         lambda _v: None,
     )
-    cv2.createTrackbar('bev_w', WIN_CTRL, p.bev_width, 640, lambda _v: None)
-    cv2.createTrackbar('bev_h', WIN_CTRL, p.bev_height, 640, lambda _v: None)
     cv2.createTrackbar(
-        'guide_half_px', WIN_CTRL, p.guide_half_width_px, 200, lambda _v: None
+        'pitch_x10',
+        WIN_CTRL,
+        int(round(p.pitch_down_deg * 10)),
+        300,
+        lambda _v: None,
     )
-    state._last_bev_size = (p.bev_width, p.bev_height)
+    cv2.createTrackbar(
+        'height_cm',
+        WIN_CTRL,
+        int(round(p.camera_height_m * 100)),
+        40,
+        lambda _v: None,
+    )
 
 
-def _show_frame(frame: np.ndarray, state: TrackbarState) -> BevRoiParams:
+def _snap_full_width(state: TrackbarState, frame_shape: tuple[int, ...]) -> MetricIpmParams:
+    h, w = frame_shape[:2]
+    state.params = state.params.with_full_image_width(w, h)
+    cv2.setTrackbarPos(
+        'y_half_cm', WIN_CTRL, int(round(state.params.y_half_width_m * 100))
+    )
+    print(
+        f'y_half → full image width ±{state.params.y_half_width_m:.3f} m '
+        f'(bev {state.params.bev_width}x{state.params.bev_height})',
+        flush=True,
+    )
+    return state.params
+
+
+def _trapezoid_bev(frame: np.ndarray) -> np.ndarray | None:
+    try:
+        from bev_roi import draw_bev_guides, load_bev_roi, warp_bev
+    except ImportError:
+        return None
+    params = load_bev_roi()
+    return draw_bev_guides(warp_bev(frame, params), params)
+
+
+def _show_frame(
+    frame: np.ndarray,
+    state: TrackbarState,
+    compare: bool,
+) -> MetricIpmParams:
     params = state.sync_from_trackbars()
-    roi = draw_roi_overlay(frame, params)
-    bev = draw_bev_guides(warp_bev(frame, params), params)
-
-    cv2.imshow(WIN_ORIGIN, _scale_to_preview(frame))
-    cv2.imshow(WIN_ROI, _scale_to_preview(roi))
+    origin = draw_crop_overlay(frame, params)
+    bev = draw_metric_guides(warp_metric_ipm(frame, params), params)
+    cv2.imshow(WIN_ORIGIN, _scale_to_preview(origin))
     cv2.imshow(WIN_BEV, bev)
-    state._last_bev_size = (params.bev_width, params.bev_height)
+    if compare:
+        trap = _trapezoid_bev(frame)
+        if trap is not None:
+            cv2.imshow(WIN_TRAP, trap)
     return params
 
 
@@ -146,20 +192,23 @@ def run_image_sources(
     labels: list[str],
     state: TrackbarState,
     config_path: Path,
+    compare: bool,
 ) -> int:
     if not frames:
         print('No images to show.', file=sys.stderr)
         return 1
-    _init_ui(state)
+    _init_ui(state, compare)
     idx = 0
-    print('Keys: s=save  n/p=next/prev  q=quit  (offline stills — use default topic for live)')
+    print('Keys: s=save  f=full-width  n/p=next/prev  q=quit')
     while True:
-        params = _show_frame(frames[idx], state)
+        params = _show_frame(frames[idx], state, compare)
         key = cv2.waitKey(30) & 0xFF
         if key in (ord('q'), 27):
             break
         if key == ord('s'):
-            print(f'Saved BEV ROI → {save_bev_roi(params, config_path)}')
+            print(f'Saved metric IPM → {save_metric_ipm(params, config_path)}')
+        if key == ord('f'):
+            params = _snap_full_width(state, frames[idx].shape)
         if key == ord('n') and len(frames) > 1:
             idx = (idx + 1) % len(frames)
             print(f'[{idx + 1}/{len(frames)}] {labels[idx]}')
@@ -170,7 +219,12 @@ def run_image_sources(
     return 0
 
 
-def run_topic(topic: str, state: TrackbarState, config_path: Path) -> int:
+def run_topic(
+    topic: str,
+    state: TrackbarState,
+    config_path: Path,
+    compare: bool,
+) -> int:
     try:
         import rclpy
         from rclpy.node import Node
@@ -190,9 +244,9 @@ def run_topic(topic: str, state: TrackbarState, config_path: Path) -> int:
         durability=DurabilityPolicy.VOLATILE,
     )
 
-    class BevTuneNode(Node):
+    class IpmTuneNode(Node):
         def __init__(self):
-            super().__init__('bev_roi_tune')
+            super().__init__('metric_ipm_tune')
             self.frame: np.ndarray | None = None
             self.frame_count = 0
             if topic.endswith('/compressed') or 'compressed' in topic:
@@ -201,10 +255,7 @@ def run_topic(topic: str, state: TrackbarState, config_path: Path) -> int:
                 )
             else:
                 self.create_subscription(Image, topic, self._on_raw, image_qos)
-            self.get_logger().info(
-                f'Live BEV ROI tune on {topic} '
-                f'(origin/roi windows {PREVIEW_W}x{PREVIEW_H})'
-            )
+            self.get_logger().info(f'Live metric IPM tune on {topic}')
 
         def _on_compressed(self, msg: CompressedImage) -> None:
             frame = _decode_compressed(bytes(msg.data))
@@ -213,39 +264,37 @@ def run_topic(topic: str, state: TrackbarState, config_path: Path) -> int:
                 self.frame_count += 1
 
         def _on_raw(self, msg: Image) -> None:
-            # Prefer numpy path without cv_bridge dependency for raw.
             if msg.encoding not in ('bgr8', 'rgb8', 'mono8'):
                 self.get_logger().warning(f'unsupported encoding {msg.encoding}')
                 return
             h, w = msg.height, msg.width
             buf = np.frombuffer(msg.data, dtype=np.uint8)
             if msg.encoding == 'mono8':
-                frame = buf.reshape((h, w))
-                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                frame = cv2.cvtColor(buf.reshape((h, w)), cv2.COLOR_GRAY2BGR)
             elif msg.encoding == 'rgb8':
-                frame = buf.reshape((h, w, 3))
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                frame = cv2.cvtColor(buf.reshape((h, w, 3)), cv2.COLOR_RGB2BGR)
             else:
                 frame = buf.reshape((h, w, 3)).copy()
             self.frame = frame
             self.frame_count += 1
 
     rclpy.init()
-    node = BevTuneNode()
-    _init_ui(state)
-    print('Live mode. Keys: s=save  q=quit')
-    print('Make sure sim-bringup is running so the camera topic publishes.')
+    node = IpmTuneNode()
+    _init_ui(state, compare)
+    print('Live mode. Keys: s=save  f=full-width  q=quit')
     last_log = 0
+    params = state.params
     try:
         while rclpy.ok():
             _spin_drain(node)
             if node.frame is not None:
-                params = _show_frame(node.frame, state)
+                params = _show_frame(node.frame, state, compare)
                 if node.frame_count - last_log >= 30:
-                    h, w = node.frame.shape[:2]
                     print(
-                        f'live frames={node.frame_count} src={w}x{h} '
-                        f'bev={params.bev_width}x{params.bev_height}',
+                        f'live frames={node.frame_count} '
+                        f'bev={params.bev_width}x{params.bev_height} '
+                        f'x=[{params.x_min_m:.2f},{params.x_max_m:.2f}] '
+                        f'|y|<={params.y_half_width_m:.2f}',
                         flush=True,
                     )
                     last_log = node.frame_count
@@ -263,7 +312,6 @@ def run_topic(topic: str, state: TrackbarState, config_path: Path) -> int:
                     cv2.LINE_AA,
                 )
                 cv2.imshow(WIN_ORIGIN, blank)
-                cv2.imshow(WIN_ROI, blank)
                 cv2.imshow(
                     WIN_BEV,
                     np.zeros((params.bev_height, params.bev_width, 3), dtype=np.uint8),
@@ -272,7 +320,9 @@ def run_topic(topic: str, state: TrackbarState, config_path: Path) -> int:
             if key in (ord('q'), 27):
                 break
             if key == ord('s'):
-                print(f'Saved BEV ROI → {save_bev_roi(params, config_path)}')
+                print(f'Saved metric IPM → {save_metric_ipm(params, config_path)}')
+            if key == ord('f') and node.frame is not None:
+                params = _snap_full_width(state, node.frame.shape)
     finally:
         node.destroy_node()
         rclpy.shutdown()
@@ -281,10 +331,7 @@ def run_topic(topic: str, state: TrackbarState, config_path: Path) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description='Legacy extended-trapezoid BEV ROI tune (reference only). '
-        'For Metric IPM SSOT use: python3 scripts/vision_tune/tune_bev.py'
-    )
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     src = parser.add_mutually_exclusive_group(required=False)
     src.add_argument('--image', type=Path, help='single still image (offline)')
     src.add_argument('--folder', type=Path, help='folder of stills (offline)')
@@ -300,16 +347,23 @@ def main() -> int:
         default=DEFAULT_CONFIG_PATH,
         help=f'YAML path (default: {DEFAULT_CONFIG_PATH})',
     )
+    parser.add_argument(
+        '--compare',
+        action='store_true',
+        help='also show trapezoid BEV from lane_vision.yaml bev_roi',
+    )
     args = parser.parse_args()
 
-    state = TrackbarState(load_bev_roi(args.config))
+    state = TrackbarState(load_metric_ipm(args.config))
 
     if args.image:
         frame = cv2.imread(str(args.image), cv2.IMREAD_COLOR)
         if frame is None:
             print(f'Failed to read {args.image}', file=sys.stderr)
             return 1
-        return run_image_sources([frame], [str(args.image)], state, args.config)
+        return run_image_sources(
+            [frame], [str(args.image)], state, args.config, args.compare
+        )
 
     if args.folder:
         paths = _list_images(args.folder)
@@ -323,10 +377,10 @@ def main() -> int:
             if img is not None:
                 frames.append(img)
                 labels.append(str(path))
-        return run_image_sources(frames, labels, state, args.config)
+        return run_image_sources(frames, labels, state, args.config, args.compare)
 
     topic = args.topic or '/camera/image/compressed'
-    return run_topic(topic, state, args.config)
+    return run_topic(topic, state, args.config, args.compare)
 
 
 if __name__ == '__main__':
