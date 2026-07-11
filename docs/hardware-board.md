@@ -1,6 +1,6 @@
 # D-Racer / TOPST D3-G 하드웨어 스펙
 
-> 마지막 업데이트: 2026-07-09  
+> 마지막 업데이트: 2026-07-11  
 > **PC(WSL) 상위 프로젝트** 동기화본: [`../../docs/competition/hardware-board.md`](../../docs/competition/hardware-board.md)  
 > **D3-G 보드 단독 clone**에서는 이 파일이 보드·플랫폼 스펙 SSOT입니다.
 
@@ -221,6 +221,7 @@ ROS2 메시지 경로:
 | D3-G 문서 (TOPST) | https://docs.topst.ai/product/g/d3 |
 | Ubuntu 이미지 | https://topst-downloads.s3.ap-northeast-2.amazonaws.com/Ubuntu/22.04/D-Racer-ubuntu-22.04-v1.0.1.zip |
 | 팀 카메라 스펙 | [hardware-camera.md](./hardware-camera.md) |
+| 실차↔LIMO 조향·기하 | [vehicle-geometry.md](./vehicle-geometry.md) |
 | 팀 시뮬 메모 | [simulation.md](./simulation.md) |
 
 ---
@@ -228,3 +229,5 @@ ROS2 메시지 경로:
 ## 9. 시뮬레이터 베이스 (참고)
 
 D-Racer 전용 Gazebo 모델은 없습니다. 인지 샌드박스용으로는 AgileX **LIMO Ackermann**이 가장 가깝고, **카메라 마운트 각도는 실차 실측** 후 URDF에 반영합니다. 상세: [simulation.md](./simulation.md).
+
+**조향·휠베이스·트레드** 등 제어 튜닝용 실차↔LIMO 차이는 [vehicle-geometry.md](./vehicle-geometry.md)를 참고하세요. 시뮬에서 잡은 steering gain을 실차에 그대로 쓰지 마세요.

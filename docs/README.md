@@ -9,7 +9,7 @@
 | **PC 시뮬 개발** | [simulation-setup.md](./simulation-setup.md) ★ | [dev-environment.md](./dev-environment.md) |
 | **D3-G 보드 주행** | [board-workflow.md](./board-workflow.md) ★ | [setup.md](./setup.md) |
 | **역할·과제** | [roles.md](./roles.md) | [meetings/2026-07-10.md](./meetings/2026-07-10.md) |
-| **차선·기본 주행** | [lane-drive-strategy.md](./lane-drive-strategy.md) ★ | — |
+| **차선·기본 주행** | [lane-drive-strategy.md](./lane-drive-strategy.md) ★ | [vehicle-geometry.md](./vehicle-geometry.md) |
 | **Git·PR** | [collaboration.md](./collaboration.md) | — |
 
 ## 전체 목록
@@ -21,6 +21,7 @@
 | [collaboration.md](./collaboration.md) | 브랜치·PR·충돌 방지 ★ |
 | [roles.md](./roles.md) | 역할 분담·데이터 흐름 |
 | [lane-drive-strategy.md](./lane-drive-strategy.md) | 기본 주행 루프 구조·BEV 규약·external 참고 ★ |
+| [vehicle-geometry.md](./vehicle-geometry.md) | D-Racer ↔ LIMO 휠베이스·트레드·조향 스펙 (제어 튜닝) ★ |
 | [meetings/2026-07-10.md](./meetings/2026-07-10.md) | 최근 회의록 (역할 재분배) |
 | [ANNOUNCEMENT.md](./ANNOUNCEMENT.md) | 대회 공지 요약 |
 
@@ -40,6 +41,7 @@
 |------|------|
 | [hardware-board.md](./hardware-board.md) | D3-G / D-Racer 플랫폼 |
 | [hardware-camera.md](./hardware-camera.md) | C920e · 320×180 |
+| [vehicle-geometry.md](./vehicle-geometry.md) | 실차↔시뮬 조향·기하 차이 (튜닝) |
 | [competition.md](./competition.md) | 대회 정보 통합 |
 | [references.md](./references.md) | 외부 링크 |
 

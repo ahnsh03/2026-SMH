@@ -201,6 +201,8 @@ C920e 네이티브는 **1920×1080 (16:9)** 입니다. 팀은 주최측 기본 3
 
 역학(가속·최대조향 체감)은 LIMO Ackermann이라 RC 실차와 다를 수 있으나, **토픽·부호·E-Stop 계약은 실차에 맞춤**.
 
+휠베이스·트레드·최대 조향각 등 수치 비교와 게인 이전 주의사항: **[vehicle-geometry.md](./vehicle-geometry.md)**.
+
 실차 최종 튜닝은 D3-G에서 `./scripts/board_sync.sh` 후 실행.
 
 ---
