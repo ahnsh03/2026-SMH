@@ -1,0 +1,25 @@
+# Lane vision parameters (Phase 0+)
+# Tuned by: scripts/vision_tune/tune_bev_roi.py
+# Consumed later by lane planner / optional IPM overrides.
+
+image:
+  # Expected D-Racer / sim pipeline resolution (informational)
+  width: 320
+  height: 180
+
+bev_roi:
+  # Fraction of image height to drop from the top (0.0–0.5).
+  crop_top_ratio: 0.15
+  # Bottom trapezoid half-width / (image_width/2).
+  # 1.0 = bottom edge equals image width; >1.0 extends outside the frame.
+  bottom_half_width_ratio: 1.35
+  # Destination BEV canvas size (pixels).
+  bev_width: 320
+  bev_height: 240
+
+# Filled in by Phase 1 HSV tuning tools.
+hsv:
+  white: null
+  yellow: null
+  black_road: null
+  red_road: null
