@@ -43,22 +43,33 @@ metric_ipm:
     full_image_width: false
     y_half_width_m: 0.77
   # Ground resolution of one BEV pixel (isotropic: same for forward & lateral).
-  # 0.004 m = 4 mm/px → BEV ≈386×321, lane 0.35 m ≈ 87.5 px, guide_half ≈ 44.
-  # Finer (e.g. 0.002) ≈4× pixels / little gain on 320×180. Coarser (0.005, WonTae)
-  # is also fine; 0.004 matches trapezoid lateral scale (~3.98 mm/px) closely.
+  # THIS IS THE ONLY BEV RESOLUTION KNOB — bev_width/bev_height/guide_half_width_px
+  # below are derived from it in code (metric_ipm.py), not read from this file.
+  # Tune this line alone; the rest follow.
+  #
+  # Measured on the board (320x180 input, real frame, idle CPU) — lane_detection.detect:
+  #   0.004 -> BEV 386x321 (123906 px) = 255 ms   <- current
+  #   0.005 -> BEV 309x257 ( 79413 px) = 160 ms   (-37%)
+  #   0.006 -> BEV 258x214 ( 55212 px) = 108 ms   (-58%)
+  #   0.008 -> BEV 193x161 ( 31073 px) =  72 ms   (-72%)
+  # Cost is ~linear in BEV pixel count: the boundary search runs in Python, not OpenCV.
+  # The CPU win is measured; detection QUALITY at coarser settings is NOT yet
+  # validated — verify on a real track recording before locking a new value.
   meters_per_pixel: 0.004
   crop_top_ratio: 0.39
-  # Derived: (2*0.77)/0.004+1 × (1.50-0.22)/0.004+1 = 386 × 321
+  # Auto-derived from meters_per_pixel — do NOT hand-edit. Shown for reference only;
+  # the tuner rewrites them on save. Values below correspond to mpp=0.004.
   bev_width: 386
   bev_height: 321
   track_width_m: 0.35
-  # 0.35/2 / 0.004 = 43.75 → 44
   guide_half_width_px: 44
   note: >
     Team lock 2026-07-12: Metric IPM is provisional SSOT (WonTae pipeline).
     y_half_width_m=0.77. crop_top≈0.39 marks x_max≈1.5 m on 320×180.
     meters_per_pixel sets BEV grid resolution only — not the look-ahead distance
-    (that is x_max_m). Keep 0.004 unless CPU-bound or you need coarser/finer maps.
+    (that is x_max_m). The board is CPU-bound at 0.004: perception runs at ~2.2 Hz
+    against a 30 Hz camera, so control sees lane data ~450 ms stale. Coarsening
+    this is the cheapest lever — tune it against a recorded bag.
 
 hsv:
   # OpenCV HSV (H 0-179). Tool: scripts/vision_tune/tune_hsv.py
