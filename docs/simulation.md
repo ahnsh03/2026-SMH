@@ -196,6 +196,10 @@ C920e 네이티브는 **1920×1080 (16:9)** 입니다. 팀은 주최측 기본 3
 | 카메라 | `camera_node` | `sim_camera_republish` |
 | 구동 | `control_node` (I2C) | `sim_control_bridge` |
 | inference | 동일 | 동일 |
+| `/control` 규약 | steering −1=좌/+1=우, throttle −1=후/+1=전 | **동일** (브릿지가 Gazebo 부호·조향각 변환) |
+| E-Stop | `control_node` 래치 | `sim_control_bridge` 래치 (`joystick`) |
+
+역학(가속·최대조향 체감)은 LIMO Ackermann이라 RC 실차와 다를 수 있으나, **토픽·부호·E-Stop 계약은 실차에 맞춤**.
 
 실차 최종 튜닝은 D3-G에서 `./scripts/board_sync.sh` 후 실행.
 

@@ -67,12 +67,15 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
 |------|------|------|
 | `/camera/image/compressed` | `sensor_msgs/CompressedImage` | **inference_node** 입력 (320×180 JPEG) |
 | `/camera/image_raw` | `sensor_msgs/Image` | 카메라 프리뷰 창 |
-| `/control` | `control_msgs/Control` | throttle / steering (-1~1) |
+| `/control` | `control_msgs/Control` | throttle (−1=후/+1=전) / steering (−1=좌/+1=우) |
 | `/battery_status` | `battery_msgs/Battery` | monitor 스텁 |
 | `/joint_states` | `sensor_msgs/JointState` | Gazebo 관절 |
 | `/odom` | `nav_msgs/Odometry` | Gazebo Ackermann 플러그인 |
 
 내부 전용: `/cmd_vel` ← `sim_control_bridge`
+
+`/control` 규약(실차와 동일): **steering −1=좌 / +1=우**, **throttle −1=후 / +1=전**.  
+`sim_control_bridge`가 Gazebo Ackermann용으로 `angular.z`(조향각 rad, +Z=좌)에 **부호 반전**해 전달하고, E-Stop은 `joystick`에서 실차 `control_node`처럼 래치합니다.
 
 ---
 
@@ -771,7 +774,8 @@ GPU 확인 (렉이 심할 때):
 ros2 launch inference auto_driving.launch.py
 ```
 
-시뮬은 **카메라·토픽·inference 파이프라인** 검증용입니다. 모터·조향 모델은 LIMO Ackermann이라 실차와 다릅니다.
+시뮬은 **카메라·토픽·inference 파이프라인** 검증용입니다.  
+`/control` 부호·E-Stop은 실차와 같고, 가속·선회 반경 등 **역학**만 LIMO Ackermann이라 RC 실차와 다를 수 있습니다.
 
 ---
 
