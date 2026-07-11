@@ -83,6 +83,7 @@ set +u
 source /opt/ros/humble/setup.bash
 set -u
 python3 scripts/prepare_mission_signs.py
+python3 scripts/prepare_bev_calib_mat.py
 colcon build --symlink-install --packages-up-to dracer_sim limo_car inference monitor joystick topst_utils opencv
 set +u
 source install/setup.bash
