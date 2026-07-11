@@ -130,6 +130,8 @@ ros2 launch dracer_sim sim_bringup.launch.py spawn_x:=0.0 spawn_y:=-3.6 spawn_ya
 | `urdf/limo_dracer_sim.xacro` | LIMO + C920e 카메라 (FOV 1.229 rad, 640×360) |
 | `urdf/dracer_sim.urdf` | 경량 박스 모델 (`robot:=dracer`) |
 
+실차(D-Racer)와 LIMO 휠베이스·트레드·조향 차이: [docs/vehicle-geometry.md](../../docs/vehicle-geometry.md).
+
 카메라 마운트 각도는 실차 측정 후 `camera_joint` origin을 맞추세요.
 
 ## 검증

@@ -33,6 +33,7 @@ ros2 launch inference auto_driving.launch.py
 |------|------|
 | **D3-G / D-Racer 플랫폼 스펙** | [hardware-board.md](./hardware-board.md) |
 | C920e 카메라 스펙 | [hardware-camera.md](./hardware-camera.md) |
+| **D-Racer ↔ LIMO 조향·기하 (튜닝)** | [vehicle-geometry.md](./vehicle-geometry.md) |
 | LIMO 시뮬 (팀 `dracer_sim`) | [simulation-setup.md](./simulation-setup.md) · [dracer_sim README](../src/dracer_sim/README.md) |
 | limo_ros2 upstream (참고) | https://github.com/agilexrobotics/limo_ros2.git — **팀은 `vendor/limo_car` 사용** |
 | ugv_gazebo_sim (ROS1) | https://github.com/agilexrobotics/ugv_gazebo_sim.git |

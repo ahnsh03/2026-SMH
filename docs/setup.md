@@ -209,7 +209,9 @@ detected=0 should_stop=0 marker_id=None # 치운 뒤 ~1.5s
 | 1 | `git checkout main && git pull` |
 | 2 | `git checkout -b feature/이름-기능` |
 | 3 | 담당 `modules/` 수정 · commit · push |
-| 4 | GitHub PR 생성 → 팀장 merge |
+| 4 | GitHub PR 생성 (`gh` 권장) → 팀장 merge |
 | 5 | 보드: `./scripts/board_sync.sh` |
+
+`gh` 설치·에이전트용 상세 PR: [collaboration.md §1.7](./collaboration.md#17-github-cli-gh-설치--인증--pr)
 
 상세: [collaboration.md](./collaboration.md)

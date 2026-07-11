@@ -225,18 +225,20 @@ git push -u origin feature/seunghyun-aruco-detect
 # GitHub에서 PR 생성 → 팀장 merge
 ```
 
-### Cursor / Claude Code 사용 시
+### Cursor / Claude Code / Codex 사용 시
 
 작업 디렉터리를 **`~/2026-SMH`** 로 지정하세요. `~/D-Racer-Kit`에서 실행하지 않습니다.
 
 ```bash
 cd ~/2026-SMH
 claude
-# 또는
-claude --continue
+# 또는 Cursor / Codex 채팅에서 동일 경로로 작업
 ```
 
-Claude에게 지시할 때는 **담당 `modules/` 파일만** 수정하도록 명시하세요.
+Claude·Cursor·Codex에게 지시할 때는 **담당 `modules/` 파일만** 수정하도록 명시하세요.
+
+보드·PC에서 **PR까지** 맡기려면 **`gh` 설치 + `gh auth login`** 이 필요합니다.  
+설치·프롬프트 예시·본문 템플릿: **[collaboration.md §1.7](./collaboration.md#17-github-cli-gh-설치--인증--pr)**.
 
 ---
 

@@ -775,7 +775,8 @@ ros2 launch inference auto_driving.launch.py
 ```
 
 시뮬은 **카메라·토픽·inference 파이프라인** 검증용입니다.  
-`/control` 부호·E-Stop은 실차와 같고, 가속·선회 반경 등 **역학**만 LIMO Ackermann이라 RC 실차와 다를 수 있습니다.
+`/control` 부호·E-Stop은 실차와 같고, 가속·선회 반경 등 **역학**만 LIMO Ackermann이라 RC 실차와 다를 수 있습니다.  
+수치 비교·게인 이전: [vehicle-geometry.md](./vehicle-geometry.md).
 
 ---
 
