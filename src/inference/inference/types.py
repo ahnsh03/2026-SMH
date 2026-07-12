@@ -59,15 +59,58 @@ class LaneMarking:
 
 
 @dataclass(frozen=True)
+class RoadBranch:
+    """Fork / path candidate from perception (lane_msgs/RoadBranch)."""
+
+    lateral_rank: int = 0
+    """0 = leftmost branch."""
+    confidence: float = 0.0
+    width: float = 0.0
+    points: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 3), dtype=np.float32)
+    )
+
+    def xy(self) -> np.ndarray:
+        pts = np.asarray(self.points, dtype=np.float32)
+        if pts.size == 0:
+            return np.empty((0, 2), dtype=np.float32)
+        if pts.ndim != 2 or pts.shape[1] < 2:
+            return np.empty((0, 2), dtype=np.float32)
+        return pts[:, :2]
+
+
+@dataclass(frozen=True)
 class LaneDetections:
     """Perception-only lane output (no steering).
 
-    Phase 2 planner consumes white left/right only; yellow fields reserved.
+    Aligned with ``lane_msgs/LaneDetections`` so adapters can round-trip.
+    Phase-2 ``lane_planner`` uses white L/R markings; fork/branches are for
+    mission planners (e.g. yangseojun MainPlanner).
     """
 
     lanes: tuple[LaneMarking, ...] = ()
     white_visible: bool = False
     yellow_visible: bool = False
+    left_visible: bool = False
+    right_visible: bool = False
+    white_confidence: float = 0.0
+    yellow_confidence: float = 0.0
+    left_confidence: float = 0.0
+    right_confidence: float = 0.0
+    white_centerline: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 2), dtype=np.float32)
+    )
+    yellow_centerline: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 2), dtype=np.float32)
+    )
+    yellow_crossing_line: bool = False
+    fork_active: bool = False
+    branches: tuple[RoadBranch, ...] = ()
+    drivable_area: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    meters_per_pixel: float = 0.0
+    x_forward_max: float = 0.0
 
     def marking(
         self,

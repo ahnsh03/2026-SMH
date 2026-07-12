@@ -1,97 +1,83 @@
 # 팀 역할 분담
 
-> 최근 회의: [meetings/2026-07-10.md](./meetings/2026-07-10.md) (2026-07-10 역할 재분배)  
-> 정기 회의: **매주 월요일 15시**  
+> 최근 회의: [meetings/2026-07-10.md](./meetings/2026-07-10.md)  
+> **런타임 구조 SSOT:** [lane-perception-topic.md](./lane-perception-topic.md) ★  
 > 협업 규칙: [collaboration.md](./collaboration.md)
 
 ## 공통
 
 - 대회 미션 숙지, 작년 영상으로 트랙 형태 파악
-- **Git: `main` 직접 push 금지** — `feature/이름-기능` 브랜치 → PR → merge ([협업 가이드](./collaboration.md) §1)
+- **Git: `main` 직접 push 금지** — `feature/이름-기능` 브랜치 → PR → merge
 - **담당 `modules/` 파일만** 수정 ([충돌 방지](./collaboration.md) §2)
-- **PC 모듈 검증**: [simulation-setup.md](./simulation-setup.md) (`./scripts/dev_container.sh sim`) 또는 교내 트랙 — 교내 트랙은 대회 트랙과 다름 ([회의록](./meetings/2026-07-10.md))
+- **PC 모듈 검증**: [simulation-setup.md](./simulation-setup.md) — 자율주행은 **인지+제어 둘 다**
+- PR 전 [lane-perception-topic.md](./lane-perception-topic.md) §8 체크리스트 확인
 
-## 현재 과제 (2026-07-10 기준)
+## 현재 과제
 
 | 담당 | 모듈·영역 | 과제 |
 |------|-----------|------|
-| **장원태** | `modules/lane_detection.py` | BEV 차선 인식 실증 (교내 트랙 또는 Gazebo) |
-| **장원정** | `modules/traffic_sign.py` | 신호등 불 인식 코드 · 표지판 YOLO 인식 |
-| **안승현** | `src/dracer_sim/` (시뮬 월드) | 갈림길 좌/우 표지판 · 장애물 ArUco 배치 → 신호등·표지판 주행 **합류** |
-| **박성준** | `modules/roundabout.py` (합류) | 회전 교차로 코드 개발 |
-| **양서준** | `modules/roundabout.py` | 회전 교차로 (Pure Pursuit + 차선 선택) 설계·개발·실증 |
+| **장원태** | `modules/lane_detection.py` | Metric IPM BEV 위 차선 인지 실증 (시뮬·교내) |
+| **장원정** | `modules/traffic_sign.py` | 신호등·표지판 — 모듈 API 유지, ROS 합류는 통합 시 |
+| **안승현** | 통합·시뮬·`lane_control_node` | 토픽 분리·Metric IPM SSOT·게인 튜닝 |
+| **박성준** | `modules/roundabout.py` (합류) · ArUco stop | 회전교차로·정지 로직 |
+| **양서준** | 경로 추종 / roundabout | `/perception/lane` 기반 PP 등 — **임시 P/EMA와 교체 합류** |
 
-### 완료
+## 인지 (Perception)
 
-| 담당 | 내용 |
-|------|------|
-| 안승현, 박성준 | ArUco 검출·정지 (`detector.py`, `stop_logic.py`) |
-| 안승현 | Gazebo 시뮬 기본 스택 (`dracer_sim`, D-Racer 토픽·트랙) |
-
-## 인지 (Perception) — 모듈 매핑
-
-| 담당 | 모듈 | 파일 | 반환 타입 |
-|------|------|------|-----------|
-| **장원태** | 차선 인지 | `modules/lane_detection.py` | `LaneResult` |
+| 담당 | 모듈 | 파일 | 반환 |
+|------|------|------|------|
+| **장원태** | 차선 인지 | `modules/lane_detection.py` | 모듈 `LaneDetections` → `/perception/lane` |
 | **장원정** | 신호등·표지판 | `modules/traffic_sign.py` | `TrafficResult` |
 | **안승현** | ArUco 검출 | `modules/aruco/detector.py` | `list[int]` |
-| **박성준** | ArUco 정지 판단 | `modules/aruco/stop_logic.py` | `(bool, int \| None)` |
+| **박성준** | ArUco 정지 | `modules/aruco/stop_logic.py` | `(bool, int \| None)` |
 
-## 판단 (Planning)
+## 판단·제어 (Planning / Control)
 
-| 담당 | 모듈 | 파일 | 반환 타입 |
-|------|------|------|-----------|
-| **양서준** | 회전 교차로 | `modules/roundabout.py` | `RoundaboutResult` |
-| **박성준** | (합류) | `modules/roundabout.py` | — |
+| 담당 | 모듈 | 파일 | 비고 |
+|------|------|------|------|
+| **안승현** (임시) | 흰차선 P/EMA | `modules/lane_planner.py` + `lane_control_node.py` | `/perception/lane` → `/control` |
+| **양서준** | PP / 미션 planner | (브랜치) | types/adapters 사용, control 노드 교체 시 합의 |
+| **양서준·박성준** | 회전 교차로 | `modules/roundabout.py` | |
 
 ## 통합 (팀장)
 
 | 파일 | 역할 |
 |------|------|
-| `types.py` | 모듈 간 공통 데이터 타입 |
-| `pipeline.py` | 모듈 호출 + 우선순위 fusion · **모드 전환** 설계 |
-| `inference_node.py` | ROS2 노드 (camera 구독 → /control 발행) |
-| `modules/aruco_detection.py` | ArUco facade (detector + stop_logic) |
+| `types.py` | SSOT dataclass (`LaneDetections` 등) |
+| `lane_adapters.py` | module/msg → types |
+| `pipeline.py` | 단프로세스·테스트 fusion (런타임 기본 경로 아님) |
+| `inference_node.py` | 인지 ROS 노드 |
+| `lane_control_node.py` | 임시 제어 ROS 노드 |
+| `config/lane_*.yaml` | vision/control SSOT |
 
-### 아키텍처 방향 (회의 합의)
-
-- 미션별 **모드 변경** + launch/파라미터 기반 전환 검토
-- 신호등 **빨간불** vs 장애물 미션 **빨간 차로** 혼동 방지 (색·위치·컨텍스트 분리)
-
-## 데이터 흐름
+## 데이터 흐름 (현재 main)
 
 ```
 /camera/image/compressed
         │
         ▼
-  inference_node
+  inference_node          ← 인지만 (lane + aruco)
         │
-        ▼
-  pipeline.run_perception()
-    ├── lane_detection.detect()      → LaneResult
-    ├── traffic_sign.detect()        → TrafficResult
-    ├── aruco_detection.detect()     → ArucoResult
-    └── roundabout.plan()            → RoundaboutResult
-        │
-        ▼
-  pipeline.fuse_control()  → steering, throttle
-        │
-        ▼
-      /control  →  control_node
+        ├─ /perception/lane  (lane_msgs)
+        └─ /debug/aruco
+                │
+                ▼
+        lane_control_node   ← detections_from_msg + lane_planner
+                │
+                ▼
+            /control
+                │
+     ┌──────────┴──────────┐
+     ▼                     ▼
+sim_control_bridge    control_node (실차)
 ```
+
+단프로세스 테스트: `pipeline.run_perception` → adapter → planner → `fuse_control`  
+상세·PR 체크리스트: [lane-perception-topic.md](./lane-perception-topic.md)
 
 ## 검증 환경
 
-| 환경 | 문서 | 비고 |
-|------|------|------|
-| PC Gazebo | [simulation-setup.md](./simulation-setup.md) | CW 트랙, 320×180, D-Racer 토픽 |
-| D3-G 실차 | [board-workflow.md](./board-workflow.md) | 최종 주행 확인 |
-| 교내 트랙 | — | 흰 차선·검은 바닥, 대회와 경로·폭 다름 |
-
-## 하드웨어
-
-| 항목 | 담당 | 설명 |
-|------|------|------|
-| 로봇 조립 | 장원태 | 진행 중 |
-| 카메라 배치 | 미정 | 라인 트레이싱 화각 + 전방 객체 인식 균형 |
-| 외관 디자인 | 미정 | 차량 외관 |
+| 환경 | Launch | 문서 |
+|------|---------|------|
+| PC Gazebo | `sim_auto_driving.launch.py` (인지+제어) | [simulation-setup.md](./simulation-setup.md) |
+| D3-G 실차 | `auto_driving.launch.py` | [board-workflow.md](./board-workflow.md) |

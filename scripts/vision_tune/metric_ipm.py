@@ -73,7 +73,7 @@ class MetricIpmParams:
             y_half_width_m=float(np.clip(self.y_half_width_m, 0.15, 2.0)),
             meters_per_pixel=mpp,
             crop_top_ratio=float(np.clip(self.crop_top_ratio, 0.0, 0.6)),
-            track_width_m=DEFAULT_TRACK_WIDTH_M,
+            track_width_m=float(np.clip(self.track_width_m, 0.2, 0.6)),
         )
 
     def y_half_for_full_image_width(
@@ -150,7 +150,7 @@ def load_metric_ipm(path: Path | None = None) -> MetricIpmParams:
         crop_top_ratio=float(
             block.get('crop_top_ratio', DEFAULT_CROP_TOP_RATIO)
         ),
-        track_width_m=DEFAULT_TRACK_WIDTH_M,
+        track_width_m=float(block.get('track_width_m', DEFAULT_TRACK_WIDTH_M)),
     ).clamp()
     img = data.get('image') or {}
     img_w = int(img.get('width', DEFAULT_IMAGE_WIDTH))

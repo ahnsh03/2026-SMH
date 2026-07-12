@@ -1,10 +1,12 @@
 """
-Autonomous driving inference node.
+Autonomous driving perception node.
 
-Subscribes to camera images, runs perception/planning pipeline, publishes /control.
+Subscribes to camera images, runs lane/aruco perception, publishes:
+  - /perception/lane  (lane_msgs/LaneDetections)
+  - /debug/aruco
 
-Integration is handled in pipeline.py — assignees edit modules/ only.
-See docs/collaboration.md for branch and PR rules.
+Control (/control) is owned by ``lane_control_node`` (temporary P/EMA) or a
+future mission planner. See docs/lane-perception-topic.md.
 
 ArUco 보드 확인:
   ros2 topic echo /debug/aruco
@@ -13,17 +15,14 @@ ArUco 보드 확인:
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import cv2
 import numpy as np
 import rclpy
-import yaml
 from geometry_msgs.msg import Point32
 from lane_msgs.msg import LaneDetections as LaneDetectionsMsg
 from lane_msgs.msg import LaneMarking as LaneMarkingMsg
 from lane_msgs.msg import RoadBranch as RoadBranchMsg
+from pathlib import Path
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
@@ -56,34 +55,24 @@ class InferenceNode(Node):
 
         self.declare_parameter('vehicle_config_file', get_default_vehicle_config_path())
         self.declare_parameter('image_topic', '/camera/image/compressed')
-        self.declare_parameter('control_topic', '/control')
         self.declare_parameter('lane_topic', '/perception/lane')
         self.declare_parameter('aruco_debug_topic', '/debug/aruco')
         self.declare_parameter('aruco_debug_log', True)
-        self.declare_parameter('publish_hz', 10.0)
-        self.declare_parameter('default_throttle', 0.0)
-        self.declare_parameter('cruise_throttle', 0.35)
-        self.declare_parameter('steer_trim', 0.0)
 
-        self.vehicle_config_file = os.path.expanduser(
-            str(self.get_parameter('vehicle_config_file').value)
-        )
         image_topic = str(self.get_parameter('image_topic').value)
-        control_topic = str(self.get_parameter('control_topic').value)
         lane_topic = str(self.get_parameter('lane_topic').value)
         aruco_debug_topic = str(self.get_parameter('aruco_debug_topic').value)
         self.aruco_debug_log = bool(self.get_parameter('aruco_debug_log').value)
-        publish_hz = float(self.get_parameter('publish_hz').value)
-        self.default_throttle = float(self.get_parameter('default_throttle').value)
-        self.cruise_throttle = float(self.get_parameter('cruise_throttle').value)
-        self.steer_trim = float(self.load_steer_trim())
-
-        if publish_hz <= 0.0:
-            raise ValueError('publish_hz must be greater than 0')
 
         image_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        lane_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=5,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
@@ -97,9 +86,8 @@ class InferenceNode(Node):
             self.image_callback,
             image_qos,
         )
-        # 인지 전용 노드: /perception/lane(단일 토픽)만 발행한다.
-        # 조향/제어(/control)는 외부 판단제어 노드가 소유한다.
-        self.lane_pub = self.create_publisher(LaneDetectionsMsg, lane_topic, 10)
+        # 인지 전용: /perception/lane 만 발행. /control 은 lane_control_node.
+        self.lane_pub = self.create_publisher(LaneDetectionsMsg, lane_topic, lane_qos)
         self.aruco_debug_pub = self.create_publisher(String, aruco_debug_topic, 10)
 
         self.get_logger().info(
@@ -201,23 +189,6 @@ class InferenceNode(Node):
         if self.aruco_debug_log and key != self._last_aruco_log_key:
             self.get_logger().info(f'[aruco] {line}')
             self._last_aruco_log_key = key
-
-    def load_steer_trim(self) -> float:
-        param_trim = float(self.get_parameter('steer_trim').value)
-        if param_trim != 0.0:
-            return param_trim
-
-        if not os.path.exists(self.vehicle_config_file):
-            return 0.0
-
-        try:
-            with open(self.vehicle_config_file, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f) or {}
-        except OSError as exc:
-            self.get_logger().warning(f'Failed to read {self.vehicle_config_file}: {exc}')
-            return 0.0
-
-        return float(config.get('STEER_TRIM', 0.0))
 
 
 def main(args=None):

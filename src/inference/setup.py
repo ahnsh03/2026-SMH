@@ -27,6 +27,7 @@ setup(
     entry_points={
         'console_scripts': [
             'inference_node = inference.inference_node:main',
+            'lane_control_node = inference.lane_control_node:main',
         ],
     },
 )
