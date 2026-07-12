@@ -61,7 +61,35 @@ metric_ipm:
     (that is x_max_m). Keep 0.004 unless CPU-bound or you need coarser/finer maps.
 
 hsv:
-  white: null
-  yellow: null
-  black_road: null
-  red_road: null
+  # OpenCV HSV (H 0-179). Tool: scripts/vision_tune/tune_hsv.py
+  # Seed = Won Tae feature/wontae-lane defaults; refine on sim/real then save.
+  white:
+    h_min: 0
+    h_max: 179
+    s_min: 0
+    s_max: 29
+    v_min: 174
+    v_max: 255
+  yellow:
+    h_min: 0
+    h_max: 55
+    s_min: 32
+    s_max: 255
+    v_min: 79
+    v_max: 255
+  black_road:
+    h_min: 0
+    h_max: 179
+    s_min: 0
+    s_max: 255
+    v_min: 0
+    v_max: 30
+  red_road:
+    h_min: 170
+    h_max: 179
+    s_min: 125
+    s_max: 192
+    v_min: 161
+    v_max: 229
+  note: >
+    Sim/real shared via tune_hsv.py. Won Tae may refine final competition values.

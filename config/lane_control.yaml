@@ -1,0 +1,19 @@
+# Lane planner / control gains (Phase 2+)
+# Tuned with: scripts/vision_tune/tune_lane_control.py
+# Sim and real car share this file (same /camera + /control topics).
+
+lookahead_x_m: 0.80
+# Lateral error (m) → steering_offset. D-Racer: +steer = right; y_left positive
+# → steer ≈ -Kp * y_error when centerline is left of vehicle.
+kp: 2.0
+ema_alpha: 0.40
+# Max |Δsteer| per control step (~10 Hz publish).
+steer_rate_limit: 0.15
+max_steer: 1.0
+track_half_width_m: 0.175
+# When |steer| exceeds thresh, multiply throttle by scale.
+steer_slowdown_thresh: 0.50
+steer_slowdown_scale: 0.80
+# Confidence floor when both/one side seen.
+min_confidence: 0.15
+hold_decay: 0.92

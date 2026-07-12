@@ -238,13 +238,17 @@ lane_planner   → path_candidates[] → mode 선택 → LaneResult
 
 ## 7. 구현 단계
 
-| Phase | 내용 | 산출물 | 상태 |
-|-------|------|--------|------|
-| **0** | Metric IPM 튜닝 + 캡처 + 캘리브 매트 | `tune_bev.py`, `lane_vision.yaml`→`metric_ipm`, `bev_calib_mat` | **시뮬 잠정** (`y_half=0.77`, 1.5 m) |
-| **1** | HSV/클릭 피커 | `tune_hsv` | 대기 |
-| **2** | `lane_planner` + 스무딩 · 원태 인지 연동 | Gazebo 단경로 | 대기 |
-| **3** | 분기 이중 경로 + 모드 | 갈림길·교차로 | 대기 |
-| **4** | (선택) PP / Stanley | 제어 교체 | 대기 |
+| Phase | 내용 | 담당 | 산출물 | 상태 |
+|-------|------|------|--------|------|
+| **0** | Metric IPM 튜닝 + 캡처 + 캘리브 매트 | 안승현 | `tune_bev.py`, `metric_ipm`, `bev_calib_mat` | **시뮬 잠정** |
+| **1** | **HSV 공용 튜너** (시뮬·실차) · 값 정밀화는 원태 협업 | **안승현**(툴) / 원태(최종값) | `tune_hsv.py`, `hsv:` yaml | **진행** |
+| **2** | 흰 차선 `lane_planner` + 제어 게인 튜너 | **안승현** | `lane_planner.py`, `tune_lane_control.py`, Gazebo 단경로 | **진행** |
+| **3** | 노란·분기 이중 경로 + 모드 | 안승현 (+원태) | 갈림길·교차로 | 대기 |
+| **4** | (선택) PP / Stanley | 안승현 | 제어 교체 | 대기 |
+
+> Phase 1: 승현이 **시뮬·실차 공용 HSV 트랙바 툴**을 소유하고 yaml에 저장.  
+> 대회용 **정밀 최종값**은 원태가 인지 파이프라인과 맞춰 다듬는다.  
+> 원태 인지 merge 전엔 `lane_detection`에 **흰 차선 임시 스텁**을 두고, merge 후 detection만 교체한다.
 
 ---
 
@@ -252,10 +256,11 @@ lane_planner   → path_candidates[] → mode 선택 → LaneResult
 
 | 경로 | 역할 |
 |------|------|
-| `scripts/vision_tune/` | 트랙바·캡처 |
+| `scripts/vision_tune/` | IPM·캡처·**HSV**·제어 게인 트랙바 |
 | `config/lane_vision.yaml` | ROI/IPM/HSV |
-| `modules/lane_detection.py` | 인지 (장원태) |
-| `modules/lane_planner.py` (가칭) | 경로·조향 (안승현) |
+| `config/lane_control.yaml` | planner P/EMA/rate/look-ahead |
+| `modules/lane_detection.py` | 인지 (장원태; 당분간 흰 스텁) |
+| `modules/lane_planner.py` | 경로·조향 (안승현) |
 
 ---
 
@@ -267,7 +272,8 @@ lane_planner   → path_candidates[] → mode 선택 → LaneResult
 | `tune_metric_ipm.py` | Phase 0 | IPM UI (tune_bev가 호출) |
 | `tune_bev_roi.py` | Phase 0 | 사다리꼴만 (참고) |
 | `capture_camera.py` | Phase 0 | 토픽 캡처 |
-| `tune_hsv.py` | Phase 1 | HSV |
+| **`tune_hsv.py`** | Phase 1 | **시뮬·실차 공용** HSV (흰/노란/검/빨) · 클릭 샘플 |
+| **`tune_lane_control.py`** | Phase 2 | **시뮬·실차 공용** 제어 게인 (P/EMA/rate/cruise/look-ahead) |
 
 ---
 
@@ -296,7 +302,8 @@ wego DL 보류. D-Racer-Kit은 I/O만. F1TENTH/Stanley 관행은 Phase 2–4.
 | Phase | Done when |
 |-------|-----------|
 | 0 | Metric IPM 잠정 SSOT (`y_half=0.77`, 전방 1.5 m) · 사다리꼴 참고 · 캘리브 매트 |
-| 2 | `LaneDetections` → planner → Gazebo 추종 |
+| 1 | `tune_hsv`로 `hsv.white`(및 필요 시 yellow) yaml 저장 · 시뮬 마스크 사용 가능 |
+| 2 | 흰 `LaneDetections` → planner → Gazebo 직선·완만 커브 추종 · `tune_lane_control`로 게인 저장 |
 | 3 | 분기 후보 2개 + 모드 전환 |
 
 ---
@@ -306,4 +313,5 @@ wego DL 보류. D-Racer-Kit은 I/O만. F1TENTH/Stanley 관행은 Phase 2–4.
 1. **인지(원태) / 판단·제어(안승현)** — `LaneDetections` → planner → `LaneResult`  
 2. **BEV SSOT:** Metric IPM (`y_half=0.77`, `x_max=1.5`) · 기본 툴 `tune_bev.py` · 사다리꼴은 참고  
 3. **분기:** 분리 감지 유지 · 원태 단일쌍은 Phase 3 보강  
-4. **순서:** Phase 0 → HSV → planner → 다중경로 → (선택) PP/Stanley  
+4. **순서:** Phase 0 → **HSV 공용 툴(승현) + 흰 planner/제어 튜너(승현)** → 원태 인지 merge → Gazebo closed-loop → 노란·다중경로  
+5. **승현 튜너:** `tune_hsv`(마스크) · `tune_lane_control`(게인). 대회 HSV **최종값**은 원태와 맞춤.  
