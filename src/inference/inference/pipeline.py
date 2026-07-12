@@ -53,5 +53,9 @@ def fuse_control(
 
     steering = steer_trim + ctx.lane.steering_offset
     steering = float(np.clip(steering, -1.0, 1.0))
-    throttle = cruise_throttle if ctx.lane.confidence > 0.1 else default_throttle
+    if ctx.lane.confidence > 0.1:
+        scale = float(np.clip(ctx.lane.throttle_scale, 0.0, 1.0))
+        throttle = cruise_throttle * scale
+    else:
+        throttle = default_throttle
     return ControlCommand(steering=steering, throttle=throttle)
