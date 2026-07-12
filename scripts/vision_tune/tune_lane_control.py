@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
-"""Live control-gain tuner for single-color lane planner (sim / real).
+"""Live Pure Pursuit gain tuner for lane planner (sim / real).
 
-Trackbars adjust planner gains in real time. With ``--drive``, also publishes
-``/control`` so you can tune while the car moves (do **not** run
-``inference_node`` at the same time).
+Trackbars adjust PP geometry + smoothing in real time. With ``--drive``, also
+publishes ``/control`` (do **not** run ``lane_control_node`` / ``inference_node``
+control at the same time — camera + this tuner is enough for drive tune).
 
-Smoothing chain (verified in ``lane_planner.step``):
-  raw = -Kp * y_error  →  EMA(α)  →  rate-limit(|Δ|/step)  →  steering
+Chain:
+  PP(δ = atan(2 L sinα / Ld)) → EMA(α) → rate-limit → steering∈[-1,1]
 
-Early curve cut → lower lookahead_cm.
-S-curve exit / understeer → raise rate_x100 and max_steer_%, lower cruise_%.
-Speed → cruise_% trackbar (live in --drive).
+Sim geometry defaults = LIMO Gazebo (L=0.24 m, δ_max=±30°).
+D-Racer: measure L / δ_max before retuning (docs/vehicle-geometry.md §4.1).
 
 Examples (inside 2026-smh-sim):
 
   source /opt/ros/humble/setup.bash
-  source /workspace/install/setup.bash   # if built
-
   python3 scripts/vision_tune/tune_lane_control.py --drive
-  python3 scripts/vision_tune/tune_lane_control.py --drive --color yellow
 
-Keys: s=save YAML  r=reset planner  space=pause throttle(drive)  q/ESC=quit(+stop)
+Keys: s=save  r=reset  w=reposition windows  space=pause(drive)  q/ESC=quit(+stop)
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -46,8 +43,9 @@ from metric_ipm import (  # noqa: E402
     load_metric_ipm,
     warp_metric_ipm,
 )
+from window_layout import place_windows  # noqa: E402
+from inference.lane_adapters import detections_from_module  # noqa: E402
 from inference.modules import lane_detection  # noqa: E402
-from inference.modules.lane_detection import detect_markings  # noqa: E402
 from inference.modules.lane_planner import (  # noqa: E402
     LaneControlParams,
     LanePlanner,
@@ -64,6 +62,15 @@ WIN_BEV = 'lane_ctrl_bev'
 WIN_CTRL = 'lane_ctrl_controls'
 PREVIEW_W = 640
 PREVIEW_H = 360
+CTRL_W, CTRL_H = 520, 460
+
+
+def _place_ui() -> None:
+    place_windows(
+        (WIN_ORIGIN, WIN_BEV, WIN_CTRL),
+        widths=(PREVIEW_W, PREVIEW_W, CTRL_W),
+        heights=(PREVIEW_H, PREVIEW_H, CTRL_H),
+    )
 
 
 def _list_images(folder: Path) -> list[Path]:
@@ -89,11 +96,13 @@ class TrackbarState:
         self.params = params.clamp()
         self.cruise = cruise
         self.paused = False
+        self._did_place = False
 
     def sync_from_trackbars(self) -> LaneControlParams:
         cruise_pct = cv2.getTrackbarPos('cruise_%', WIN_CTRL)
         la_cm = cv2.getTrackbarPos('lookahead_cm', WIN_CTRL)
-        kp_x10 = cv2.getTrackbarPos('kp_x10', WIN_CTRL)
+        wb_cm = cv2.getTrackbarPos('wheelbase_cm', WIN_CTRL)
+        max_deg = cv2.getTrackbarPos('max_steer_deg', WIN_CTRL)
         ema_pct = cv2.getTrackbarPos('ema_%', WIN_CTRL)
         rate_x100 = cv2.getTrackbarPos('rate_x100', WIN_CTRL)
         max_pct = cv2.getTrackbarPos('max_steer_%', WIN_CTRL)
@@ -105,7 +114,9 @@ class TrackbarState:
         self.cruise = max(cruise_pct, 0) / 100.0
         self.params = LaneControlParams(
             lookahead_x_m=max(la_cm, 30) / 100.0,
-            kp=max(kp_x10, 1) / 10.0,
+            wheelbase_m=max(wb_cm, 10) / 100.0,
+            max_steer_angle_rad=math.radians(max(max_deg, 10)),
+            lookahead_gain=self.params.lookahead_gain,
             ema_alpha=max(ema_pct, 5) / 100.0,
             steer_rate_limit=max(rate_x100, 1) / 100.0,
             max_steer=max(max_pct, 10) / 100.0,
@@ -125,16 +136,24 @@ def _init_ui(state: TrackbarState) -> None:
     cv2.namedWindow(WIN_BEV, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(WIN_BEV, PREVIEW_W, PREVIEW_H)
     cv2.namedWindow(WIN_CTRL, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WIN_CTRL, 520, 420)
+    cv2.resizeWindow(WIN_CTRL, CTRL_W, CTRL_H)
+    _place_ui()
     p = state.params
-    # Speed first — used immediately in --drive.
     cv2.createTrackbar('cruise_%', WIN_CTRL, int(round(state.cruise * 100)), 100, lambda *_: None)
     cv2.createTrackbar(
         'lookahead_cm', WIN_CTRL, int(round(p.lookahead_x_m * 100)), 150, lambda *_: None
     )
-    cv2.createTrackbar('kp_x10', WIN_CTRL, int(round(p.kp * 10)), 80, lambda *_: None)
+    cv2.createTrackbar(
+        'wheelbase_cm', WIN_CTRL, int(round(p.wheelbase_m * 100)), 40, lambda *_: None
+    )
+    cv2.createTrackbar(
+        'max_steer_deg',
+        WIN_CTRL,
+        int(round(math.degrees(p.max_steer_angle_rad))),
+        45,
+        lambda *_: None,
+    )
     cv2.createTrackbar('ema_%', WIN_CTRL, int(round(p.ema_alpha * 100)), 100, lambda *_: None)
-    # Allow up to 0.50 / frame so continuous curves can build steer quickly.
     cv2.createTrackbar(
         'rate_x100', WIN_CTRL, int(round(p.steer_rate_limit * 100)), 50, lambda *_: None
     )
@@ -182,6 +201,15 @@ def _draw_polyline_bev(
     cv2.polylines(bev, [pts], False, color, 2, cv2.LINE_AA)
 
 
+def _detect_types(frame: np.ndarray):
+    mod = lane_detection.detect(frame)
+    return detections_from_module(
+        mod,
+        meters_per_pixel=float(getattr(lane_detection, 'METERS_PER_PIXEL', 0.0) or 0.0),
+        x_forward_max=float(getattr(lane_detection, 'X_MAX_M', 0.0) or 0.0),
+    )
+
+
 def _show_frame(
     frame: np.ndarray,
     state: TrackbarState,
@@ -190,13 +218,12 @@ def _show_frame(
     """Update UI; return (steering, throttle) for optional /control publish."""
     params = state.sync_from_trackbars()
     planner.set_params(params)
-    lane_detection.set_follow_color(params.follow_color)
 
     ipm = load_metric_ipm(_REPO_ROOT / 'config' / 'lane_vision.yaml')
     bev = warp_metric_ipm(frame, ipm)
     bev_vis = draw_metric_guides(bev, ipm)
 
-    dets = detect_markings(frame, follow_color=params.follow_color)
+    dets = _detect_types(frame)
     result = plan(dets, planner)
     dbg = planner.last_debug
 
@@ -220,8 +247,10 @@ def _show_frame(
     if y_c is not None:
         u = int(round((ipm.y_half_width_m - y_c) / ipm.meters_per_pixel))
         v = int(round((ipm.x_max_m - params.lookahead_x_m) / ipm.meters_per_pixel))
-        cv2.circle(bev_vis, (u, v), 6, (0, 255, 0), -1)
-        cv2.line(bev_vis, (0, v), (bev_vis.shape[1] - 1, v), (0, 255, 0), 1)
+        # PP target point (green) + look-ahead row
+        cv2.circle(bev_vis, (u, v), 7, (0, 255, 0), -1)
+        cv2.line(bev_vis, (bev_vis.shape[1] // 2, bev_vis.shape[0] - 1), (u, v), (0, 255, 0), 1)
+        cv2.line(bev_vis, (0, v), (bev_vis.shape[1] - 1, v), (0, 180, 0), 1)
 
     origin = draw_crop_overlay(frame, ipm)
     h, w = origin.shape[:2]
@@ -234,7 +263,6 @@ def _show_frame(
         else:
             cv2.rectangle(origin, (mid - bar_w, y0), (mid, y1), col, -1)
 
-    # raw (cyan) / ema (magenta) / out (orange) — proves smoothing chain
     _bar(float(dbg.get('raw', 0.0)), h - 54, h - 42, (255, 255, 0))
     _bar(float(dbg.get('ema', 0.0)), h - 40, h - 28, (255, 0, 255))
     _bar(result.steering_offset, h - 26, h - 10, (0, 165, 255))
@@ -245,9 +273,11 @@ def _show_frame(
     mode = 'DRIVE' if state.cruise > 0 else 'VIEW'
     if state.paused:
         mode = 'PAUSED'
+    alpha_deg = math.degrees(float(dbg.get('alpha', 0.0)))
+    delta_deg = math.degrees(float(dbg.get('delta', 0.0)))
     cv2.putText(
         origin,
-        f'[{mode}] {params.follow_color}  steer={result.steering_offset:+.2f}  '
+        f'[{mode}] PP {params.follow_color}  steer={result.steering_offset:+.2f}  '
         f'conf={result.confidence:.2f}  thr={throttle:.2f}',
         (8, 20),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -258,33 +288,35 @@ def _show_frame(
     )
     cv2.putText(
         origin,
-        f'smooth raw={dbg.get("raw", 0):+.2f} → ema={dbg.get("ema", 0):+.2f} '
-        f'→ out={result.steering_offset:+.2f}  y_c={dbg.get("y_c", float("nan")):+.3f}m',
+        f'α={alpha_deg:+.1f}° δ={delta_deg:+.1f}°  '
+        f'raw={dbg.get("raw", 0):+.2f}→ema={dbg.get("ema", 0):+.2f}→out '
+        f'y_c={dbg.get("y_c", float("nan")):+.3f}m',
         (8, 42),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.42,
+        0.40,
         (200, 255, 200),
         1,
         cv2.LINE_AA,
     )
     cv2.putText(
         bev_vis,
-        f'kp={params.kp:.1f} ema={params.ema_alpha:.2f} '
-        f'rate={params.steer_rate_limit:.2f} max={params.max_steer:.2f} '
-        f'la={params.lookahead_x_m:.2f}m cruise={state.cruise:.2f}',
+        f'Ld={params.lookahead_x_m:.2f} L={params.wheelbase_m:.2f} '
+        f'dmax={math.degrees(params.max_steer_angle_rad):.0f}° '
+        f'ema={params.ema_alpha:.2f} rate={params.steer_rate_limit:.2f} '
+        f'cruise={state.cruise:.2f}',
         (8, 20),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
+        0.38,
         (0, 255, 255),
         1,
         cv2.LINE_AA,
     )
     cv2.putText(
         bev_vis,
-        'S-curve exit? ↑rate_x100 + ↑max_steer_% ; early cut? ↓lookahead',
+        'green=PP target  early cut? ↓Ld  understeer? ↑rate / ↑max_steer_%',
         (8, 40),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.38,
+        0.36,
         (180, 220, 255),
         1,
         cv2.LINE_AA,
@@ -292,7 +324,30 @@ def _show_frame(
 
     cv2.imshow(WIN_ORIGIN, _scale_to_preview(origin))
     cv2.imshow(WIN_BEV, _scale_to_preview(bev_vis))
+    if not state._did_place:
+        _place_ui()
+        state._did_place = True
     return float(result.steering_offset), float(throttle)
+
+
+def _handle_common_keys(
+    key: int,
+    state: TrackbarState,
+    planner: LanePlanner,
+    config_path: Path,
+) -> str | None:
+    if key in (ord('q'), 27):
+        return 'quit'
+    if key == ord('s'):
+        state.sync_from_trackbars()
+        print(f'Saved control → {save_control_params(state.params, config_path)}')
+    if key == ord('r'):
+        planner.reset()
+        print('Planner state reset')
+    if key == ord('w'):
+        _place_ui()
+        print('Windows repositioned on-screen')
+    return None
 
 
 def run_folder(folder: Path, state: TrackbarState, config_path: Path) -> int:
@@ -306,18 +361,13 @@ def run_folder(folder: Path, state: TrackbarState, config_path: Path) -> int:
     planner = LanePlanner(state.params)
     _init_ui(state)
     idx = 0
-    print('Keys: s=save  r=reset  n/p=next/prev  q=quit')
+    print('Keys: s=save  r=reset  w=reposition  n/p  q=quit')
     while True:
         _show_frame(frames[idx], state, planner)
         key = cv2.waitKey(30) & 0xFF
-        if key in (ord('q'), 27):
+        action = _handle_common_keys(key, state, planner, config_path)
+        if action == 'quit':
             break
-        if key == ord('s'):
-            state.sync_from_trackbars()
-            print(f'Saved control → {save_control_params(state.params, config_path)}')
-        if key == ord('r'):
-            planner.reset()
-            print('Planner state reset')
         if key == ord('n') and len(frames) > 1:
             idx = (idx + 1) % len(frames)
         if key == ord('p') and len(frames) > 1:
@@ -365,7 +415,7 @@ def run_topic(
             if drive:
                 self.control_pub = self.create_publisher(Control, control_topic, 10)
             self.get_logger().info(
-                f'Live lane-control tune on {topic}'
+                f'Live PP tune on {topic}'
                 + (f'  DRIVE→{control_topic}' if drive else '  (view only)')
             )
 
@@ -395,11 +445,11 @@ def run_topic(
     node = CtrlTuneNode()
     if drive:
         print(
-            'DRIVE mode: publishes /control. Do NOT run inference_node.\n'
-            'Keys: s=save  r=reset  space=pause throttle  q=quit(+stop)'
+            'DRIVE mode: publishes /control. Stop lane_control_node first.\n'
+            'Keys: s=save  r=reset  w=reposition  space=pause  q=quit(+stop)'
         )
     else:
-        print('VIEW mode (no /control). Keys: s=save  r=reset  q=quit')
+        print('VIEW mode (no /control). Keys: s=save  r=reset  w=reposition  q=quit')
         print('For live drive tuning: add --drive')
     try:
         while rclpy.ok():
@@ -409,14 +459,9 @@ def run_topic(
                 if drive:
                     node.publish_cmd(steer, thr)
             key = cv2.waitKey(1) & 0xFF
-            if key in (ord('q'), 27):
+            action = _handle_common_keys(key, state, planner, config_path)
+            if action == 'quit':
                 break
-            if key == ord('s'):
-                state.sync_from_trackbars()
-                print(f'Saved control → {save_control_params(state.params, config_path)}')
-            if key == ord('r'):
-                planner.reset()
-                print('Planner state reset')
             if key == ord(' ') and drive:
                 state.paused = not state.paused
                 if state.paused:
@@ -437,7 +482,7 @@ def run_topic(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description='Tune lane planner gains (optional live /control drive)'
+        description='Tune Pure Pursuit lane planner (optional live /control drive)'
     )
     parser.add_argument(
         '--topic',
@@ -465,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         '--drive',
         action='store_true',
-        help='Publish /control while tuning (stop inference_node first)',
+        help='Publish /control while tuning (stop lane_control_node first)',
     )
     parser.add_argument(
         '--control-topic',
@@ -485,7 +530,6 @@ def main(argv: list[str] | None = None) -> int:
         params.follow_color = args.color
         params = params.clamp()
     state = TrackbarState(params, cruise=args.cruise)
-    lane_detection.set_follow_color(params.follow_color)
 
     if args.folder is not None:
         return run_folder(args.folder, state, args.config)

@@ -35,7 +35,7 @@
 
 | 담당 | 모듈 | 파일 | 비고 |
 |------|------|------|------|
-| **안승현** (임시) | 흰차선 P/EMA | `modules/lane_planner.py` + `lane_control_node.py` | `/perception/lane` → `/control` |
+| **안승현** (임시) | 흰차선 Pure Pursuit | `modules/lane_planner.py` + `lane_control_node.py` | `/perception/lane` → `/control` |
 | **양서준** | PP / 미션 planner | (브랜치) | types/adapters 사용, control 노드 교체 시 합의 |
 | **양서준·박성준** | 회전 교차로 | `modules/roundabout.py` | |
 

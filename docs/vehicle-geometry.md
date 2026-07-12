@@ -17,11 +17,12 @@
 | 항목 | D-Racer (실차) | LIMO (공식 매뉴얼) | LIMO Gazebo (`vendor/limo_car`) |
 |------|----------------|--------------------|----------------------------------|
 | 구동 / 조향 | RC **서보 조향 + ESC** (Ackermann) | **허브모터 4WD + Ackermann** | `gazebo_ros_ackermann_drive` |
-| 휠베이스 \(L\) | **~174 mm** (PiRacer Pro 계열 FAQ) | **200 mm** | **240 mm** (`ackermann.xacro`) |
-| 트레드 \(T\) | 미공개 (전폭 ~140 mm → 트레드 더 작음) | **175 mm** | **168 mm** |
+| 휠베이스 \(L\) | **175 mm** (팀 실측 2026-07-12) | **200 mm** | **240 mm** (`ackermann.xacro`) |
+| 트레드 \(T\) | **120 mm** (팀 실측, 좌·우 **바퀴 중심** 간) | **175 mm** | **168 mm** |
 | 외형 (대략) | ~255×140×215 mm | 322×220×251 mm | URDF 베이스 ~190×310×120 |
-| 최대 조향각 | 서보 PWM 범위 의존 (문서화 없음) | \(R_\min=0.4\,\mathrm{m}\) 역산 ≈ **27°** | **±30°** (`0.5236` rad) |
-| 최소 선회반경 | 미공개 (≈ \(L/\tan\delta\)) | **0.4 m** | ≈ **0.42 m** (\(0.24/\tan 30^\circ\)) |
+| 최대 조향각 | **±17.5°** (팀 실측, PP SSOT) | \(R_\min=0.4\,\mathrm{m}\) 역산 ≈ **27°** | **±30°** (`0.5236` rad) |
+| 최소 선회반경 | **0.535 m** (지름 107 cm 실측) | **0.4 m** | ≈ **0.42 m** (\(0.24/\tan 30^\circ\)) |
+| 카메라 | **h=0.13 m, pitch↓10°** (시뮬과 동일 맞춤) | — | 동일 마운트 스펙 |
 | 최대 속도 | ESC·배터리 의존 (고속 RC) | **~1 m/s** | 브릿지 `max_linear_speed: 1.2` |
 | 질량 | 경량 RC (~1–2 kg대) | ~4.8 kg | URDF `base_mass` 4.34 kg |
 | `/control` 부호 | −1=좌 / +1=우 | — | 동일 규약 → Gazebo 좌(+)로 **부호 반전** |
@@ -30,7 +31,9 @@
 
 | 값 | 출처 |
 |----|------|
-| D-Racer 휠베이스 ~174.1 mm, 전폭 ~140 mm | [Waveshare PiRacer Pro FAQ](https://www.waveshare.com/wiki/PiRacer_Pro_AI_Kit) (키트 차체가 동일 계열) |
+| D-Racer \(L=175\) mm, \(T=120\) mm | 팀 실측 2026-07-12 (안승현) |
+| D-Racer \(\delta_{\max}=17.5°\), \(R_{\min}=0.535\) m (⌀107 cm) | 팀 실측 2026-07-12 — 교차검증 ~3.7% (아래 §4.1) |
+| D-Racer 카메라 h=0.13 m / pitch 10° | 시뮬과 동일하게 기구 맞춤 (IPM yaml 유지) |
 | LIMO \(L=200\), \(T=175\), \(R_\min=0.4\) m | AgileX LIMO 사용자 매뉴얼 |
 | Gazebo \(L=0.24\), \(T=0.168\), \(\delta_\max=30^\circ\) | `vendor/limo_car/gazebo/ackermann.xacro`, `src/dracer_sim/config/control_bridge.yaml` |
 | D-Racer 액추에이터·PWM | [hardware-board.md](./hardware-board.md) §5 |
@@ -45,10 +48,10 @@
 \kappa \approx \frac{\tan\delta}{L},\quad R \approx \frac{L}{\tan\delta}
 \]
 
-- D-Racer \(L\approx0.174\) m vs LIMO 시뮬 \(L=0.24\) m → **휠베이스 약 1.4배**.
+- D-Racer \(L=0.175\) m vs LIMO 시뮬 \(L=0.24\) m → **휠베이스 약 1.37배**.
 - **같은 조향각**이면 LIMO 쪽 선회가 더 완만하다.
 - **같은 곡률**을 내려면 LIMO가 더 큰 \(\delta\)가 필요하다.
-- 트레드는 LIMO가 넓어 내·외륜 조향각 차(Ackermann angle)가 다르다. 순수 bicycle만 쓰면 영향은 작지만, 슬립·내외륜 속도 차가 커지면 체감된다.
+- 트레드도 D-Racer \(T=0.12\) m vs LIMO 시뮬 \(0.168\) m로 좁다. 순수 bicycle PP에는 \(T\)가 안 들어가지만, 슬립·내외륜 차가 커지면 체감된다.
 
 ### 2.2 액추에이터 의미
 
@@ -90,6 +93,71 @@ LIMO는 무겁고 저속(~1 m/s), D-Racer는 가볍고 ESC 기반이라 가속·
 4. `STEER_TRIM`(`vehicle_config.yaml`)은 기하가 아니라 **기구/서보 중립 오프셋** 보정용이다.
 5. 최종 검증은 보드에서 `./scripts/board_sync.sh` 후 실차 주행으로 한다.
 
+### 4.1 Pure Pursuit용 D-Racer 실측 현황
+
+| 항목 | 상태 | 값 |
+|------|------|-----|
+| 휠베이스 \(L\) | ✅ | **0.175 m** |
+| 트레드 \(T\) | ✅ (바퀴 중심 간) | **0.120 m** |
+| 카메라 높이·피치 | ✅ 시뮬과 동일 | **0.13 m / 10° down** |
+| \(\delta_{\max}\) | ✅ 타이어각 직접 | **17.5°** → `max_steer_angle_rad ≈ 0.3054` |
+| \(R_{\min}\) | ✅ 원 지름 107 cm | **0.535 m** (반지름) |
+| `steering=±1` ↔ 타이어각 | ✅ 풀락 = \(\delta_{\max}\) | ±1 ↔ ±17.5° |
+
+**교차검증:** \(L/\tan 17.5° \approx 0.555\) m vs 실측 \(R_{\min}=0.535\) m (**약 3.7%**).  
+\(R\)에서 역산 \(\delta \approx 18.1°\). 슬립·내외륜 각 차·측정점(전/후축) 오차로 자연스러운 수준.  
+PP 정규화에는 **직접 잰 \(\delta_{\max}=17.5°\)** 를 쓴다.
+
+`config/lane_control.yaml` 숫자 기본은 **시뮬(LIMO)** 유지. 실차 보드에서는:
+
+```text
+wheelbase_m: 0.175
+max_steer_angle_rad: 0.3054   # 17.5°
+```
+
+**트레드:** 좌·우 바퀴 **중심** 사이 횡거리 (전폭 아님). 12 cm OK.
+
+### 4.2 \(\delta_{\max}\) · \(R_{\min}\) · 실제 타이어각 — 측정 방법
+
+셋은 한 관계로 묶인다 (후륜 중심 기준 bicycle):
+
+\[
+R_{\min} \approx \frac{L}{\tan\delta_{\max}},\qquad
+\delta_{\max} \approx \arctan\!\left(\frac{L}{R_{\min}}\right)
+\]
+
+\(L=0.175\) m일 때 예: \(\delta_{\max}=25°\) → \(R_{\min}\approx0.375\) m, \(30°\) → \(\approx0.303\) m.
+
+**방법 A — 타이어각 직접 (추천, 정확)**
+
+1. 차 정지, 조향을 `/control`로 `steering=+1.0`(풀락 우) 고정. (보드에서 조이스틱 풀락도 가능)
+2. 전륜 **한 쪽**(보통 외측 또는 평균용으로 좌·우 둘 다) 위에서 내려다보고, 차체 전진축(직진 때 휠면) 대비 타이어 면이 돌아간 각을 잰다.
+   - 쉬운 방법: 종이/자를 차체 세로축에 맞추고, 다른 자를 휠 면에 붙인 뒤 각도기·스마트폰 각도 앱.
+3. `steering=-1.0`도 반복 → 좌·우 \(\delta\)의 평균을 \(\delta_{\max}\)로 씀.
+4. 가능하면 `steering=0, ±0.5, ±1.0`에서 각을 찍어 **정규화 조향 ↔ °** 표를 만든다 (중간이 선형인지 확인).
+
+**방법 B — 최소 선회반경 \(R_{\min}\) (공간만 있으면 쉬움)**
+
+1. 평평한 바닥에 분필/테이프.
+2. 조향 풀락(`±1`) 유지, **아주 느리게** 한 바퀴(또는 반원) 돌린다. (고속·슬립 금지)
+3. 궤적 원의 **중심 → 후축 중심**(또는 차체 중심)까지 반지름을 잰다. 그게 \(R_{\min}\).
+   - 앞바퀴 자국만 보이면: 후축이 그리는 원이 더 작다. 가능하면 후륜 자국 기준.
+4. \(\delta_{\max} = \arctan(L / R_{\min})\) (라디안; 도는 `degrees`).
+
+**방법 C — 둘 다 해서 교차검증**
+
+A로 \(\delta\)를 재고 B로 \(R\)를 재면 \(R \approx L/\tan\delta\)와 비슷한지 확인. 슬립·Ackermann(내외륜 각 다름) 때문에 10~20% 어긋날 수 있음 → PP에는 **A의 \(\delta_{\max}\)**를 `max_steer_angle_rad`에 넣는 편이 낫다.
+
+**실차에 넣을 값 (2026-07-12 실측 반영)**
+
+```text
+wheelbase_m: 0.175
+max_steer_angle_rad: 0.3054   # δ_max = 17.5°
+# R_min measured 0.535 m (diameter 107 cm) — cross-check only
+```
+
+시뮬 YAML 기본(0.24 / 0.5236)은 그대로 두고, 보드 `lane_control` 파라미터만 덮어쓰면 된다.
+
 ---
 
 ## 5. 코드·설정 위치
@@ -99,4 +167,5 @@ LIMO는 무겁고 저속(~1 m/s), D-Racer는 가볍고 ESC 기반이라 가속·
 | 브릿지 최대 조향·속도·휠베이스 | `src/dracer_sim/config/control_bridge.yaml` |
 | Control → Twist 매핑 | `src/dracer_sim/dracer_sim/control_mapping.py` |
 | Gazebo 휠베이스·트레드·조향 한도 | `vendor/limo_car/gazebo/ackermann.xacro` |
+| **PP 기하·게인 (시뮬 기본)** | `config/lane_control.yaml` (`wheelbase_m`, `max_steer_angle_rad`, `lookahead_x_m`) |
 | 실차 트림 | `config/vehicle_config.yaml` → `STEER_TRIM` |

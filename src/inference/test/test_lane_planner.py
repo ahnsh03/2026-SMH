@@ -1,7 +1,8 @@
-"""Unit tests for white-lane planner (no ROS / camera required)."""
+"""Unit tests for Pure Pursuit lane planner (no ROS / camera required)."""
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from inference.modules.lane_planner import (  # noqa: E402
     LanePlanner,
     centerline_y_at_lookahead,
     mock_white_lane,
+    pure_pursuit_steer,
 )
 from inference.pipeline import fuse_control  # noqa: E402
 from inference.types import LaneDetections, LaneResult, PipelineContext  # noqa: E402
@@ -35,9 +37,53 @@ def test_centerline_offset_right_of_vehicle():
     assert y_c < -0.05
 
 
+def test_pp_straight_zero_steer():
+    raw, alpha, delta = pure_pursuit_steer(
+        0.8,
+        0.0,
+        wheelbase_m=0.24,
+        lookahead_m=0.8,
+        max_steer_angle_rad=0.5236,
+    )
+    assert abs(raw) < 1e-6
+    assert abs(alpha) < 1e-6
+    assert abs(delta) < 1e-6
+
+
+def test_pp_left_target_negative_steer():
+    """Target left (y>0) → negative /control steering (D-Racer left)."""
+    raw, alpha, _delta = pure_pursuit_steer(
+        0.8,
+        0.15,
+        wheelbase_m=0.24,
+        lookahead_m=0.8,
+        max_steer_angle_rad=0.5236,
+    )
+    assert alpha > 0.0
+    assert raw < 0.0
+
+
+def test_pp_shorter_ld_stronger_steer():
+    soft, _, _ = pure_pursuit_steer(
+        1.2,
+        0.12,
+        wheelbase_m=0.24,
+        lookahead_m=1.2,
+        max_steer_angle_rad=0.5236,
+    )
+    hard, _, _ = pure_pursuit_steer(
+        0.5,
+        0.12,
+        wheelbase_m=0.24,
+        lookahead_m=0.5,
+        max_steer_angle_rad=0.5236,
+    )
+    assert abs(hard) > abs(soft)
+
+
 def test_planner_steer_sign_d_racer():
     """Centerline left (y>0) → negative steering (left). Center right → +steer."""
-    params = LaneControlParams(kp=2.0, ema_alpha=1.0, steer_rate_limit=1.0)
+    params = LaneControlParams(ema_alpha=1.0, steer_rate_limit=1.0)
     planner = LanePlanner(params)
 
     left_of_car = mock_white_lane(y_left=0.30, y_right=-0.05)
@@ -95,12 +141,31 @@ def test_hold_decay_when_lost():
     assert abs(lost.steering_offset) < abs(first.steering_offset)
 
 
+def test_larger_wheelbase_less_normalized_steer_for_same_curvature_path():
+    """Same target geometry: larger L → larger |δ|, but we normalize by δ_max.
+    With fixed δ_max, larger L yields larger |raw| until sat.
+    """
+    small_l, _, d_s = pure_pursuit_steer(
+        0.8, 0.1, wheelbase_m=0.174, lookahead_m=0.8, max_steer_angle_rad=0.5236
+    )
+    large_l, _, d_l = pure_pursuit_steer(
+        0.8, 0.1, wheelbase_m=0.24, lookahead_m=0.8, max_steer_angle_rad=0.5236
+    )
+    assert abs(d_l) > abs(d_s)
+    assert abs(large_l) > abs(small_l)
+    assert math.isfinite(small_l) and math.isfinite(large_l)
+
+
 if __name__ == '__main__':
     test_centerline_straight_zero()
     test_centerline_offset_right_of_vehicle()
+    test_pp_straight_zero_steer()
+    test_pp_left_target_negative_steer()
+    test_pp_shorter_ld_stronger_steer()
     test_planner_steer_sign_d_racer()
     test_planner_one_side_left_only()
     test_fuse_throttle_scale()
     test_yellow_follow_centerline()
     test_hold_decay_when_lost()
+    test_larger_wheelbase_less_normalized_steer_for_same_curvature_path()
     print('ok')

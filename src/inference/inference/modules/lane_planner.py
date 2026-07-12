@@ -1,12 +1,16 @@
-"""Single-color path select + P/EMA steering — 담당: 안승현.
+"""Single-color path select + Pure Pursuit steering — 담당: 안승현.
 
 Consumes perception ``LaneDetections`` for **one** follow color at a time
 (white default, or yellow). No HSV / IPM / auto color switching here.
+
+Sim defaults use **LIMO Gazebo** bicycle geometry (``wheelbase_m=0.24``,
+``max_steer_angle_rad=0.5236``). D-Racer real-car values differ — see
+``docs/vehicle-geometry.md`` and TODO comments in ``config/lane_control.yaml``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +18,10 @@ import numpy as np
 import yaml
 
 from inference.types import LaneDetections, LaneMarking, LaneResult
+
+# LIMO Gazebo Ackermann (sim SSOT). Do NOT copy blindly to D-Racer.
+_SIM_WHEELBASE_M = 0.24
+_SIM_MAX_STEER_RAD = 0.5236  # ±30°
 
 
 def _normalize_follow_color(color: str | None) -> str:
@@ -44,8 +52,17 @@ def default_control_config_path() -> Path:
 
 @dataclass
 class LaneControlParams:
+    """Pure Pursuit + output smoothing.
+
+    ``lookahead_x_m`` is the geometric look-ahead distance Ld [m].
+    ``wheelbase_m`` / ``max_steer_angle_rad`` are bicycle-model geometry.
+    """
+
     lookahead_x_m: float = 0.80
-    kp: float = 2.0
+    wheelbase_m: float = _SIM_WHEELBASE_M
+    max_steer_angle_rad: float = _SIM_MAX_STEER_RAD
+    # If >0 and speed_mps known later: L_d = clip(gain * v, min, max). 0 = fixed.
+    lookahead_gain: float = 0.0
     ema_alpha: float = 0.40
     steer_rate_limit: float = 0.15
     max_steer: float = 1.0
@@ -54,13 +71,14 @@ class LaneControlParams:
     steer_slowdown_scale: float = 0.80
     min_confidence: float = 0.15
     hold_decay: float = 0.92
-    # Single-color mode only (white | yellow). No auto switch.
     follow_color: str = 'white'
 
     def clamp(self) -> LaneControlParams:
         return LaneControlParams(
             lookahead_x_m=float(np.clip(self.lookahead_x_m, 0.3, 1.5)),
-            kp=float(np.clip(self.kp, 0.1, 8.0)),
+            wheelbase_m=float(np.clip(self.wheelbase_m, 0.10, 0.40)),
+            max_steer_angle_rad=float(np.clip(self.max_steer_angle_rad, 0.15, 0.80)),
+            lookahead_gain=float(np.clip(self.lookahead_gain, 0.0, 5.0)),
             ema_alpha=float(np.clip(self.ema_alpha, 0.05, 1.0)),
             steer_rate_limit=float(np.clip(self.steer_rate_limit, 0.01, 1.0)),
             max_steer=float(np.clip(self.max_steer, 0.1, 1.0)),
@@ -83,7 +101,11 @@ def load_control_params(path: Path | None = None) -> LaneControlParams:
             data = loaded
     return LaneControlParams(
         lookahead_x_m=float(data.get('lookahead_x_m', 0.80)),
-        kp=float(data.get('kp', 2.0)),
+        wheelbase_m=float(data.get('wheelbase_m', _SIM_WHEELBASE_M)),
+        max_steer_angle_rad=float(
+            data.get('max_steer_angle_rad', _SIM_MAX_STEER_RAD)
+        ),
+        lookahead_gain=float(data.get('lookahead_gain', 0.0)),
         ema_alpha=float(data.get('ema_alpha', 0.40)),
         steer_rate_limit=float(data.get('steer_rate_limit', 0.15)),
         max_steer=float(data.get('max_steer', 1.0)),
@@ -102,7 +124,9 @@ def save_control_params(params: LaneControlParams, path: Path | None = None) -> 
     payload = {
         'follow_color': p.follow_color,
         'lookahead_x_m': p.lookahead_x_m,
-        'kp': p.kp,
+        'wheelbase_m': p.wheelbase_m,
+        'max_steer_angle_rad': p.max_steer_angle_rad,
+        'lookahead_gain': p.lookahead_gain,
         'ema_alpha': p.ema_alpha,
         'steer_rate_limit': p.steer_rate_limit,
         'max_steer': p.max_steer,
@@ -114,8 +138,10 @@ def save_control_params(params: LaneControlParams, path: Path | None = None) -> 
     }
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with cfg_path.open('w', encoding='utf-8') as f:
-        f.write('# Lane planner / control gains (Phase 2+)\n')
+        f.write('# Lane planner / Pure Pursuit gains (Phase 2+)\n')
         f.write('# Tuned with: scripts/vision_tune/tune_lane_control.py\n')
+        f.write('# Sim defaults = LIMO Gazebo (wheelbase 0.24 m, δ_max ±30°).\n')
+        f.write('# D-Racer: measure L / δ_max (or R_min) before retuning — see vehicle-geometry.md\n')
         f.write('# follow_color: white | yellow (single mode; no auto switch)\n')
         yaml.safe_dump(payload, f, default_flow_style=False, sort_keys=False)
     return cfg_path
@@ -169,20 +195,51 @@ def centerline_y_at_lookahead(
     return None, 0.0
 
 
+def pure_pursuit_steer(
+    x_t: float,
+    y_t: float,
+    *,
+    wheelbase_m: float,
+    lookahead_m: float,
+    max_steer_angle_rad: float,
+    max_steer: float = 1.0,
+) -> tuple[float, float, float]:
+    """Bicycle Pure Pursuit → normalized steering.
+
+    Returns ``(steering_offset, alpha_rad, delta_rad)``.
+
+    ``α = atan2(y_t, x_t)``, ``δ = atan(2 L sinα / L_d)``.
+    base_link +y = left; D-Racer +steering = right → ``steering = -δ/δ_max``.
+    """
+    ld = max(float(lookahead_m), 1e-3)
+    x = float(x_t)
+    y = float(y_t)
+    alpha = float(np.arctan2(y, max(x, 1e-6)))
+    delta = float(np.arctan2(2.0 * wheelbase_m * np.sin(alpha), ld))
+    # Clamp physical angle then normalize; negate for D-Racer sign.
+    delta_c = float(np.clip(delta, -max_steer_angle_rad, max_steer_angle_rad))
+    raw = float(
+        np.clip(-delta_c / max(max_steer_angle_rad, 1e-6), -max_steer, max_steer)
+    )
+    return raw, alpha, delta_c
+
+
 class LanePlanner:
-    """Stateful P + EMA + rate-limit steering for single-color lane follow."""
+    """Stateful Pure Pursuit + EMA + rate-limit for single-color lane follow."""
 
     def __init__(self, params: LaneControlParams | None = None):
         self.params = (params or load_control_params()).clamp()
         self._ema_steer = 0.0
         self._steer = 0.0
         self._last_conf = 0.0
-        # Filled each step for tuners: raw P, EMA, rate-limited output.
         self.last_debug: dict[str, float] = {
             'raw': 0.0,
             'ema': 0.0,
             'steer': 0.0,
             'y_c': 0.0,
+            'x_t': 0.0,
+            'alpha': 0.0,
+            'delta': 0.0,
             'conf': 0.0,
         }
 
@@ -195,6 +252,9 @@ class LanePlanner:
             'ema': 0.0,
             'steer': 0.0,
             'y_c': 0.0,
+            'x_t': 0.0,
+            'alpha': 0.0,
+            'delta': 0.0,
             'conf': 0.0,
         }
 
@@ -202,27 +262,26 @@ class LanePlanner:
         self.params = params.clamp()
 
     def set_follow_color(self, color: str) -> None:
-        p = self.params.clamp()
-        self.params = LaneControlParams(
-            lookahead_x_m=p.lookahead_x_m,
-            kp=p.kp,
-            ema_alpha=p.ema_alpha,
-            steer_rate_limit=p.steer_rate_limit,
-            max_steer=p.max_steer,
-            track_half_width_m=p.track_half_width_m,
-            steer_slowdown_thresh=p.steer_slowdown_thresh,
-            steer_slowdown_scale=p.steer_slowdown_scale,
-            min_confidence=p.min_confidence,
-            hold_decay=p.hold_decay,
-            follow_color=color,
-        ).clamp()
+        self.params = replace(self.params, follow_color=color).clamp()
         self.reset()
 
-    def step(self, detections: LaneDetections) -> LaneResult:
+    def effective_lookahead(self, speed_mps: float | None = None) -> float:
         p = self.params
+        if p.lookahead_gain > 0.0 and speed_mps is not None and speed_mps > 0.0:
+            return float(np.clip(p.lookahead_gain * speed_mps, 0.3, 1.5))
+        return p.lookahead_x_m
+
+    def step(
+        self,
+        detections: LaneDetections,
+        *,
+        speed_mps: float | None = None,
+    ) -> LaneResult:
+        p = self.params
+        ld = self.effective_lookahead(speed_mps)
         y_c, conf = centerline_y_at_lookahead(
             detections,
-            p.lookahead_x_m,
+            ld,
             p.track_half_width_m,
             follow_color=p.follow_color,
         )
@@ -236,6 +295,9 @@ class LanePlanner:
                 'ema': float(self._ema_steer),
                 'steer': float(self._steer),
                 'y_c': float('nan'),
+                'x_t': float(ld),
+                'alpha': 0.0,
+                'delta': 0.0,
                 'conf': float(self._last_conf),
             }
             return LaneResult(
@@ -244,20 +306,29 @@ class LanePlanner:
                 throttle_scale=1.0 if self._last_conf > p.min_confidence else 0.0,
             )
 
-        # base_link: +y = left. D-Racer: +steering = right.
-        raw = float(np.clip(-p.kp * y_c, -p.max_steer, p.max_steer))
+        raw, alpha, delta = pure_pursuit_steer(
+            ld,
+            y_c,
+            wheelbase_m=p.wheelbase_m,
+            lookahead_m=ld,
+            max_steer_angle_rad=p.max_steer_angle_rad,
+            max_steer=p.max_steer,
+        )
         a = p.ema_alpha
         self._ema_steer = (1.0 - a) * self._ema_steer + a * raw
-        delta = float(
+        step = float(
             np.clip(self._ema_steer - self._steer, -p.steer_rate_limit, p.steer_rate_limit)
         )
-        self._steer = float(np.clip(self._steer + delta, -p.max_steer, p.max_steer))
+        self._steer = float(np.clip(self._steer + step, -p.max_steer, p.max_steer))
         self._last_conf = conf
         self.last_debug = {
             'raw': raw,
             'ema': float(self._ema_steer),
             'steer': float(self._steer),
             'y_c': float(y_c),
+            'x_t': float(ld),
+            'alpha': float(alpha),
+            'delta': float(delta),
             'conf': float(conf),
         }
 

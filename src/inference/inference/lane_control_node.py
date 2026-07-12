@@ -1,6 +1,6 @@
 """Temporary lane control node — 담당: 안승현.
 
-Subscribes to /perception/lane, runs lane_planner (P+EMA), publishes /control.
+Subscribes to /perception/lane, runs lane_planner (Pure Pursuit + EMA), publishes /control.
 Keeps perception (inference_node) and control separated on ROS topics.
 
 Sim and real share the same topics (/perception/lane → /control).
@@ -84,10 +84,9 @@ class LaneControlNode(Node):
         params = load_control_params(Path(control_config))
         follow_override = str(self.get_parameter('lane_follow_color').value).strip()
         if follow_override:
-            from inference.modules.lane_planner import LaneControlParams
-            params = LaneControlParams(
-                **{**params.__dict__, 'follow_color': follow_override}
-            ).clamp()
+            from dataclasses import replace
+
+            params = replace(params, follow_color=follow_override).clamp()
         self.planner = LanePlanner(params)
         self._latest_command: Control | None = None
         self._last_lane_time: Time | None = None

@@ -91,37 +91,36 @@ python3 scripts/vision_tune/capture_camera.py --out data/captures/sim
 
 ---
 
-## 제어 게인 튜너 (Phase 2 · 시뮬·실차 공용)
+## 제어 게인 튜너 — Pure Pursuit (시뮬·실차 공용)
 
-스무딩: **`raw → EMA → rate-limit → out`** (창 하단 cyan / magenta / orange 바).
+스무딩: **`PP(δ) → EMA → rate-limit → out`** (창 하단 cyan / magenta / orange 바).  
+시뮬 기하 기본 = **LIMO Gazebo** (`wheelbase=0.24`, `δ_max=30°`).
 
 ```bash
 source /opt/ros/humble/setup.bash
-# 주행 중 트랙바 (inference_node 끄기, sim-bringup만)
+# 주행 중 트랙바 (lane_control_node 끄고 sim-bringup만)
 python3 scripts/vision_tune/tune_lane_control.py --drive
 ```
 
 | 증상 | 조절 |
 |------|------|
-| 커브 **너무 일찍** 꺾임 | `lookahead_cm` ↓ (예 80→55~65) |
-| 연속 커브에서 **늦게/덜** 꺾여 이탈 | `rate_x100` ↑ (15→25~40), `max_steer_%` =100, `cruise_%` ↓ |
-| 출력이 raw보다 한참 느림 | rate/EMA가 막는 중 → rate↑ 또는 ema↑ |
-| 속도 | **`cruise_%`** (맨 위 트랙바, `--drive`에 즉시 반영) |
+| 커브 **너무 일찍** 꺾임 | `lookahead_cm` ↑ |
+| 연속 커브에서 **늦게/덜** 꺾여 이탈 | `rate_x100` ↑, `max_steer_%`=100, `cruise_%` ↓ |
+| 조향이 약함/강함 (물리) | `wheelbase_cm` / `max_steer_deg` (실차는 실측 후) |
+| 속도 | **`cruise_%`** |
 
 | 트랙바 | 의미 |
 |--------|------|
 | `cruise_%` | 차 속도 (throttle) |
-| `lookahead_cm` | look-ahead 거리 |
-| `kp_x10` | P 게인 |
-| `ema_%` | EMA α |
-| `rate_x100` | 프레임당 조향 변화 한도 |
-| `max_steer_%` | 최대 조향각 |
+| `lookahead_cm` | PP look-ahead \(L_d\) |
+| `wheelbase_cm` | 휠베이스 \(L\) (sim 24) |
+| `max_steer_deg` | \(\delta_{\max}\) (sim 30) |
+| `ema_%` / `rate_x100` / `max_steer_%` | 출력 스무딩·클립 |
 | `slow_scale_%` / `half_w_cm` / `hold_%` / `color_0w1y` | 감속·반폭·홀드·색 |
 
-키: `s` 저장 · `space` pause · `q` 정지 종료
+키: `s` 저장 · `w` 창 재배치 · `space` pause · `q` 정지 종료
 
-**알려진 한계:** 우회전 등에서 한쪽 차선이 사라지면 스텁이 L/R을 뒤집을 수 있음  
-→ 조향 게인 문제가 아니라 인지 할당 문제. 상세·후속: [lane-drive-strategy.md §11.6](../../docs/lane-drive-strategy.md).
+**D-Racer:** 시뮬 게인 그대로 쓰지 말 것. 실측 항목 → [vehicle-geometry.md §4.1](../../docs/vehicle-geometry.md).
 
 ---
 
@@ -195,7 +194,8 @@ Metric IPM이면 종·횡이 이미 등방이라 검증용; 사다리꼴 쓸 때
 | `metric_ipm.py` | remapping · `(u,v)→(x,y) m` |
 | `tune_hsv.py` | **HSV 마스크** (흰/노란/검/빨) |
 | `hsv.py` | HSV load/save/mask |
-| `tune_lane_control.py` | **제어 게인** (P/EMA/rate/look-ahead) |
+| `tune_lane_control.py` | **Pure Pursuit** 게인 튜너 |
+| `window_layout.py` | OpenCV 창 화면 안 배치 (`w`) |
 | `tune_bev_roi.py` | 사다리꼴만 (참고) |
 | `bev_roi.py` | 사다리꼴 기하 |
 | `capture_camera.py` | 핫키 캡처 |
