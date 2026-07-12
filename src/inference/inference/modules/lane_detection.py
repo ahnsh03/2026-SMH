@@ -1,8 +1,9 @@
 """Lane detection module — 담당: 장원태 (인지).
 
-Phase 2 interim: temporary **white-only** stub (Metric IPM + loose HSV) that
-feeds ``lane_planner``. Replace ``detect_markings`` with Won Tae perception
-when PR merges; keep returning ``LaneResult`` via planner for pipeline.
+Phase 2 interim: temporary **white-only** stub (Metric IPM + HSV from
+``config/lane_vision.yaml``) that feeds ``lane_planner``. Replace
+``detect_markings`` with Won Tae perception when PR merges; keep returning
+``LaneResult`` via planner for pipeline.
 """
 
 from __future__ import annotations
@@ -10,22 +11,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import cv2
 import numpy as np
-import yaml
 
 from inference.modules.lane_planner import get_shared_planner, plan
 from inference.types import LaneDetections, LaneMarking, LaneResult
-
-# Loose sim defaults (blue track / white paint). Precise HSV = Won Tae.
-_DEFAULT_WHITE_HSV = {
-    'h_min': 0,
-    'h_max': 180,
-    's_min': 0,
-    's_max': 70,
-    'v_min': 160,
-    'v_max': 255,
-}
 
 
 def _repo_root() -> Path:
@@ -35,50 +24,18 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
-def _ensure_metric_ipm():
+def _ensure_vision_tune():
     tune_dir = _repo_root() / 'scripts' / 'vision_tune'
     if str(tune_dir) not in sys.path:
         sys.path.insert(0, str(tune_dir))
+    from hsv import load_hsv_ranges, make_mask  # noqa: WPS433
     from metric_ipm import (  # noqa: WPS433
         bev_uv_to_xy,
         load_metric_ipm,
         warp_metric_ipm,
     )
 
-    return load_metric_ipm, warp_metric_ipm, bev_uv_to_xy
-
-
-def _load_white_hsv() -> dict[str, int]:
-    path = _repo_root() / 'config' / 'lane_vision.yaml'
-    out = dict(_DEFAULT_WHITE_HSV)
-    if not path.is_file():
-        return out
-    try:
-        with path.open('r', encoding='utf-8') as f:
-            data = yaml.safe_load(f) or {}
-        white = (data.get('hsv') or {}).get('white')
-        if isinstance(white, dict):
-            for key in out:
-                if key in white and white[key] is not None:
-                    out[key] = int(white[key])
-    except OSError:
-        pass
-    return out
-
-
-def _white_mask_bgr(bgr: np.ndarray, hsv_cfg: dict[str, int]) -> np.ndarray:
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    lower = np.array(
-        [hsv_cfg['h_min'], hsv_cfg['s_min'], hsv_cfg['v_min']], dtype=np.uint8
-    )
-    upper = np.array(
-        [hsv_cfg['h_max'], hsv_cfg['s_max'], hsv_cfg['v_max']], dtype=np.uint8
-    )
-    mask = cv2.inRange(hsv, lower, upper)
-    kernel = np.ones((3, 3), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-    return mask
+    return load_metric_ipm, warp_metric_ipm, bev_uv_to_xy, load_hsv_ranges, make_mask
 
 
 def _extract_lr_polylines(
@@ -100,7 +57,6 @@ def _extract_lr_polylines(
         left_xs = xs[xs < cx]
         right_xs = xs[xs >= cx]
         if left_xs.size >= min_pix:
-            # Marking near road: closest to center from the left half.
             left_uv.append((float(left_xs[-1]), float(v)))
         if right_xs.size >= min_pix:
             right_uv.append((float(right_xs[0]), float(v)))
@@ -141,10 +97,13 @@ def _uv_to_marking(
         )
     x, y = bev_uv_to_xy(uv[:, 0], uv[:, 1], params)
     pts = np.stack([x, y], axis=1).astype(np.float32)
-    # Sort by increasing x (forward).
     order = np.argsort(pts[:, 0])
     pts = pts[order]
-    length = float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum()) if pts.shape[0] > 1 else 0.0
+    length = (
+        float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
+        if pts.shape[0] > 1
+        else 0.0
+    )
     return LaneMarking(
         id=marking_id,
         color=LaneMarking.COLOR_WHITE,
@@ -156,15 +115,22 @@ def _uv_to_marking(
 
 
 def detect_markings(frame: np.ndarray) -> LaneDetections:
-    """Temporary white-only perception stub (Metric IPM + HSV)."""
+    """Temporary white-only perception stub (Metric IPM + yaml HSV)."""
     if frame is None or frame.size == 0:
         return LaneDetections()
 
-    load_metric_ipm, warp_metric_ipm, bev_uv_to_xy = _ensure_metric_ipm()
-    params = load_metric_ipm(_repo_root() / 'config' / 'lane_vision.yaml')
+    (
+        load_metric_ipm,
+        warp_metric_ipm,
+        bev_uv_to_xy,
+        load_hsv_ranges,
+        make_mask,
+    ) = _ensure_vision_tune()
+    vision_yaml = _repo_root() / 'config' / 'lane_vision.yaml'
+    params = load_metric_ipm(vision_yaml)
     bev = warp_metric_ipm(frame, params)
-    hsv_cfg = _load_white_hsv()
-    mask = _white_mask_bgr(bev, hsv_cfg)
+    white_rng = load_hsv_ranges(vision_yaml)['white']
+    mask = make_mask(bev, white_rng)
     left_uv, right_uv, conf = _extract_lr_polylines(mask)
 
     left = _uv_to_marking(

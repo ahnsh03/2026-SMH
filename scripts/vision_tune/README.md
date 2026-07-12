@@ -93,8 +93,7 @@ python3 scripts/vision_tune/capture_camera.py --out data/captures/sim
 
 ## 제어 게인 튜너 (Phase 2 · 시뮬·실차 공용)
 
-흰 차선 스텁 + `lane_planner` 조향을 보면서 **P / EMA / rate / look-ahead**를 맞춘다.  
-HSV 정밀값은 원태 담당 — 이 툴은 게인만 저장한다.
+흰 차선 스텁 + `lane_planner` 조향을 보면서 **P / EMA / rate / look-ahead**를 맞춘다.
 
 ```bash
 python3 scripts/vision_tune/tune_lane_control.py
@@ -123,6 +122,35 @@ python3 scripts/vision_tune/tune_lane_control.py --topic /camera/image/compresse
 | `r` | planner EMA/steer 상태 리셋 |
 | `q` / ESC | 종료 |
 | `n` / `p` | 폴더 모드 다음/이전 |
+
+---
+
+## HSV 마스크 튜너 (Phase 1 · 시뮬·실차 공용)
+
+흰/노란 차선 · 검정/빨강 차로 마스크를 Metric IPM BEV에서 맞춘다.  
+**툴·yaml 저장 = 승현**, 대회용 **최종 정밀값 = 원태**와 맞춤. 시드는 원태 브랜치 기본값.
+
+```bash
+python3 scripts/vision_tune/tune_hsv.py
+python3 scripts/vision_tune/tune_hsv.py --channel white
+python3 scripts/vision_tune/tune_hsv.py --folder data/captures/sim
+```
+
+| 창 | 역할 |
+|----|------|
+| `hsv_tune_origin` | 원본 + crop |
+| `hsv_tune_bev` | BEV + 마스크 오버레이 (클릭 샘플) |
+| `hsv_tune_mask` | 이진 마스크 |
+| `hsv_tune_controls` | channel + H/S/V min/max |
+
+| 키 | 동작 |
+|----|------|
+| `1`–`4` | white / yellow / black_road / red_road |
+| 클릭 | 해당 픽셀 HSV로 범위 **확장** |
+| `d` | 활성 채널을 원태 시드 기본값으로 |
+| `s` | `config/lane_vision.yaml` → `hsv:` 저장 |
+| `n` / `p` | 폴더 모드 다음/이전 |
+| `q` / ESC | 종료 |
 
 ---
 
@@ -165,9 +193,11 @@ Metric IPM이면 종·횡이 이미 등방이라 검증용; 사다리꼴 쓸 때
 | `tune_bev.py` | **기본 진입** → Metric IPM |
 | `tune_metric_ipm.py` | Metric IPM UI·로직 (`tune_bev.py`가 호출) |
 | `metric_ipm.py` | remapping · `(u,v)→(x,y) m` |
+| `tune_hsv.py` | **HSV 마스크** (흰/노란/검/빨) |
+| `hsv.py` | HSV load/save/mask |
 | `tune_lane_control.py` | **제어 게인** (P/EMA/rate/look-ahead) |
 | `tune_bev_roi.py` | 사다리꼴만 (참고) |
 | `bev_roi.py` | 사다리꼴 기하 |
 | `capture_camera.py` | 핫키 캡처 |
-| `../../config/lane_vision.yaml` | `metric_ipm:` SSOT |
+| `../../config/lane_vision.yaml` | `metric_ipm:` + `hsv:` SSOT |
 | `../../config/lane_control.yaml` | planner 게인 |

@@ -2,8 +2,8 @@
 """Sim / real-car control-gain tuner for white-lane planner.
 
 Tune P / EMA / rate-limit / look-ahead / cruise overlay. Saves
-``config/lane_control.yaml``. Precise HSV is owned by Won Tae — this tool
-only visualizes stub white detections + planner output.
+``config/lane_control.yaml``. HSV masks are tuned separately with
+``tune_hsv.py``; this tool visualizes stub white detections + planner output.
 
 Examples (inside 2026-smh-sim after source /opt/ros/humble/setup.bash):
 

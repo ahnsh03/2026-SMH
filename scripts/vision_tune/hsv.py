@@ -1,0 +1,209 @@
+"""HSV ranges for lane / road masks — shared by tune_hsv and runtime stub.
+
+Schema (per channel) stored under ``config/lane_vision.yaml`` → ``hsv.<name>``:
+
+  h_min, h_max, s_min, s_max, v_min, v_max   # OpenCV HSV (H: 0–179)
+
+Tool owner: 안승현 (sim/real tuner). Precise final values: 장원태 may refine.
+Seed defaults match Won Tae ``feature/wontae-lane`` constants (good Gazebo start).
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+import yaml
+
+CHANNEL_NAMES = ('white', 'yellow', 'black_road', 'red_road')
+
+# Won Tae branch defaults (OpenCV HSV).
+_DEFAULTS: dict[str, dict[str, int]] = {
+    'white': {
+        'h_min': 0,
+        'h_max': 179,
+        's_min': 0,
+        's_max': 29,
+        'v_min': 174,
+        'v_max': 255,
+    },
+    'yellow': {
+        'h_min': 0,
+        'h_max': 55,
+        's_min': 32,
+        's_max': 255,
+        'v_min': 79,
+        'v_max': 255,
+    },
+    'black_road': {
+        'h_min': 0,
+        'h_max': 179,
+        's_min': 0,
+        's_max': 255,
+        'v_min': 0,
+        'v_max': 30,
+    },
+    'red_road': {
+        'h_min': 170,
+        'h_max': 179,
+        's_min': 125,
+        's_max': 192,
+        'v_min': 161,
+        'v_max': 229,
+    },
+}
+
+
+@dataclass(frozen=True)
+class HsvRange:
+    h_min: int = 0
+    h_max: int = 179
+    s_min: int = 0
+    s_max: int = 255
+    v_min: int = 0
+    v_max: int = 255
+
+    def clamp(self) -> HsvRange:
+        h0 = int(np.clip(self.h_min, 0, 179))
+        h1 = int(np.clip(self.h_max, 0, 179))
+        if h1 < h0:
+            h0, h1 = h1, h0
+        s0 = int(np.clip(self.s_min, 0, 255))
+        s1 = int(np.clip(self.s_max, 0, 255))
+        if s1 < s0:
+            s0, s1 = s1, s0
+        v0 = int(np.clip(self.v_min, 0, 255))
+        v1 = int(np.clip(self.v_max, 0, 255))
+        if v1 < v0:
+            v0, v1 = v1, v0
+        return HsvRange(h0, h1, s0, s1, v0, v1)
+
+    def lower(self) -> np.ndarray:
+        p = self.clamp()
+        return np.array([p.h_min, p.s_min, p.v_min], dtype=np.uint8)
+
+    def upper(self) -> np.ndarray:
+        p = self.clamp()
+        return np.array([p.h_max, p.s_max, p.v_max], dtype=np.uint8)
+
+    def to_dict(self) -> dict[str, int]:
+        return asdict(self.clamp())
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None, fallback: dict[str, int]) -> HsvRange:
+        src = fallback if not isinstance(data, dict) else {**fallback, **data}
+        return cls(
+            h_min=int(src['h_min']),
+            h_max=int(src['h_max']),
+            s_min=int(src['s_min']),
+            s_max=int(src['s_max']),
+            v_min=int(src['v_min']),
+            v_max=int(src['v_max']),
+        ).clamp()
+
+
+def default_config_path() -> Path:
+    here = Path(__file__).resolve()
+    for base in here.parents:
+        cand = base / 'config' / 'lane_vision.yaml'
+        if cand.is_file():
+            return cand
+    return here.parents[2] / 'config' / 'lane_vision.yaml'
+
+
+def default_range(channel: str) -> HsvRange:
+    if channel not in _DEFAULTS:
+        raise KeyError(f'Unknown HSV channel: {channel}')
+    return HsvRange.from_dict(_DEFAULTS[channel], _DEFAULTS[channel])
+
+
+def load_hsv_ranges(path: Path | None = None) -> dict[str, HsvRange]:
+    cfg_path = path or default_config_path()
+    block: dict[str, Any] = {}
+    if cfg_path.is_file():
+        with cfg_path.open('r', encoding='utf-8') as f:
+            data = yaml.safe_load(f) or {}
+        raw = data.get('hsv') or {}
+        if isinstance(raw, dict):
+            block = raw
+    out: dict[str, HsvRange] = {}
+    for name in CHANNEL_NAMES:
+        out[name] = HsvRange.from_dict(block.get(name), _DEFAULTS[name])
+    return out
+
+
+def save_hsv_ranges(
+    ranges: dict[str, HsvRange],
+    path: Path | None = None,
+) -> Path:
+    cfg_path = path or default_config_path()
+    existing: dict[str, Any] = {}
+    if cfg_path.is_file():
+        with cfg_path.open('r', encoding='utf-8') as f:
+            existing = yaml.safe_load(f) or {}
+    hsv_block: dict[str, Any] = {}
+    for name in CHANNEL_NAMES:
+        rng = ranges.get(name) or default_range(name)
+        hsv_block[name] = rng.to_dict()
+    hsv_block['note'] = (
+        'OpenCV HSV (H 0-179). Tuned with scripts/vision_tune/tune_hsv.py. '
+        'Sim/real shared; Won Tae may refine final competition values.'
+    )
+    existing['hsv'] = hsv_block
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with cfg_path.open('w', encoding='utf-8') as f:
+        yaml.safe_dump(existing, f, sort_keys=False, allow_unicode=True)
+    return cfg_path
+
+
+def make_mask(bgr: np.ndarray, rng: HsvRange, *, morph: bool = True) -> np.ndarray:
+    """Binary mask for one HSV range (single segment; no red wrap)."""
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    p = rng.clamp()
+    mask = cv2.inRange(hsv, p.lower(), p.upper())
+    if morph:
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    return mask
+
+
+def overlay_mask(
+    bgr: np.ndarray,
+    mask: np.ndarray,
+    color: tuple[int, int, int] = (0, 255, 0),
+    alpha: float = 0.45,
+) -> np.ndarray:
+    out = bgr.copy()
+    tint = np.zeros_like(out)
+    tint[:] = color
+    selected = mask > 0
+    out[selected] = (
+        (1.0 - alpha) * out[selected].astype(np.float32)
+        + alpha * tint[selected].astype(np.float32)
+    ).astype(np.uint8)
+    return out
+
+
+def expand_range_with_sample(
+    rng: HsvRange,
+    hsv_pixel: np.ndarray,
+    *,
+    h_pad: int = 5,
+    s_pad: int = 20,
+    v_pad: int = 20,
+) -> HsvRange:
+    """Expand current range so it includes a clicked HSV sample (±pad)."""
+    h, s, v = (int(x) for x in hsv_pixel.reshape(3))
+    p = rng.clamp()
+    return HsvRange(
+        h_min=min(p.h_min, max(0, h - h_pad)),
+        h_max=max(p.h_max, min(179, h + h_pad)),
+        s_min=min(p.s_min, max(0, s - s_pad)),
+        s_max=max(p.s_max, min(255, s + s_pad)),
+        v_min=min(p.v_min, max(0, v - v_pad)),
+        v_max=max(p.v_max, min(255, v + v_pad)),
+    ).clamp()
