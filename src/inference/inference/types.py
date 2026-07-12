@@ -83,9 +83,9 @@ class RoadBranch:
 class LaneDetections:
     """Perception-only lane output (no steering).
 
-    Aligned with ``lane_msgs/LaneDetections`` so adapters can round-trip.
-    Phase-2 ``lane_planner`` uses white L/R markings; fork/branches are for
-    mission planners (e.g. yangseojun MainPlanner).
+Aligned with ``lane_msgs/LaneDetections`` so adapters can round-trip.
+    Planner follows one color at a time (``follow_color``); no white↔yellow auto switch.
+    Fork/branches are for mission planners (e.g. yangseojun MainPlanner).
     """
 
     lanes: tuple[LaneMarking, ...] = ()
@@ -128,6 +128,19 @@ class LaneDetections:
 
     def white_right(self) -> LaneMarking | None:
         return self.marking(color=LaneMarking.COLOR_WHITE, side=LaneMarking.SIDE_RIGHT)
+
+    def yellow_left(self) -> LaneMarking | None:
+        return self.marking(color=LaneMarking.COLOR_YELLOW, side=LaneMarking.SIDE_LEFT)
+
+    def yellow_right(self) -> LaneMarking | None:
+        return self.marking(color=LaneMarking.COLOR_YELLOW, side=LaneMarking.SIDE_RIGHT)
+
+    def pair_for_color(self, color: int) -> tuple[LaneMarking | None, LaneMarking | None]:
+        """Left/right markings for a single follow color (white or yellow)."""
+        return (
+            self.marking(color=color, side=LaneMarking.SIDE_LEFT),
+            self.marking(color=color, side=LaneMarking.SIDE_RIGHT),
+        )
 
 
 @dataclass(frozen=True)

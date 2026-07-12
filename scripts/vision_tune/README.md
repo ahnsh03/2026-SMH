@@ -91,37 +91,36 @@ python3 scripts/vision_tune/capture_camera.py --out data/captures/sim
 
 ---
 
-## 제어 게인 튜너 (Phase 2 · 시뮬·실차 공용)
+## 제어 게인 튜너 — Pure Pursuit (시뮬·실차 공용)
 
-흰 차선 스텁 + `lane_planner` 조향을 보면서 **P / EMA / rate / look-ahead**를 맞춘다.
+스무딩: **`PP(δ) → EMA → rate-limit → out`** (창 하단 cyan / magenta / orange 바).  
+시뮬 기하 기본 = **LIMO Gazebo** (`wheelbase=0.24`, `δ_max=30°`).
 
 ```bash
-python3 scripts/vision_tune/tune_lane_control.py
-python3 scripts/vision_tune/tune_lane_control.py --folder data/captures/sim
-python3 scripts/vision_tune/tune_lane_control.py --topic /camera/image/compressed
+source /opt/ros/humble/setup.bash
+# 주행 중 트랙바 (lane_control_node 끄고 sim-bringup만)
+python3 scripts/vision_tune/tune_lane_control.py --drive
 ```
 
-| 창 | 역할 |
-|----|------|
-| `lane_ctrl_origin` | 원본 + crop + 조향 바 |
-| `lane_ctrl_bev` | Metric BEV + 흰 L/R + look-ahead |
-| `lane_ctrl_controls` | 트랙바 |
+| 증상 | 조절 |
+|------|------|
+| 커브 **너무 일찍** 꺾임 | `lookahead_cm` ↑ |
+| 연속 커브에서 **늦게/덜** 꺾여 이탈 | `rate_x100` ↑, `max_steer_%`=100, `cruise_%` ↓ |
+| 조향이 약함/강함 (물리) | `wheelbase_cm` / `max_steer_deg` (실차는 실측 후) |
+| 속도 | **`cruise_%`** |
 
-| 트랙바 | 역할 | 기본 |
-|--------|------|------|
-| `lookahead_cm` | look-ahead x (cm) | 80 |
-| `kp_x10` | P 게인 ×10 | 20 (=2.0) |
-| `ema_%` | EMA α (%) | 40 |
-| `rate_x100` | 프레임당 |Δsteer| 한도 | 15 |
-| `cruise_%` | 표시용 cruise (yaml 미저장) | 35 |
-| `slow_scale_%` | \|steer\| 클 때 throttle 배율 | 80 |
+| 트랙바 | 의미 |
+|--------|------|
+| `cruise_%` | 차 속도 (throttle) |
+| `lookahead_cm` | PP look-ahead \(L_d\) |
+| `wheelbase_cm` | 휠베이스 \(L\) (sim 24) |
+| `max_steer_deg` | \(\delta_{\max}\) (sim 30) |
+| `ema_%` / `rate_x100` / `max_steer_%` | 출력 스무딩·클립 |
+| `slow_scale_%` / `half_w_cm` / `hold_%` / `color_0w1y` | 감속·반폭·홀드·색 |
 
-| 키 | 동작 |
-|----|------|
-| `s` | `config/lane_control.yaml` 저장 |
-| `r` | planner EMA/steer 상태 리셋 |
-| `q` / ESC | 종료 |
-| `n` / `p` | 폴더 모드 다음/이전 |
+키: `s` 저장 · `w` 창 재배치 · `space` pause · `q` 정지 종료
+
+**D-Racer:** 시뮬 게인 그대로 쓰지 말 것. 실측 항목 → [vehicle-geometry.md §4.1](../../docs/vehicle-geometry.md).
 
 ---
 
@@ -195,7 +194,8 @@ Metric IPM이면 종·횡이 이미 등방이라 검증용; 사다리꼴 쓸 때
 | `metric_ipm.py` | remapping · `(u,v)→(x,y) m` |
 | `tune_hsv.py` | **HSV 마스크** (흰/노란/검/빨) |
 | `hsv.py` | HSV load/save/mask |
-| `tune_lane_control.py` | **제어 게인** (P/EMA/rate/look-ahead) |
+| `tune_lane_control.py` | **Pure Pursuit** 게인 튜너 |
+| `window_layout.py` | OpenCV 창 화면 안 배치 (`w`) |
 | `tune_bev_roi.py` | 사다리꼴만 (참고) |
 | `bev_roi.py` | 사다리꼴 기하 |
 | `capture_camera.py` | 핫키 캡처 |
