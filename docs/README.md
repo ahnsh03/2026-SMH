@@ -9,7 +9,7 @@
 | **PC 시뮬 개발** | [simulation-setup.md](./simulation-setup.md) ★ | [dev-environment.md](./dev-environment.md) |
 | **D3-G 보드 주행** | [board-workflow.md](./board-workflow.md) ★ | [setup.md](./setup.md) |
 | **역할·과제** | [roles.md](./roles.md) | [meetings/2026-07-10.md](./meetings/2026-07-10.md) |
-| **차선·기본 주행** | [lane-drive-strategy.md](./lane-drive-strategy.md) ★ | [vehicle-geometry.md](./vehicle-geometry.md) |
+| **차선·기본 주행** | [lane-perception-topic.md](./lane-perception-topic.md) ★ | [lane-drive-strategy.md](./lane-drive-strategy.md) |
 | **Git·PR** | [collaboration.md](./collaboration.md) ★ (`gh` §1.7) | — |
 
 ## 전체 목록
@@ -21,6 +21,7 @@
 | [collaboration.md](./collaboration.md) | 브랜치·PR·충돌 방지 · **`gh` 설치/PR** ★ |
 | [roles.md](./roles.md) | 역할 분담·데이터 흐름 |
 | [lane-drive-strategy.md](./lane-drive-strategy.md) | 기본 주행 루프·**Metric IPM SSOT**·external 참고 ★ |
+| [lane-perception-topic.md](./lane-perception-topic.md) | `/perception/lane` ↔ control · **시뮬/실차 노드 인벤토리** ★ |
 | [../scripts/vision_tune/README.md](../scripts/vision_tune/README.md) | **`tune_bev`** · **`tune_hsv`** · **`tune_lane_control`** · 캡처 |
 | [../config/lane_vision.yaml](../config/lane_vision.yaml) | `metric_ipm:` 잠정 파라미터 (`y_half=0.77`) |
 | [../config/lane_control.yaml](../config/lane_control.yaml) | planner P/EMA/rate/look-ahead (시뮬·실차 공용) |

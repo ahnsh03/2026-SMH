@@ -12,9 +12,24 @@ cd ~/2026-SMH
 ./scripts/board_sync.sh
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py
+# = camera + control_node + inference_node(인지) + lane_control_node(/control)
+#   + battery + joystick + monitor(웹 관측)
 ```
 
-PC에서 PR이 merge되면 보드에서 위 3줄로 최신 `main`을 테스트합니다.
+### 실차 launch에 올라가는 노드
+
+| 노드 | 필수? | 설명 |
+|------|-------|------|
+| `camera_node` | 필수 | USB 카메라 |
+| `control_node` | 필수 | `/control` → 모터 |
+| `inference_node` | 필수 | 인지 → `/perception/lane` |
+| `lane_control_node` | 필수 | → `/control` |
+| `joystick_node` | 권장 | E-Stop |
+| `battery_node` | 권장 | 배터리 |
+| `monitor_node` | 선택 | PC 브라우저로 보드·영상 확인 (`http://<보드IP>:5000`). **없어도 주행 가능**. 켜 둬도 부담 적으면 유지 OK |
+
+시뮬 전용(`sim_*`, Gazebo)은 보드에서 실행하지 않음.  
+전체 비교: [lane-perception-topic.md §2](./lane-perception-topic.md)
 
 ---
 

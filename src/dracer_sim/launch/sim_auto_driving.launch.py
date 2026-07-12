@@ -17,9 +17,18 @@ def get_vehicle_config_path() -> str:
   return '/home/topst/2026-SMH/src/config/vehicle_config.yaml'
 
 
+def get_lane_control_config_path() -> str:
+  for base_path in Path(__file__).resolve().parents:
+    candidate = base_path / 'config' / 'lane_control.yaml'
+    if candidate.exists():
+      return str(candidate)
+  return '/home/topst/2026-SMH/config/lane_control.yaml'
+
+
 def generate_launch_description():
   pkg_share = get_package_share_directory('dracer_sim')
   vehicle_config_path = get_vehicle_config_path()
+  control_config_path = get_lane_control_config_path()
   cruise_throttle = LaunchConfiguration('cruise_throttle')
   use_sim_time = LaunchConfiguration('use_sim_time')
 
@@ -59,9 +68,26 @@ def generate_launch_description():
       parameters=[
         {
           'vehicle_config_file': vehicle_config_path,
-          'cruise_throttle': cruise_throttle,
           'aruco_debug_topic': '/debug/aruco',
           'aruco_debug_log': True,
+          'use_sim_time': use_sim_time,
+        },
+      ],
+    ),
+    # Sim: force steer_trim=0 so hardware STEER_TRIM does not bias Gazebo.
+    Node(
+      package='inference',
+      executable='lane_control_node',
+      name='lane_control_node',
+      output='screen',
+      parameters=[
+        {
+          'vehicle_config_file': vehicle_config_path,
+          'control_config_file': control_config_path,
+          'cruise_throttle': cruise_throttle,
+          'steer_trim_override': True,
+          'steer_trim': 0.0,
+          'lane_timeout_sec': 0.5,
           'use_sim_time': use_sim_time,
         },
       ],

@@ -18,8 +18,9 @@
 | 미션 표지판 | 좌회전 · 우회전 · ArUco 정지 마커 (**3종**, 월드에 고정) |
 | 카메라 | C920e FOV, **320×180** JPEG (16:9) |
 | 시각화 | **Gazebo** (3D) + **카메라 프리뷰** (320×180, 16:9 창) |
-| 웹 모니터 | 시뮬 기본 **OFF** (실기용 D-Racer monitor) |
+| 웹 모니터 | 시뮬 기본 **OFF** (실기용 D-Racer monitor — 자율주행에 필수 아님) |
 | **개발 방식** | **컨테이너 1개** (`2026-smh-sim`) + **터미널 2개** (시뮬 / 코드) |
+| **노드 구분** | [lane-perception-topic.md §2](./lane-perception-topic.md) ★ 시뮬 vs 실차 인벤토리 |
 
 ```bash
 git clone https://github.com/ahnsh03/2026-SMH.git
@@ -31,6 +32,19 @@ cd 2026-SMH && chmod +x scripts/*.sh
 ./scripts/dev_container.sh sim-bringup      # 터미널1: Gazebo
 # 터미널2: docker exec -it 2026-smh-sim bash
 ```
+
+### 시뮬에서 쓰는 노드 / 쓰지 않는 노드
+
+| 구분 | 노드 | 설명 |
+|------|------|------|
+| **자율 코어 (필수)** | `inference_node`, `lane_control_node` | 인지 → `/control` |
+| **시뮬 브리지 (필수)** | `sim_control_bridge`, `sim_camera_republish`, Gazebo·spawn | 실차 camera/control 대용 |
+| **안전 (권장)** | `joystick_node` | E-Stop |
+| **선택** | `sim_camera_preview` | 로컬 카메라 창 |
+| **선택·기본 OFF** | `monitor_node` | 웹 UI. SSH로 **실차 보드** 볼 때용. 시뮬 자율주행엔 불필요. `use_monitor:=true`로 켤 수 있음 |
+| **실차만 (시뮬 ❌)** | `camera_node`, `control_node`, `battery_node` | 하드웨어. `inference/auto_driving.launch.py`에 있음 → 시뮬에 그대로 쓰지 말 것 |
+
+전체 표·실차 세트: [lane-perception-topic.md §2](./lane-perception-topic.md)
 
 ---
 
@@ -53,12 +67,15 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
     │       └─ sim_camera_republish → /camera/image/compressed (320×180 JPEG)
     │                              → /camera/image_raw (프리뷰 창용)
     │
-    ├─ /control (Control) ← sim_control_bridge ← inference 또는 수동 pub
-    │       └─ /cmd_vel → Ackermann Gazebo plugin
+    ├─ /perception/lane ← inference_node (인지)
+    ├─ /control ← lane_control_node ← /perception/lane
+    │       └─ sim_control_bridge → /cmd_vel → Ackermann Gazebo plugin
     │
     └─ /battery_status ← sim_battery_stub (80% 고정)
 
 카메라 프리뷰(`sim_camera_preview`): `/camera/image_raw` 320×180 → **640×360** 창 (16:9, 2배)
+
+자율주행 토픽 분리·실차와의 차이: [lane-perception-topic.md](./lane-perception-topic.md) ★
 ```
 
 ### D-Racer 호환 토픽
@@ -67,6 +84,7 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
 |------|------|------|
 | `/camera/image/compressed` | `sensor_msgs/CompressedImage` | **inference_node** 입력 (320×180 JPEG) |
 | `/camera/image_raw` | `sensor_msgs/Image` | 카메라 프리뷰 창 |
+| `/perception/lane` | `lane_msgs/LaneDetections` | 인지 → **lane_control_node** |
 | `/control` | `control_msgs/Control` | throttle (−1=후/+1=전) / steering (−1=좌/+1=우) |
 | `/battery_status` | `battery_msgs/Battery` | monitor 스텁 |
 | `/joint_states` | `sensor_msgs/JointState` | Gazebo 관절 |
@@ -75,7 +93,8 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
 내부 전용: `/cmd_vel` ← `sim_control_bridge`
 
 `/control` 규약(실차와 동일): **steering −1=좌 / +1=우**, **throttle −1=후 / +1=전**.  
-`sim_control_bridge`가 Gazebo Ackermann용으로 `angular.z`(조향각 rad, +Z=좌)에 **부호 반전**해 전달하고, E-Stop은 `joystick`에서 실차 `control_node`처럼 래치합니다.
+`sim_control_bridge`가 Gazebo Ackermann용으로 `angular.z`(조향각 rad, +Z=좌)에 **부호 반전**해 전달하고, E-Stop은 `joystick`에서 실차 `control_node`처럼 래치합니다.  
+**주의:** `inference_node`만 실행하면 `/control`이 없어 차가 안 움직입니다. 인지+제어를 함께 띄우세요.
 
 ---
 
@@ -236,7 +255,7 @@ docker rm -f 2026-smh-sim
 
 ### 4.3 터미널 2 — 코드 개발·실행 (`docker exec`)
 
-**역할**: `src/inference/modules/` 수정, 빌드, `inference_node` 실행.
+**역할**: `src/inference/modules/` 수정, 빌드, **인지+제어** 실행.
 
 ```bash
 docker exec -it 2026-smh-sim bash
@@ -249,13 +268,19 @@ source /opt/ros/humble/setup.bash
 source /workspace/install/setup.bash    # 또는 cd /workspace && source install/setup.bash
 ```
 
-inference 실행 (시뮬 시간 사용):
+자율주행 (권장 — 인지+제어, trim=0, use_sim_time):
+
+```bash
+ros2 launch dracer_sim sim_auto_driving.launch.py
+```
+
+인지 노드만 (토픽 디버그용 — **차는 안 움직임**):
 
 ```bash
 ros2 run inference inference_node --ros-args -p use_sim_time:=true
 ```
 
-또는 팀 launch:
+또는 실차용 launch를 시뮬에서 쓸 때(하드웨어 노드 포함 — 보통 비권장):
 
 ```bash
 ros2 launch inference auto_driving.launch.py use_sim_time:=true
@@ -337,7 +362,7 @@ ros2 topic pub /control control_msgs/msg/Control "{steering: 0.0, throttle: 0.3}
 | `use_camera_view` | `true` | OpenCV 카메라 프리뷰 (`/camera/image_raw`) |
 | `camera_view_width` | `640` | 프리뷰 창 가로 (16:9) |
 | `camera_view_height` | `360` | 프리뷰 창 세로 |
-| `use_monitor` | `false` | D-Racer 웹 모니터 (시뮬에서는 보통 불필요) |
+| `use_monitor` | `false` | D-Racer **웹 모니터**. 실차 SSH 관측용. 시뮬 자율주행엔 **불필요**(기본 OFF). 켜도 로직은 동작 |
 | `robot` | `limo` | `dracer` = 경량 박스 모델 |
 | `spawn_x/y/z/yaw` | 2.6 / -3.92 / 0.15 / -3.14 | 트랙 위 스폰 위치 |
 
@@ -472,7 +497,7 @@ launch 파일 위치: `src/dracer_sim/launch/`
 | launch 파일 | 용도 |
 |-------------|------|
 | `sim_bringup.launch.py` | Gazebo + 트랙 + 브리지 + 카메라 프리뷰 (**기본**) |
-| `sim_auto_driving.launch.py` | bringup + inference 자율주행 |
+| `sim_auto_driving.launch.py` | bringup + **inference_node + lane_control_node** 자율주행 |
 | `sim_manual_driving.launch.py` | bringup + 조이스틱 수동주행 |
 
 **기본 시뮬** (터미널 1 — 이 셸은 launch 전용으로 두는 것을 권장):
@@ -510,20 +535,22 @@ source install/setup.bash
 ros2 launch dracer_sim sim_bringup.launch.py
 ```
 
-#### 5) 터미널 2 — inference (컨테이너 안, 별도 셸)
+#### 5) 터미널 2 — 인지+제어 (컨테이너 안, 별도 셸)
 
-시뮬 launch가 **이미 터미널 1에서 돌아가는 중**일 때, **새 WSL 터미널**에서:
+시뮬 bringup이 **이미 터미널 1에서 돌아가는 중**일 때, **새 WSL 터미널**에서:
 
 ```bash
 docker exec -it 2026-smh-sim bash
 source /opt/ros/humble/setup.bash && source /workspace/install/setup.bash
-ros2 run inference inference_node --ros-args -p use_sim_time:=true
+ros2 launch dracer_sim sim_auto_driving.launch.py
+# inference_node + lane_control_node (STEER_TRIM=0, use_sim_time=true)
 ```
 
-또는:
+확인:
 
 ```bash
-ros2 launch inference auto_driving.launch.py use_sim_time:=true
+ros2 topic echo /perception/lane --once
+ros2 topic echo /control --once
 ```
 
 #### 6) 컨테이너 삭제 (하루 작업 끝)
@@ -765,18 +792,19 @@ GPU 확인 (렉이 심할 때):
 # 2) PR 전 로컬 검증
 ./scripts/dev_container.sh check
 
-# 3) 시뮬에서 perception 루프 확인
+# 3) 시뮬에서 인지→제어 closed-loop 확인
 ./scripts/dev_container.sh build-sim
-./scripts/dev_container.sh sim
+# bringup 후:
+ros2 launch dracer_sim sim_auto_driving.launch.py
 
 # 4) merge 후 실차 최종 확인 (D3-G)
 ./scripts/board_sync.sh
 ros2 launch inference auto_driving.launch.py
 ```
 
-시뮬은 **카메라·토픽·inference 파이프라인** 검증용입니다.  
-`/control` 부호·E-Stop은 실차와 같고, 가속·선회 반경 등 **역학**만 LIMO Ackermann이라 RC 실차와 다를 수 있습니다.  
-수치 비교·게인 이전: [vehicle-geometry.md](./vehicle-geometry.md).
+시뮬은 **카메라·토픽·인지→`/control`** 검증용입니다 (실차와 동일 메시지).  
+시뮬만 `STEER_TRIM=0`·`use_sim_time=true`. 역학(가속도·선회)은 LIMO라 RC와 다를 수 있음.  
+구조: [lane-perception-topic.md](./lane-perception-topic.md) · 기하: [vehicle-geometry.md](./vehicle-geometry.md).
 
 ---
 

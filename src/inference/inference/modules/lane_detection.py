@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,17 +17,17 @@ import yaml
 
 
 # =========================================================
-# scripts/vision_tune의 BEV trapezoid 워프를 그대로 사용한다.
+# scripts/vision_tune Metric IPM (팀 SSOT, config/lane_vision.yaml)
 # =========================================================
 def _locate_vision_tune() -> Path:
-    """상위 디렉터리를 거슬러 scripts/vision_tune/bev_roi.py를 찾는다."""
+    """상위 디렉터리를 거슬러 scripts/vision_tune/metric_ipm.py를 찾는다."""
 
     for parent in Path(__file__).resolve().parents:
-        candidate = parent / "scripts" / "vision_tune" / "bev_roi.py"
+        candidate = parent / "scripts" / "vision_tune" / "metric_ipm.py"
         if candidate.is_file():
             return candidate.parent
     raise ImportError(
-        "scripts/vision_tune/bev_roi.py를 찾을 수 없습니다. "
+        "scripts/vision_tune/metric_ipm.py를 찾을 수 없습니다. "
         "저장소 루트에 config/lane_vision.yaml과 함께 있어야 합니다."
     )
 
@@ -35,19 +36,21 @@ _VISION_TUNE_DIR = _locate_vision_tune()
 if str(_VISION_TUNE_DIR) not in sys.path:
     sys.path.insert(0, str(_VISION_TUNE_DIR))
 
-from bev_roi import (  # noqa: E402  (경로 삽입 후 import)
+from metric_ipm import (  # noqa: E402
     DEFAULT_CONFIG_PATH,
-    BevRoiParams,
-    load_bev_roi,
-    warp_bev,
+    MetricIpmParams,
+    build_ipm_maps,
+    load_metric_ipm,
+    resolve_crop_top_px,
+    warp_metric_ipm,
 )
 
 
 # =========================================================
 # Runtime visualization
 # =========================================================
-# 보드/SSH/headless 실행에서는 반드시 False로 둔다.
-VISUALIZE = True
+# 보드/SSH/headless 기본 OFF. 로컬 디버그: LANE_VISUALIZE=1
+VISUALIZE = os.environ.get("LANE_VISUALIZE", "0") == "1"
 VISUALIZATION_SCALE = 2.0
 
 # OpenCV BGR 색상: 왼쪽 경계 빨강, 오른쪽 경계 파랑
@@ -134,97 +137,93 @@ class LaneDetections:
 
 
 # =========================================================
-# BEV trapezoid geometry (config/lane_vision.yaml)
+# Metric IPM geometry (config/lane_vision.yaml → metric_ipm)
 # =========================================================
-# crop_top_ratio / bottom_half_width_ratio / bev_width / bev_height /
-# guide_half_width_px / track_width_m를 vision_tune과 공유한다.
-BEV_ROI_PARAMS: BevRoiParams = load_bev_roi()
+METRIC_IPM_PARAMS: MetricIpmParams = load_metric_ipm()
 
-# BEV 출력 해상도(px). warp_bev의 destination 크기와 반드시 일치한다.
-BEV_WIDTH = BEV_ROI_PARAMS.bev_width
-BEV_HEIGHT = BEV_ROI_PARAMS.bev_height
+BEV_WIDTH = METRIC_IPM_PARAMS.bev_width
+BEV_HEIGHT = METRIC_IPM_PARAMS.bev_height
+METERS_PER_PIXEL = float(METRIC_IPM_PARAMS.meters_per_pixel)
+X_MAX_M = float(METRIC_IPM_PARAMS.x_max_m)
+X_MIN_M = float(METRIC_IPM_PARAMS.x_min_m)
+Y_HALF_WIDTH_M = float(METRIC_IPM_PARAMS.y_half_width_m)
+
+# remap 캐시 (입력 해상도별). map_*는 crop된 프레임 좌표.
+_ipm_map_x: np.ndarray | None = None
+_ipm_map_y: np.ndarray | None = None
+_ipm_map_shape: tuple[int, int] | None = None
 
 
-def _load_bev_scale() -> dict:
-    """lane_vision.yaml의 bev_scale 블록을 읽는다."""
+def _ensure_ipm_maps(img_w: int, img_h: int) -> tuple[np.ndarray, np.ndarray]:
+    """입력 해상도에 맞는 Metric IPM remap 맵을 준비한다."""
 
+    global _ipm_map_x, _ipm_map_y, _ipm_map_shape
+    shape = (img_w, img_h)
+    if (
+        _ipm_map_x is None
+        or _ipm_map_y is None
+        or _ipm_map_shape != shape
+    ):
+        _ipm_map_x, _ipm_map_y, _ = build_ipm_maps(
+            img_w, img_h, METRIC_IPM_PARAMS
+        )
+        _ipm_map_shape = shape
+    return _ipm_map_x, _ipm_map_y
+
+
+def _load_hsv_thresholds() -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """lane_vision.yaml hsv 블록을 OpenCV inRange 하한/상한으로 읽는다."""
+
+    defaults = {
+        "white": ((0, 0, 174), (179, 29, 255)),
+        "yellow": ((0, 32, 79), (55, 255, 255)),
+        "black_road": ((0, 0, 0), (179, 255, 30)),
+        "red_road": ((170, 125, 161), (179, 192, 229)),
+    }
     try:
         with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     except OSError:
-        return {}
-    return data.get("bev_scale") or {}
+        data = {}
+    hsv_block = data.get("hsv") or {}
+    out: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for key, (lo_d, hi_d) in defaults.items():
+        block = hsv_block.get(key)
+        if isinstance(block, dict):
+            lo = (
+                int(block.get("h_min", lo_d[0])),
+                int(block.get("s_min", lo_d[1])),
+                int(block.get("v_min", lo_d[2])),
+            )
+            hi = (
+                int(block.get("h_max", hi_d[0])),
+                int(block.get("s_max", hi_d[1])),
+                int(block.get("v_max", hi_d[2])),
+            )
+        else:
+            lo, hi = lo_d, hi_d
+        out[key] = (
+            np.array(lo, dtype=np.uint8),
+            np.array(hi, dtype=np.uint8),
+        )
+    return out
 
 
-_BEV_SCALE = _load_bev_scale()
-
-# 가로 스케일은 track_width_m / (2 * guide_half_width_px)로 보정된 값이다.
-METERS_PER_PIXEL = (
-    BEV_ROI_PARAMS.meters_per_pixel_lateral()
-    or float(_BEV_SCALE.get("meters_per_pixel_lateral") or 0.005)
-)
-
-# 세로 스케일은 trapezoid 특성상 가로와 다르며 아직 metric 보정값이 없다.
-# yaml note에 따라 잠정적으로 가로 스케일과 동일(isotropic)로 가정하고,
-# 전방 far 끝을 forward_range_m_approx에 맞춘다.
-FORWARD_RANGE_M_APPROX = float(
-    _BEV_SCALE.get("forward_range_m_approx") or 1.5
-)
-
-# 최상단 행(row 0) = 전방 far, 최하단 행 = 전방 near.
-X_MAX_M = FORWARD_RANGE_M_APPROX
-X_MIN_M = X_MAX_M - (BEV_HEIGHT - 1) * METERS_PER_PIXEL
-Y_HALF_WIDTH_M = (BEV_WIDTH - 1) / 2.0 * METERS_PER_PIXEL
-
+_HSV = _load_hsv_thresholds()
 
 # =========================================================
 # HSV thresholds
 # =========================================================
-WHITE_LOWER = np.array(
-    [0, 0, 174],
-    dtype=np.uint8,
-)
-
-WHITE_UPPER = np.array(
-    [179, 29, 255],
-    dtype=np.uint8,
-)
-
-YELLOW_LOWER = np.array(
-    [0, 32, 79],
-    dtype=np.uint8,
-)
-
-YELLOW_UPPER = np.array(
-    [55, 255, 255],
-    dtype=np.uint8,
-)
-
-BLACK_LOWER = np.array(
-    [0, 0, 0],
-    dtype=np.uint8,
-)
-
-BLACK_UPPER = np.array(
-    [179, 255, 30],
-    dtype=np.uint8,
-)
-
-RED_ROAD_LOWER = np.array(
-    [170, 125, 161],
-    dtype=np.uint8,
-)
-
-RED_ROAD_UPPER = np.array(
-    [179, 192, 229],
-    dtype=np.uint8,
-)
+WHITE_LOWER, WHITE_UPPER = _HSV["white"]
+YELLOW_LOWER, YELLOW_UPPER = _HSV["yellow"]
+BLACK_LOWER, BLACK_UPPER = _HSV["black_road"]
+RED_ROAD_LOWER, RED_ROAD_UPPER = _HSV["red_road"]
 
 
 # =========================================================
-# Track width: 350 mm = 0.35 m = 70 px
+# Track width (YAML metric_ipm.track_width_m, default 0.35 m)
 # =========================================================
-ROAD_WIDTH_M = 0.350
+ROAD_WIDTH_M = float(METRIC_IPM_PARAMS.track_width_m)
 
 ROAD_WIDTH_PX = int(
     round(
@@ -430,17 +429,21 @@ def make_odd(value: int) -> int:
 
 
 def warp_mask(mask: np.ndarray) -> np.ndarray:
-    """원본 프레임 마스크를 BEV trapezoid로 워프해 이진 마스크로 되돌린다."""
+    """원본 프레임 마스크를 Metric IPM BEV로 워프해 이진 마스크로 되돌린다."""
 
-    warped = warp_bev(mask, BEV_ROI_PARAMS)
-    # warp_bev는 INTER_LINEAR이라 경계가 0~255로 흐려진다.
-    # 얇은 점선을 잃지 않도록 0보다 큰 값은 모두 255로 되돌린다.
-    _, binary = cv2.threshold(
-        warped,
-        0,
-        255,
-        cv2.THRESH_BINARY,
+    h, w = mask.shape[:2]
+    crop_top_px = resolve_crop_top_px(w, h, METRIC_IPM_PARAMS)
+    cropped = mask[crop_top_px:, :]
+    map_x, map_y = _ensure_ipm_maps(w, h)
+    warped = cv2.remap(
+        cropped,
+        map_x,
+        map_y,
+        interpolation=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
     )
+    _, binary = cv2.threshold(warped, 0, 255, cv2.THRESH_BINARY)
     return binary
 
 
@@ -2092,13 +2095,14 @@ def detect(frame: np.ndarray) -> LaneDetections:
     original_h, original_w = frame.shape[:2]
     current_shape = (original_w, original_h)
 
-    # BEV 크기는 입력 해상도와 무관하게 항상 BEV_WIDTH×BEV_HEIGHT다.
-    # 입력 해상도가 바뀌면 추적 상태만 초기화한다.
+    # BEV 크기는 YAML metric_ipm 기준 고정. 입력 해상도가 바뀌면
+    # remap 맵·추적 상태를 갱신한다.
     if cached_shape != current_shape:
         cached_shape = current_shape
+        _ensure_ipm_maps(original_w, original_h)
         reset_tracking_state()
 
-    # warp_bev가 crop_top_ratio로 상단을 자르므로 원본 프레임을 그대로 넘긴다.
+    # Metric IPM이 crop_top을 적용하므로 원본 프레임을 그대로 넘긴다.
     hsv_source = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     white_source = cv2.inRange(hsv_source, WHITE_LOWER, WHITE_UPPER)
     yellow_source = cv2.inRange(hsv_source, YELLOW_LOWER, YELLOW_UPPER)
@@ -2206,7 +2210,7 @@ def detect(frame: np.ndarray) -> LaneDetections:
     )
 
     if VISUALIZE:
-        bev = warp_bev(frame, BEV_ROI_PARAMS)
+        bev = warp_metric_ipm(frame, METRIC_IPM_PARAMS)
         branch_preview = make_halfsplit_preview(bev, road_clean, road_branches)
         cv2.imshow(
             "road_branches",
