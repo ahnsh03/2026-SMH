@@ -20,14 +20,26 @@ import cv2
 import numpy as np
 import rclpy
 import yaml
-from control_msgs.msg import Control
+from geometry_msgs.msg import Point32
+from lane_msgs.msg import LaneDetections as LaneDetectionsMsg
+from lane_msgs.msg import LaneMarking as LaneMarkingMsg
+from lane_msgs.msg import RoadBranch as RoadBranchMsg
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
 
-from inference.pipeline import fuse_control, run_perception
+from inference.modules import aruco_detection, lane_detection
 from inference.types import ArucoResult
+
+
+def _to_point32_list(points: np.ndarray) -> list:
+    """Nx2 또는 Nx3 base_link 배열을 geometry_msgs/Point32 리스트로 변환."""
+    result = []
+    for point in np.asarray(points, dtype=np.float32):
+        z = float(point[2]) if point.shape[0] > 2 else 0.0
+        result.append(Point32(x=float(point[0]), y=float(point[1]), z=z))
+    return result
 
 
 def get_default_vehicle_config_path() -> str:
@@ -45,6 +57,7 @@ class InferenceNode(Node):
         self.declare_parameter('vehicle_config_file', get_default_vehicle_config_path())
         self.declare_parameter('image_topic', '/camera/image/compressed')
         self.declare_parameter('control_topic', '/control')
+        self.declare_parameter('lane_topic', '/perception/lane')
         self.declare_parameter('aruco_debug_topic', '/debug/aruco')
         self.declare_parameter('aruco_debug_log', True)
         self.declare_parameter('publish_hz', 10.0)
@@ -57,6 +70,7 @@ class InferenceNode(Node):
         )
         image_topic = str(self.get_parameter('image_topic').value)
         control_topic = str(self.get_parameter('control_topic').value)
+        lane_topic = str(self.get_parameter('lane_topic').value)
         aruco_debug_topic = str(self.get_parameter('aruco_debug_topic').value)
         self.aruco_debug_log = bool(self.get_parameter('aruco_debug_log').value)
         publish_hz = float(self.get_parameter('publish_hz').value)
@@ -75,8 +89,6 @@ class InferenceNode(Node):
         )
 
         self.latest_frame: np.ndarray | None = None
-        self.steering = self.steer_trim
-        self.throttle = self.default_throttle
         self._last_aruco_log_key: tuple[bool, bool, int | None] | None = None
 
         self.create_subscription(
@@ -85,14 +97,15 @@ class InferenceNode(Node):
             self.image_callback,
             image_qos,
         )
-        self.control_pub = self.create_publisher(Control, control_topic, 10)
+        # 인지 전용 노드: /perception/lane(단일 토픽)만 발행한다.
+        # 조향/제어(/control)는 외부 판단제어 노드가 소유한다.
+        self.lane_pub = self.create_publisher(LaneDetectionsMsg, lane_topic, 10)
         self.aruco_debug_pub = self.create_publisher(String, aruco_debug_topic, 10)
-        self.create_timer(1.0 / publish_hz, self.publish_control)
 
         self.get_logger().info(
-            f'inference_node started: image_topic={image_topic}, '
-            f'control_topic={control_topic}, aruco_debug_topic={aruco_debug_topic}, '
-            f'steer_trim={self.steer_trim}'
+            f'inference_node (perception-only) started: '
+            f'image_topic={image_topic}, lane_topic={lane_topic}, '
+            f'aruco_debug_topic={aruco_debug_topic}'
         )
 
     def image_callback(self, msg: CompressedImage):
@@ -103,19 +116,75 @@ class InferenceNode(Node):
             return
 
         self.latest_frame = frame
-        command = self.run_pipeline(frame)
-        self.steering = command.steering
-        self.throttle = command.throttle
+        self.run_pipeline(frame)
 
-    def run_pipeline(self, frame: np.ndarray):
-        ctx = run_perception(frame)
-        self.publish_aruco_debug(ctx.aruco)
-        return fuse_control(
-            ctx,
-            steer_trim=self.steer_trim,
-            default_throttle=self.default_throttle,
-            cruise_throttle=self.cruise_throttle,
-        )
+    def run_pipeline(self, frame: np.ndarray) -> None:
+        """인지 모듈만 직접 호출·발행한다.
+
+        판제(roundabout.plan 등)는 실행하지 않는다. run_perception은
+        판제(roundabout)까지 묶으므로 우회하고, 이 노드가 발행하는 인지
+        (lane, aruco)만 계산한다.
+        """
+        lane = lane_detection.detect(frame)
+        aruco = aruco_detection.detect(frame)
+        self.publish_aruco_debug(aruco)
+        self.publish_lane_detections(lane)
+
+    def publish_lane_detections(self, lane) -> None:
+        """인지 LaneDetections(dataclass)를 단일 토픽 msg로 변환·발행한다."""
+        msg = LaneDetectionsMsg()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'base_link'
+
+        for marking in lane.lanes:
+            lane_marking = LaneMarkingMsg()
+            lane_marking.id = int(marking.id)
+            lane_marking.color = int(marking.color)
+            lane_marking.side_hint = int(marking.side_hint)
+            lane_marking.confidence = float(marking.confidence)
+            lane_marking.length = float(marking.length)
+            lane_marking.heading = float(marking.heading)
+            lane_marking.curvature = float(marking.curvature)
+            lane_marking.points = _to_point32_list(marking.points)
+            msg.lanes.append(lane_marking)
+
+        msg.white_visible = bool(lane.white_visible)
+        msg.yellow_visible = bool(lane.yellow_visible)
+        msg.left_visible = bool(lane.left_visible)
+        msg.right_visible = bool(lane.right_visible)
+        msg.white_confidence = float(lane.white_confidence)
+        msg.yellow_confidence = float(lane.yellow_confidence)
+        msg.left_confidence = float(lane.left_confidence)
+        msg.right_confidence = float(lane.right_confidence)
+
+        msg.white_centerline = _to_point32_list(lane.white_centerline)
+        msg.yellow_centerline = _to_point32_list(lane.yellow_centerline)
+        msg.yellow_crossing_line = bool(lane.yellow_crossing_line)
+
+        msg.fork_active = bool(lane.fork_active)
+        for branch in lane.branches:
+            road_branch = RoadBranchMsg()
+            road_branch.branch_id = int(branch.lateral_rank)
+            road_branch.confidence = float(branch.confidence)
+            road_branch.width = float(branch.width)
+            road_branch.centerline = _to_point32_list(branch.points)
+            msg.branches.append(road_branch)
+
+        grid = np.ascontiguousarray(lane.drivable_area, dtype=np.uint8)
+        drivable = Image()
+        drivable.header = msg.header
+        drivable.height = int(grid.shape[0]) if grid.ndim == 2 else 0
+        drivable.width = int(grid.shape[1]) if grid.ndim == 2 else 0
+        drivable.encoding = 'mono8'
+        drivable.is_bigendian = 0
+        drivable.step = drivable.width
+        drivable.data = grid.tobytes()
+        msg.drivable_area = drivable
+
+        msg.meters_per_pixel = float(lane_detection.METERS_PER_PIXEL)
+        msg.x_forward_max = float(lane_detection.X_MAX_M)
+
+        self.lane_pub.publish(msg)
 
     def publish_aruco_debug(self, aruco: ArucoResult) -> None:
         """매 프레임 /debug/aruco 발행 + 상태 변경 시에만 로그."""
@@ -132,14 +201,6 @@ class InferenceNode(Node):
         if self.aruco_debug_log and key != self._last_aruco_log_key:
             self.get_logger().info(f'[aruco] {line}')
             self._last_aruco_log_key = key
-
-    def publish_control(self):
-        msg = Control()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'base_link'
-        msg.steering = float(self.steering)
-        msg.throttle = float(self.throttle)
-        self.control_pub.publish(msg)
 
     def load_steer_trim(self) -> float:
         param_trim = float(self.get_parameter('steer_trim').value)
