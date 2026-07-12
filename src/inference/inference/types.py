@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 import numpy as np
 
@@ -18,6 +19,37 @@ class TurnSign(str, Enum):
     UNKNOWN = 'unknown'
     LEFT = 'left'
     RIGHT = 'right'
+
+
+class RouteMode(str, Enum):
+    """Course selected before launch."""
+
+    OUT = 'out'
+    IN = 'in'
+
+
+class DrivingState(str, Enum):
+    """State owned exclusively by the main planner."""
+
+    WAIT_GREEN = 'wait_green'
+    NORMAL = 'normal'
+    FORK_TURN = 'fork_turn'
+    ROUNDABOUT_CIRCLE = 'roundabout_circle'
+    ROUNDABOUT_EXIT_READY = 'roundabout_exit_ready'
+    ROUNDABOUT_EXIT = 'roundabout_exit'
+    FINISHED = 'finished'
+
+
+class PathSource(str, Enum):
+    """Path currently used to produce steering."""
+
+    NONE = 'none'
+    WHITE_CENTERLINE = 'white_centerline'
+    YELLOW_CENTERLINE = 'yellow_centerline'
+    LEFT_BRANCH = 'left_branch'
+    RIGHT_BRANCH = 'right_branch'
+    HOLD_PREVIOUS = 'hold_previous'
+    STOP = 'stop'
 
 
 @dataclass(frozen=True)
@@ -172,24 +204,13 @@ class ArucoResult:
     should_stop: bool = False
 
 
-@dataclass(frozen=True)
-class RoundaboutResult:
-    """Roundabout planning output — 담당: 양서준."""
-
-    active: bool = False
-    """True when roundabout logic should override lane following."""
-    steering: float = 0.0
-    throttle: float = 0.0
-
-
 @dataclass
 class PipelineContext:
-    """Aggregated module outputs passed to fusion logic."""
+    """Legacy control context retained for small unit tests."""
 
     lane: LaneResult = field(default_factory=LaneResult)
     traffic: TrafficResult = field(default_factory=TrafficResult)
     aruco: ArucoResult = field(default_factory=ArucoResult)
-    roundabout: RoundaboutResult = field(default_factory=RoundaboutResult)
 
 
 @dataclass(frozen=True)
@@ -198,3 +219,17 @@ class ControlCommand:
 
     steering: float
     throttle: float
+
+
+@dataclass(frozen=True)
+class PlannerOutput:
+    """One synchronized perception/planning result for a camera frame."""
+
+    command: ControlCommand
+    lane: Any
+    traffic: TrafficResult
+    aruco: ArucoResult
+    state: DrivingState
+    path_source: PathSource
+    decision: str
+    debug: dict[str, Any] = field(default_factory=dict)

@@ -17,7 +17,7 @@
 - 신호등·표지판: 장원정 → modules/traffic_sign.py
 - ArUco 검출: 안승현 → modules/aruco/detector.py
 - ArUco 정지: 박성준 → modules/aruco/stop_logic.py
-- 회전교차로: 양서준 → modules/roundabout.py
+- 통합 판단·회전교차로: 양서준 → pipeline.py
 
 【D3-G 보드 — 최초】
 git clone https://github.com/ahnsh03/2026-SMH.git

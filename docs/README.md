@@ -19,6 +19,7 @@
 | 문서 | 내용 |
 |------|------|
 | [collaboration.md](./collaboration.md) | 브랜치·PR·충돌 방지 · **`gh` 설치/PR** ★ |
+| [main-planner.md](./main-planner.md) | Main Planner·Pure Pursuit·In/Out·디버깅 ★ |
 | [roles.md](./roles.md) | 역할 분담·데이터 흐름 |
 | [lane-drive-strategy.md](./lane-drive-strategy.md) | 기본 주행 루프·**Metric IPM SSOT**·external 참고 ★ |
 | [lane-perception-topic.md](./lane-perception-topic.md) | `/perception/lane` ↔ control · **시뮬/실차 노드 인벤토리** ★ |

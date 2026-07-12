@@ -1,0 +1,54 @@
+# Main driving planner — single place for course, Pure Pursuit and mission tuning.
+# route.mode may also be overridden at launch: route_mode:=in|out
+
+route:
+  mode: out
+  # IN: prefer yellow whenever its centerline is stable; white remains fallback.
+  prefer_yellow: false
+  # OUT fork: 0 = leftmost, -1 = rightmost. Normally the sign selects this.
+  default_out_branch_rank: 0
+
+pure_pursuit:
+  lookahead_m: 0.60
+  wheelbase_m: 0.24
+  max_steer_angle_rad: 0.5236
+  max_steering_command: 1.0
+  steering_rate_limit: 0.15
+
+speed:
+  cruise_throttle: 0.25
+  curve_throttle: 0.18
+  curve_steering_threshold: 0.50
+  default_throttle: 0.0
+
+path:
+  min_points: 5
+  white_min_confidence: 0.15
+  yellow_min_confidence: 0.15
+  yellow_valid_on_frames: 3
+  path_lost_stop_frames: 10
+  fork_exit_off_frames: 8
+
+roundabout:
+  # Enter circle mode once a stable yellow path or a yellow crossing line appears.
+  entry_on_yellow: true
+  min_lap_time_sec: 5.0
+  exit_branch_rank: 0
+  branch_required_events: 2
+  crossing_required_events: 2
+  branch_on_frames: 3
+  branch_off_frames: 8
+  crossing_on_frames: 2
+  crossing_off_frames: 5
+
+signals:
+  # Keep false until start/finish signal context is validated on the real track.
+  require_green_to_start: false
+  stop_on_red: false
+
+safety:
+  command_watchdog_sec: 0.5
+
+debug:
+  log_state_changes: true
+  log_decision_changes: true
