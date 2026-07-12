@@ -72,6 +72,19 @@ def test_fuse_throttle_scale():
     assert abs(cmd.steering - 0.6) < 1e-6
 
 
+def test_yellow_follow_centerline():
+    from inference.modules.lane_planner import mock_lane
+    from inference.types import LaneMarking
+
+    dets = mock_lane(0.175, -0.175, color=LaneMarking.COLOR_YELLOW)
+    y_c, conf = centerline_y_at_lookahead(dets, 0.8, 0.175, follow_color='yellow')
+    assert y_c is not None
+    assert abs(y_c) < 1e-4
+    assert conf > 0.4
+    assert dets.white_left() is None
+    assert dets.yellow_left() is not None
+
+
 def test_hold_decay_when_lost():
     params = LaneControlParams(ema_alpha=1.0, steer_rate_limit=1.0, hold_decay=0.5)
     planner = LanePlanner(params)
@@ -88,5 +101,6 @@ if __name__ == '__main__':
     test_planner_steer_sign_d_racer()
     test_planner_one_side_left_only()
     test_fuse_throttle_scale()
+    test_yellow_follow_centerline()
     test_hold_decay_when_lost()
     print('ok')

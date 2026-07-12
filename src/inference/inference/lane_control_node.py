@@ -56,6 +56,7 @@ class LaneControlNode(Node):
         self.declare_parameter('publish_hz', 10.0)
         # Stop if perception stops publishing (camera hang / node crash).
         self.declare_parameter('lane_timeout_sec', 0.5)
+        self.declare_parameter('lane_follow_color', '')
 
         self.vehicle_config_file = os.path.expanduser(
             str(self.get_parameter('vehicle_config_file').value)
@@ -81,6 +82,12 @@ class LaneControlNode(Node):
             self.steer_trim = self._load_steer_trim()
 
         params = load_control_params(Path(control_config))
+        follow_override = str(self.get_parameter('lane_follow_color').value).strip()
+        if follow_override:
+            from inference.modules.lane_planner import LaneControlParams
+            params = LaneControlParams(
+                **{**params.__dict__, 'follow_color': follow_override}
+            ).clamp()
         self.planner = LanePlanner(params)
         self._latest_command: Control | None = None
         self._last_lane_time: Time | None = None
@@ -104,7 +111,7 @@ class LaneControlNode(Node):
             f'lane_control_node started: lane_topic={lane_topic}, '
             f'control_topic={control_topic}, cruise={self.cruise_throttle}, '
             f'steer_trim={self.steer_trim}, timeout={self.lane_timeout_sec}s, '
-            f'config={control_config}'
+            f'config={control_config}, follow_color={self.planner.params.follow_color}'
         )
 
     def _load_steer_trim(self) -> float:

@@ -1,7 +1,10 @@
 # Lane planner / control gains (Phase 2+)
 # Tuned with: scripts/vision_tune/tune_lane_control.py
 # Sim and real car share this file (same /camera + /control topics).
+# follow_color: white | yellow — single mode only (no auto switch). Override with
+#   ros2 run … -p lane_follow_color:=yellow
 
+follow_color: white
 lookahead_x_m: 0.80
 # Lateral error (m) → steering_offset. D-Racer: +steer = right; y_left positive
 # → steer ≈ -Kp * y_error when centerline is left of vehicle.

@@ -35,6 +35,11 @@ def generate_launch_description():
   return LaunchDescription([
     DeclareLaunchArgument('use_sim_time', default_value='true'),
     DeclareLaunchArgument('cruise_throttle', default_value='0.35'),
+    DeclareLaunchArgument(
+      'lane_follow_color',
+      default_value='white',
+      description='Single-color lane follow: white | yellow (no auto switch)',
+    ),
 
     IncludeLaunchDescription(
       PythonLaunchDescriptionSource(
@@ -85,6 +90,7 @@ def generate_launch_description():
           'vehicle_config_file': vehicle_config_path,
           'control_config_file': control_config_path,
           'cruise_throttle': cruise_throttle,
+          'lane_follow_color': LaunchConfiguration('lane_follow_color'),
           'steer_trim_override': True,
           'steer_trim': 0.0,
           'lane_timeout_sec': 0.5,

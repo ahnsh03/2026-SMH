@@ -93,35 +93,35 @@ python3 scripts/vision_tune/capture_camera.py --out data/captures/sim
 
 ## 제어 게인 튜너 (Phase 2 · 시뮬·실차 공용)
 
-흰 차선 스텁 + `lane_planner` 조향을 보면서 **P / EMA / rate / look-ahead**를 맞춘다.
+스무딩: **`raw → EMA → rate-limit → out`** (창 하단 cyan / magenta / orange 바).
 
 ```bash
-python3 scripts/vision_tune/tune_lane_control.py
-python3 scripts/vision_tune/tune_lane_control.py --folder data/captures/sim
-python3 scripts/vision_tune/tune_lane_control.py --topic /camera/image/compressed
+source /opt/ros/humble/setup.bash
+# 주행 중 트랙바 (inference_node 끄기, sim-bringup만)
+python3 scripts/vision_tune/tune_lane_control.py --drive
 ```
 
-| 창 | 역할 |
-|----|------|
-| `lane_ctrl_origin` | 원본 + crop + 조향 바 |
-| `lane_ctrl_bev` | Metric BEV + 흰 L/R + look-ahead |
-| `lane_ctrl_controls` | 트랙바 |
+| 증상 | 조절 |
+|------|------|
+| 커브 **너무 일찍** 꺾임 | `lookahead_cm` ↓ (예 80→55~65) |
+| 연속 커브에서 **늦게/덜** 꺾여 이탈 | `rate_x100` ↑ (15→25~40), `max_steer_%` =100, `cruise_%` ↓ |
+| 출력이 raw보다 한참 느림 | rate/EMA가 막는 중 → rate↑ 또는 ema↑ |
+| 속도 | **`cruise_%`** (맨 위 트랙바, `--drive`에 즉시 반영) |
 
-| 트랙바 | 역할 | 기본 |
-|--------|------|------|
-| `lookahead_cm` | look-ahead x (cm) | 80 |
-| `kp_x10` | P 게인 ×10 | 20 (=2.0) |
-| `ema_%` | EMA α (%) | 40 |
-| `rate_x100` | 프레임당 |Δsteer| 한도 | 15 |
-| `cruise_%` | 표시용 cruise (yaml 미저장) | 35 |
-| `slow_scale_%` | \|steer\| 클 때 throttle 배율 | 80 |
+| 트랙바 | 의미 |
+|--------|------|
+| `cruise_%` | 차 속도 (throttle) |
+| `lookahead_cm` | look-ahead 거리 |
+| `kp_x10` | P 게인 |
+| `ema_%` | EMA α |
+| `rate_x100` | 프레임당 조향 변화 한도 |
+| `max_steer_%` | 최대 조향각 |
+| `slow_scale_%` / `half_w_cm` / `hold_%` / `color_0w1y` | 감속·반폭·홀드·색 |
 
-| 키 | 동작 |
-|----|------|
-| `s` | `config/lane_control.yaml` 저장 |
-| `r` | planner EMA/steer 상태 리셋 |
-| `q` / ESC | 종료 |
-| `n` / `p` | 폴더 모드 다음/이전 |
+키: `s` 저장 · `space` pause · `q` 정지 종료
+
+**알려진 한계:** 우회전 등에서 한쪽 차선이 사라지면 스텁이 L/R을 뒤집을 수 있음  
+→ 조향 게인 문제가 아니라 인지 할당 문제. 상세·후속: [lane-drive-strategy.md §11.6](../../docs/lane-drive-strategy.md).
 
 ---
 
