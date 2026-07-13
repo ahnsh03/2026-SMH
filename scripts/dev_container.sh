@@ -247,6 +247,7 @@ Usage: ./scripts/dev_container.sh <command>
   sim-up           시뮬 컨테이너 생성·시작 (백그라운드, sleep)
   sim-down         시뮬 컨테이너 중지·삭제
   sim-bringup      build-sim + Gazebo launch (Ctrl+C 시 launch만 종료, 컨테이너 유지)
+  teleport         bringup 유지한 채 spawn_poses.yaml 프리셋으로 LIMO 텔레포트
   lane-tune        인지 모드 튜너 안내 (Gazebo 미기동 — bringup 후 컨테이너에서 실행)
   sim              build-sim + 자율주행 launch
   sim-manual       build-sim + 수동주행 launch
@@ -266,6 +267,8 @@ Usage: ./scripts/dev_container.sh <command>
 Examples:
   ./scripts/dev_container.sh sim-up
   ./scripts/dev_container.sh sim-bringup
+  ./scripts/dev_container.sh teleport --list
+  ./scripts/dev_container.sh teleport in_roundabout_exit
   docker exec -it ${SIM_CONTAINER_NAME} bash
   ./scripts/dev_container.sh sim-bringup use_camera_view:=false headless:=true
   # 인지 검증 (Gazebo 재기동 금지):
@@ -332,6 +335,20 @@ case "${cmd}" in
     shift || true
     sim_exec_launch dracer_sim sim_bringup.launch.py "$@"
     ;;
+  teleport)
+    shift || true
+    if ! sim_container_running; then
+      echo "[SEA-Me] ${SIM_CONTAINER_NAME} 이 없습니다. sim-up → sim-bringup 후 사용하세요." >&2
+      exit 1
+    fi
+    # bash -c 뒤 첫 인자는 $0, 나머지는 $@ — 호스트 argv를 그대로 전달
+    docker exec -i "${SIM_CONTAINER_NAME}" bash -c "
+${SIM_EXEC_PREAMBLE}
+set -euo pipefail
+cd /workspace
+exec python3 scripts/teleport_spawn_pose.py \"\$@\"
+" teleport "$@"
+    ;;
   lane-tune)
     cat <<EOF
 [SEA-Me] 인지 모드 튜너 — Gazebo를 이 명령으로 켜지 않습니다.
@@ -339,9 +356,11 @@ case "${cmd}" in
   터미널1:  ./scripts/dev_container.sh sim-bringup
   터미널2:  docker exec -it ${SIM_CONTAINER_NAME} bash
             source /opt/ros/humble/setup.bash && source install/setup.bash
-            python3 scripts/vision_tune/tune_lane_detect.py --mode white
+            python3 scripts/vision_tune/tune_lane_detect.py
+            # 기본 모드=dash (Phase A). c/SPACE=로그 저장 → data/captures/lane_tune_logs/
 
-  키 1–9 / 0: white yellow dash dash_left dash_right fork fork_left fork_right red crossing
+  Phase A: 키 2–3 (yellow/dash) → 4가닥 점선·실선이 깨끗할 때까지
+  Phase B: 4–5  · Phase C: 6–8 fork 분리 (A 이후에만)
   문서: docs/lane-perception-topic.md §6.2 · scripts/vision_tune/README.md
 
   ❌ LANE_VISUALIZE=… ros2 launch dracer_sim sim_auto_driving.launch.py

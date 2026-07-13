@@ -20,6 +20,7 @@ dist/
 datasets/
 runs/
 wandb/
+data/captures/
 
 # IDE / OS
 .vscode/

@@ -3,9 +3,7 @@
 
 route:
   mode: OUT
-  # IN: prefer yellow whenever its centerline is stable; white remains fallback.
-  prefer_yellow: false
-  # OUT fork: 0 = leftmost, -1 = rightmost. Normally the sign selects this.
+  # OUT/IN fork layers: 0 = left, 1 = right (direction sign selects).
   default_out_branch_rank: 0
   # Confirm the same direction before latching it. Once a fork starts, its
   # direction/rank stays locked until the manoeuvre completes.
@@ -14,6 +12,8 @@ route:
   fork_path_hold_frames: 3
   # Prevent the same junction from immediately retriggering after exit.
   fork_reentry_cooldown_sec: 2.0
+  # prefer_yellow: omitted — IN launch (route_mode:=in) defaults True in code;
+  # OUT defaults False. Set explicitly only to override.
 
 pure_pursuit:
   # Adaptive LD: long on straights, short on curves.

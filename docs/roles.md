@@ -17,7 +17,7 @@
 
 | 담당 | 모듈·영역 | 과제 |
 |------|-----------|------|
-| **안승현** (임시) | `modules/lane_detection.py` | 갈림길·곡선·한쪽선 L/R 인지 안정화 · `LANE_VISUALIZE` 순차 검증 (원태 공석) |
+| **안승현** (임시) | `modules/lane_detection.py` | 갈림·곡선·한쪽 소실 L/R · [lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md) (원태 공석) |
 | **장원태** | `lane_detection` (복귀 후) | 알고리즘 핸드오프·공동 소유 |
 | **양서준** | `pipeline.MainPlanner` · `config/main_planner.yaml` | PP·In/Out 미션 FSM · 게인 튜닝 |
 | **장원정** | `modules/traffic_sign.py` | 신호등·표지판 (MainPlanner 입력) |

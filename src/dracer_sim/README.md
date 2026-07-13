@@ -118,6 +118,8 @@ src/dracer_sim/
 ```bash
 ros2 launch dracer_sim sim_bringup.launch.py spawn_pose:=out_fork
 ros2 launch dracer_sim sim_bringup.launch.py spawn_pose:=custom spawn_x:=0.0 spawn_y:=-3.6 spawn_yaw:=1.57
+# bringup 유지한 채 다른 터미널:
+./scripts/dev_container.sh teleport in_roundabout_exit
 ```
 
 상세 WSL 설치·팀원 재현: [docs/simulation-setup.md](../../docs/simulation-setup.md)

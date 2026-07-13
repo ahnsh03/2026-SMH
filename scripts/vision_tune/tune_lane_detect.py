@@ -4,23 +4,24 @@
 Does **not** launch Gazebo. Assumes `/camera/image/compressed` is already
 publishing (sim-bringup or real car), or use ``--image`` / ``--folder``.
 
-Modes (keys 1–9, 0):
-  white | yellow | dash | dash_left | dash_right |
-  fork | fork_left | fork_right | red | crossing
+Staged workflow (recommended):
+  Phase A — keys 2–3: yellow HSV, then dash connect until **4 clear strands**
+  Phase B — keys 4–5: optional dash_left / dash_right filter check
+  Phase C — keys 6–8: L/R fork pair split (only after Phase A looks good)
 
-Dash modes isolate dashed markings at forks/merges. ``dash_left`` /
-``dash_right`` keep only blobs near that RoadBranch centerline so the chosen
-path's dashed lane can be promoted without the other gore line.
-One preview window + trackbars on the same window. Saves HSV + detect_tune
-into ``config/lane_vision.yaml``.
+Hotkeys:
+  c / SPACE  save review bundle under data/lane_tune_logs/<stamp>/
+  s          write hsv + detect_tune into config/lane_vision.yaml
+  1–9 / 0    switch mode
+  n / p      next/prev (folder mode)
+  q / ESC    quit
 
-Examples (inside 2026-smh-sim, Gazebo already running via sim-bringup):
+Examples (inside 2026-smh-sim):
 
-  source /opt/ros/humble/setup.bash
-  source install/setup.bash
-  python3 scripts/vision_tune/tune_lane_detect.py --mode white
-  python3 scripts/vision_tune/tune_lane_detect.py --folder data/captures/sim
-  python3 scripts/vision_tune/tune_lane_detect.py --image /path/to/frame.png
+  source /opt/ros/humble/setup.bash && source install/setup.bash
+  python3 scripts/vision_tune/tune_lane_detect.py              # starts on dash
+  python3 scripts/vision_tune/tune_lane_detect.py --mode fork
+  python3 scripts/vision_tune/tune_lane_detect.py --folder data/captures/lane_tune_logs
 
 Do **not** re-run ``sim_auto_driving`` just for visualization (starts a second Gazebo).
 """
@@ -28,7 +29,9 @@ Do **not** re-run ``sim_auto_driving`` just for visualization (starts a second G
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -67,8 +70,23 @@ MODES = (
     'crossing',
 )
 
+# Staged tuning phases shown in the HUD (mode name → phase tag).
+_MODE_PHASE = {
+    'white': 'prep',
+    'yellow': 'A-hsv',
+    'dash': 'A-dash',
+    'dash_left': 'B-filter',
+    'dash_right': 'B-filter',
+    'fork': 'C-split',
+    'fork_left': 'C-split',
+    'fork_right': 'C-split',
+    'red': 'other',
+    'crossing': 'other',
+}
+
 WIN = 'lane_detect_tune'
 PREVIEW_SCALE = 2.0
+DEFAULT_LOG_ROOT = _REPO_ROOT / 'data' / 'captures' / 'lane_tune_logs'
 
 _DASH_TRACKBARS = (
     ('dash_lat_mm', 200, 50),
@@ -102,12 +120,21 @@ _MODE_TRACKBARS: dict[str, tuple[tuple[str, int, int], ...]] = {
     'dash_right': _DASH_TRACKBARS,
     'fork': (
         ('branch_sep_cm', 50, 15),
+        ('fork_assoc_cm', 40, 8),
+        ('fork_min_rows', 80, 18),
+        ('fork_width_cm', 60, 35),
     ),
     'fork_left': (
         ('branch_sep_cm', 50, 15),
+        ('fork_assoc_cm', 40, 8),
+        ('fork_min_rows', 80, 18),
+        ('fork_width_cm', 60, 35),
     ),
     'fork_right': (
         ('branch_sep_cm', 50, 15),
+        ('fork_assoc_cm', 40, 8),
+        ('fork_min_rows', 80, 18),
+        ('fork_width_cm', 60, 35),
     ),
     'red': (
         ('h_min', 179, 170),
@@ -156,6 +183,9 @@ def _load_detect_tune(path: Path) -> dict[str, float | int]:
         'dash_min_component_area_px': 12,
         'dash_branch_assoc_m': 0.22,
         'red_h_low_wrap': 0,
+        'fork_track_assoc_m': 0.08,
+        'fork_track_min_rows': 18,
+        'fork_pair_width_m': 0.35,
     }
     if not path.is_file():
         return defaults
@@ -186,12 +216,166 @@ def _save_detect_tune(tune: dict[str, float | int], path: Path) -> Path:
         'dash_min_component_area_px': int(tune['dash_min_component_area_px']),
         'dash_branch_assoc_m': float(tune['dash_branch_assoc_m']),
         'red_h_low_wrap': int(tune['red_h_low_wrap']),
+        'fork_track_assoc_m': float(tune['fork_track_assoc_m']),
+        'fork_track_min_rows': int(tune['fork_track_min_rows']),
+        'fork_pair_width_m': float(tune['fork_pair_width_m']),
         'note': 'Tuned with scripts/vision_tune/tune_lane_detect.py',
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('w', encoding='utf-8') as f:
         yaml.safe_dump(existing, f, sort_keys=False, allow_unicode=True)
     return path
+
+
+def _stamp() -> str:
+    return datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')
+
+
+def _chown_to_host(path: Path) -> None:
+    """Avoid root-owned logs that the host user cannot edit/delete."""
+
+    if os.geteuid() != 0:
+        return
+    uid = os.environ.get('HOST_UID') or os.environ.get('SUDO_UID')
+    gid = os.environ.get('HOST_GID') or os.environ.get('SUDO_GID')
+    try:
+        if uid is not None:
+            os.chown(path, int(uid), int(gid if gid is not None else uid))
+        else:
+            os.chown(path, 1000, 1000)
+    except OSError:
+        pass
+
+
+def _mask_bgr(mask: np.ndarray) -> np.ndarray:
+    if mask is None or mask.size == 0:
+        return np.zeros((1, 1, 3), dtype=np.uint8)
+    if mask.ndim == 2:
+        return cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    return mask
+
+
+def _save_capture_bundle(state: 'DetectTuneState', log_root: Path) -> Path | None:
+    """Write frame + dash/fork debug artifacts for offline review."""
+
+    if state.last_frame is None or state.last_preview is None:
+        print('[capture] no frame yet — wait for camera/image')
+        return None
+
+    stamp = _stamp()
+    out_dir = log_root / f'{stamp}_{state.mode}'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _chown_to_host(out_dir)
+
+    frame = state.last_frame
+    preview = state.last_preview
+    debug = state.last_debug
+
+    cv2.imwrite(str(out_dir / 'frame.png'), frame)
+    cv2.imwrite(str(out_dir / 'preview.png'), preview)
+    if debug is not None:
+        if getattr(debug, 'bev', None) is not None and debug.bev.size:
+            cv2.imwrite(str(out_dir / 'bev.png'), debug.bev)
+        if getattr(debug, 'yellow_bev', None) is not None and debug.yellow_bev.size:
+            cv2.imwrite(str(out_dir / 'yellow_hsv.png'), _mask_bgr(debug.yellow_bev))
+        if (
+            getattr(debug, 'yellow_dash_points_bev', None) is not None
+            and debug.yellow_dash_points_bev.size
+        ):
+            cv2.imwrite(
+                str(out_dir / 'yellow_dash_points.png'),
+                _mask_bgr(debug.yellow_dash_points_bev),
+            )
+        if (
+            getattr(debug, 'yellow_connected_bev', None) is not None
+            and debug.yellow_connected_bev.size
+        ):
+            cv2.imwrite(
+                str(out_dir / 'yellow_connected.png'),
+                _mask_bgr(debug.yellow_connected_bev),
+            )
+        if getattr(debug, 'road_clean', None) is not None and debug.road_clean.size:
+            cv2.imwrite(str(out_dir / 'road_clean.png'), _mask_bgr(debug.road_clean))
+
+    phase = _MODE_PHASE.get(state.mode, '?')
+    meta: dict[str, Any] = {
+        'stamp_utc': stamp,
+        'mode': state.mode,
+        'phase': phase,
+        'phase_guide': {
+            'A-hsv/A-dash': 'Tune until 4 yellow strands (2 outer solid + 2 dash) are clear',
+            'B-filter': 'Optional: dash_left/right keep only one gore side',
+            'C-split': 'Only after Phase A: L/R outer+inner+center pairs',
+        },
+        'detect_tune': dict(state.tune),
+        'hsv_yellow': {
+            'h_min': int(state.ranges['yellow'].h_min),
+            'h_max': int(state.ranges['yellow'].h_max),
+            's_min': int(state.ranges['yellow'].s_min),
+            's_max': int(state.ranges['yellow'].s_max),
+            'v_min': int(state.ranges['yellow'].v_min),
+            'v_max': int(state.ranges['yellow'].v_max),
+        },
+        'user_note': state.capture_note or '',
+        'files': [
+            'frame.png',
+            'preview.png',
+            'bev.png',
+            'yellow_hsv.png',
+            'yellow_dash_points.png',
+            'yellow_connected.png',
+            'road_clean.png',
+            'meta.yaml',
+        ],
+    }
+    if debug is not None:
+        meta['debug'] = {
+            'fork_active': bool(getattr(debug, 'fork_active', False)),
+            'n_road_branches': len(getattr(debug, 'road_branches', ()) or ()),
+            'n_fork_lane_pairs': len(getattr(debug, 'fork_lane_pairs', ()) or ()),
+            'n_fork_mark_tracks': len(getattr(debug, 'fork_mark_tracks', ()) or ()),
+            'fork_split_source': str(getattr(debug, 'fork_split_source', '') or ''),
+            'ego_road_color': getattr(debug, 'ego_road_color', None),
+            'yellow_crossing_line': bool(
+                getattr(debug, 'yellow_crossing_line', False)
+            ),
+        }
+
+    meta_path = out_dir / 'meta.yaml'
+    with meta_path.open('w', encoding='utf-8') as f:
+        yaml.safe_dump(meta, f, sort_keys=False, allow_unicode=True)
+
+    for path in out_dir.iterdir():
+        _chown_to_host(path)
+
+    latest = log_root / 'LATEST.txt'
+    latest.write_text(f'{out_dir.relative_to(_REPO_ROOT)}\n', encoding='utf-8')
+    _chown_to_host(latest)
+
+    # Append to a simple index the agent can skim.
+    index_path = log_root / 'INDEX.md'
+    line = (
+        f'- `{out_dir.name}` · mode={state.mode} · phase={phase} · '
+        f'note={state.capture_note or "-"}\n'
+    )
+    header = (
+        '# lane_tune_logs\n\n'
+        'Press `c` / SPACE in `tune_lane_detect.py` to append entries.\n\n'
+    )
+    if index_path.is_file():
+        index_path.write_text(
+            index_path.read_text(encoding='utf-8') + line,
+            encoding='utf-8',
+        )
+    else:
+        index_path.write_text(header + line, encoding='utf-8')
+    _chown_to_host(index_path)
+
+    # Clear one-shot note after save.
+    state.capture_note = ''
+    print(f'[capture] saved → {out_dir}')
+    print(f'[capture] LATEST → {latest}')
+    return out_dir
 
 
 def _import_lane_detection():
@@ -215,12 +399,18 @@ class DetectTuneState:
         ranges: dict[str, HsvRange],
         tune: dict[str, float | int],
         mode: str,
+        log_root: Path | None = None,
     ):
         self.ranges = {k: v.clamp() for k, v in ranges.items()}
         self.tune = dict(tune)
         self.mode_idx = MODES.index(mode) if mode in MODES else 0
         self._suppress = False
         self._trackbar_keys: tuple[str, ...] = ()
+        self.log_root = Path(log_root) if log_root else DEFAULT_LOG_ROOT
+        self.last_frame: np.ndarray | None = None
+        self.last_debug: Any = None
+        self.last_preview: np.ndarray | None = None
+        self.capture_note: str = ''
 
     @property
     def mode(self) -> str:
@@ -229,6 +419,8 @@ class DetectTuneState:
     def set_mode(self, idx: int) -> None:
         self.mode_idx = int(np.clip(idx, 0, len(MODES) - 1))
         self._rebuild_trackbars()
+        phase = _MODE_PHASE.get(self.mode, '?')
+        print(f'Mode → {self.mode}  [{phase}]')
 
     def _rebuild_trackbars(self) -> None:
         # Destroy/recreate window so trackbars match the mode.
@@ -292,6 +484,18 @@ class DetectTuneState:
         if mode.startswith('fork') and 'branch_sep_cm' in self._trackbar_keys:
             cm = int(round(float(self.tune['min_branch_separation_m']) * 100))
             cv2.setTrackbarPos('branch_sep_cm', WIN, int(np.clip(cm, 2, 50)))
+            if 'fork_assoc_cm' in self._trackbar_keys:
+                cm_a = int(round(float(self.tune['fork_track_assoc_m']) * 100))
+                cv2.setTrackbarPos('fork_assoc_cm', WIN, int(np.clip(cm_a, 2, 40)))
+            if 'fork_min_rows' in self._trackbar_keys:
+                cv2.setTrackbarPos(
+                    'fork_min_rows',
+                    WIN,
+                    int(np.clip(int(self.tune['fork_track_min_rows']), 5, 80)),
+                )
+            if 'fork_width_cm' in self._trackbar_keys:
+                cm_w = int(round(float(self.tune['fork_pair_width_m']) * 100))
+                cv2.setTrackbarPos('fork_width_cm', WIN, int(np.clip(cm_w, 15, 60)))
         if mode == 'red' and 'h_low_wrap' in self._trackbar_keys:
             cv2.setTrackbarPos(
                 'h_low_wrap', WIN, int(self.tune['red_h_low_wrap'])
@@ -352,6 +556,18 @@ class DetectTuneState:
             self.tune['min_branch_separation_m'] = (
                 max(2, cv2.getTrackbarPos('branch_sep_cm', WIN)) / 100.0
             )
+            if 'fork_assoc_cm' in self._trackbar_keys:
+                self.tune['fork_track_assoc_m'] = (
+                    max(2, cv2.getTrackbarPos('fork_assoc_cm', WIN)) / 100.0
+                )
+            if 'fork_min_rows' in self._trackbar_keys:
+                self.tune['fork_track_min_rows'] = max(
+                    5, cv2.getTrackbarPos('fork_min_rows', WIN)
+                )
+            if 'fork_width_cm' in self._trackbar_keys:
+                self.tune['fork_pair_width_m'] = (
+                    max(15, cv2.getTrackbarPos('fork_width_cm', WIN)) / 100.0
+                )
         if mode == 'red' and 'h_low_wrap' in self._trackbar_keys:
             self.tune['red_h_low_wrap'] = int(
                 cv2.getTrackbarPos('h_low_wrap', WIN)
@@ -383,6 +599,9 @@ class DetectTuneState:
             dash_min_component_area_px=int(self.tune['dash_min_component_area_px']),
             dash_branch_assoc_m=float(self.tune['dash_branch_assoc_m']),
             red_h_low_wrap=int(self.tune['red_h_low_wrap']),
+            fork_track_assoc_m=float(self.tune['fork_track_assoc_m']),
+            fork_track_min_rows=int(self.tune['fork_track_min_rows']),
+            fork_pair_width_m=float(self.tune['fork_pair_width_m']),
         )
 
 
@@ -392,34 +611,43 @@ def _show_frame(frame: np.ndarray, state: DetectTuneState, ld: Any) -> None:
     preview = ld.render_mode_preview(state.mode, debug)
     if preview.size == 0:
         return
+    state.last_frame = frame.copy()
+    state.last_debug = debug
+    state.last_preview = preview.copy()
+
     h, w = preview.shape[:2]
     scaled = cv2.resize(
         preview,
         (int(w * PREVIEW_SCALE), int(h * PREVIEW_SCALE)),
         interpolation=cv2.INTER_NEAREST,
     )
+    phase = _MODE_PHASE.get(state.mode, '?')
     label = (
-        f'[{state.mode_idx + 1}/{len(MODES)}] {state.mode}  '
-        f'fork={debug.fork_active} nB={len(debug.road_branches)}  '
-        f'red={100.0 * debug.red_coverage:.1f}%  '
-        f'crossY={debug.yellow_crossing_line}'
+        f'[{state.mode_idx + 1}/{len(MODES)}] {state.mode} [{phase}]  '
+        f'tracks={len(getattr(debug, "fork_mark_tracks", ()) or ())}  '
+        f'pairs={len(getattr(debug, "fork_lane_pairs", ()) or ())}  '
+        f'src={getattr(debug, "fork_split_source", "") or "-"}'
     )
     cv2.putText(
         scaled,
         label,
         (8, scaled.shape[0] - 12),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.45,
+        0.42,
         (0, 255, 255),
         1,
         cv2.LINE_AA,
     )
+    hud = (
+        'Phase A:2-3 yellow/dash → B:4-5 → C:6-8 fork | '
+        'c/SPACE=log bundle  s=yaml  q=quit'
+    )
     cv2.putText(
         scaled,
-        '1-9/0 mode  s=save  n/p folder  q=quit  (no Gazebo launch)',
+        hud,
         (8, 18),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
+        0.38,
         (200, 255, 200),
         1,
         cv2.LINE_AA,
@@ -435,6 +663,10 @@ def _handle_key(
 ) -> str | None:
     if key in (ord('q'), 27):
         return 'quit'
+    if key in (ord('c'), ord(' ')):
+        state.sync_from_trackbars()
+        _save_capture_bundle(state, state.log_root)
+        return None
     if key == ord('s'):
         state.sync_from_trackbars()
         save_hsv_ranges(state.ranges, config_path)
@@ -443,7 +675,6 @@ def _handle_key(
         return None
     if key == ord('0'):
         state.set_mode(9)  # crossing
-        print(f'Mode → {state.mode}')
         return None
     if key in (
         ord('1'),
@@ -457,7 +688,6 @@ def _handle_key(
         ord('9'),
     ):
         state.set_mode(key - ord('1'))
-        print(f'Mode → {state.mode}')
         return None
     if key == ord('n'):
         return 'next'
@@ -481,7 +711,10 @@ def run_folder(
         raise SystemExit(f'Failed to load images from {folder}')
     state._rebuild_trackbars()
     idx = 0
-    print(f'Folder mode: {len(frames)} images. Keys: 1-9/0 mode  s  n/p  q')
+    print(
+        f'Folder mode: {len(frames)} images. '
+        f'Keys: 2-3 Phase A dash | c=log | s=yaml | n/p | q'
+    )
     while True:
         _show_frame(frames[idx], state, ld)
         key = cv2.waitKey(30) & 0xFF
@@ -508,7 +741,7 @@ def run_image(
     if frame is None:
         raise SystemExit(f'Failed to read image: {image}')
     state._rebuild_trackbars()
-    print(f'Image mode: {image}. Keys: 1-9/0 mode  s  q')
+    print(f'Image mode: {image}. Keys: 2-3 Phase A | c=log | s | q')
     while True:
         _show_frame(frame, state, ld)
         key = cv2.waitKey(30) & 0xFF
@@ -562,7 +795,10 @@ def run_topic(
     state._rebuild_trackbars()
     rclpy.init()
     node = DetectTuneNode()
-    print('Live topic mode. Keys: 1-9/0 mode  s=save  q=quit')
+    print('Live topic mode.')
+    print('  Phase A (now): key 3=dash — tune dash_* until 4 strands look solid')
+    print(f'  c / SPACE → save bundle under {state.log_root}')
+    print('  s → yaml   q → quit')
     print('Ensure sim-bringup (or car) is already publishing the camera topic.')
     try:
         while rclpy.ok():
@@ -581,7 +817,10 @@ def run_topic(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description='Mode-by-mode lane perception tuner (no Gazebo launch)'
+        description=(
+            'Lane perception tuner — Phase A dash connect first, then L/R split. '
+            'Hotkey c saves a review bundle.'
+        )
     )
     parser.add_argument('--topic', default='/camera/image/compressed')
     parser.add_argument('--folder', type=Path, default=None)
@@ -590,25 +829,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         '--mode',
         choices=list(MODES),
-        default='white',
-        help='Initial review mode',
+        default='dash',
+        help='Initial mode (default: dash = Phase A connect)',
+    )
+    parser.add_argument(
+        '--log-dir',
+        type=Path,
+        default=DEFAULT_LOG_ROOT,
+        help=f'Capture root (default: {DEFAULT_LOG_ROOT})',
     )
     args = parser.parse_args(argv)
 
     ld = _import_lane_detection()
-    # Keep OpenCV imshow from detect() off; this tool owns the window.
     ld.VISUALIZE_MODE = ld.VISUALIZE_OFF
     ld.VISUALIZE = False
 
     ranges = load_hsv_ranges(args.config)
     tune = _load_detect_tune(args.config)
-    # Prefer live module defaults when yaml section missing keys already applied.
     live = ld.get_detect_tune()
     for key, val in live.items():
         tune.setdefault(key, val)
 
-    state = DetectTuneState(ranges, tune, args.mode)
+    log_root = args.log_dir
+    if not log_root.is_absolute():
+        log_root = (_REPO_ROOT / log_root).resolve()
+    log_root.mkdir(parents=True, exist_ok=True)
+    _chown_to_host(log_root)
+
+    state = DetectTuneState(ranges, tune, args.mode, log_root=log_root)
     state.apply_to_module(ld)
+    print(
+        f'Starting mode={state.mode} [{_MODE_PHASE.get(state.mode, "?")}]  '
+        f'log_dir={log_root}'
+    )
 
     if args.image is not None:
         return run_image(args.image, state, args.config, ld)

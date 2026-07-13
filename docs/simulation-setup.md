@@ -628,6 +628,19 @@ SSOT: [`src/dracer_sim/config/spawn_poses.yaml`](../src/dracer_sim/config/spawn_
 
 좌표·yaw를 고치면 **yaml만** 수정한 뒤 `sim-bringup`을 다시 실행하면 된다 (월드 파일 수정 불필요).
 
+**런타임 텔레포트 (Gazebo 재기동 없이):** bringup이 떠 있는 동안 다른 터미널에서 프리셋으로 옮긴다.
+
+```bash
+./scripts/dev_container.sh teleport --list
+./scripts/dev_container.sh teleport in_roundabout_exit
+./scripts/dev_container.sh teleport out_fork
+./scripts/dev_container.sh teleport custom --x 0.0 --y -3.6 --yaw 1.57
+# 컨테이너 안:
+#   python3 scripts/teleport_spawn_pose.py in_roundabout_exit
+```
+
+`/set_entity_state`로 `limo`(기본) 모델 pose·twist를 설정한다. `robot:=dracer`면 `--entity dracer_sim`.
+
 ### 5.1 무엇이 배치되나
 
 | Gazebo 모델 | 대회 의미 | 실물 크기 | 판자 |

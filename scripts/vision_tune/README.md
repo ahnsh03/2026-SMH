@@ -26,28 +26,34 @@ source install/setup.bash
 
 ## 인지 모드 튜너 (주 검증 경로 · Gazebo-free)
 
-흰/노란/갈림길(좌·우·합)/빨간 장애물 차로/가로선을 **모드별로** 보고 트랙바로 맞춘다.  
-이미지와 트랙바는 **한 창** (`lane_detect_tune`).
+**단계형 튜닝 (권장):**
+
+| Phase | 키 | 목표 |
+|-------|----|------|
+| **A** | `2` yellow → `3` dash | 노란 점선이 이어져 **4가닥**이 명확히 보이게 |
+| **B** | `4` / `5` | (선택) 한쪽 고어 점선만 남는지 |
+| **C** | `6` / `7` / `8` | A 통과 후 L/R 차로 쌍·중앙 분리 |
+
+기본 시작 모드 = **`dash` (Phase A)**.
 
 ```bash
-python3 scripts/vision_tune/tune_lane_detect.py --mode white
-python3 scripts/vision_tune/tune_lane_detect.py --folder data/captures/sim
-python3 scripts/vision_tune/tune_lane_detect.py --image /path/to/frame.png
+python3 scripts/vision_tune/tune_lane_detect.py              # dash부터
+python3 scripts/vision_tune/tune_lane_detect.py --mode fork
+python3 scripts/vision_tune/tune_lane_detect.py --folder data/captures/lane_tune_logs
 ```
 
-| 키 | 모드 |
+| 키 | 동작 |
 |----|------|
-| `1` | `white` — 흰 차선 L/R |
-| `2` | `yellow` — 노란 차선·점선 오버레이 |
-| `3` / `4` / `5` | `dash` / `dash_left` / `dash_right` — 점선 전용 (갈래별 필터) |
-| `6` / `7` / `8` | `fork` / `fork_left` / `fork_right` |
-| `9` | `red` — 빨간 장애물 차로 |
-| `0` | `crossing` — 가로 정지선/진입선 |
-| `s` | `hsv:` + `detect_tune:` 저장 |
+| `c` / `SPACE` | **리뷰 번들 저장** → `data/captures/lane_tune_logs/<stamp>_<mode>/` (`LATEST.txt` 갱신) |
+| `s` | `hsv:` + `detect_tune:` → `config/lane_vision.yaml` |
+| `1`–`9` / `0` | 모드 전환 |
 | `n` / `p` | 폴더 다음/이전 |
 | `q` | 종료 |
 
-상세 체크리스트: [lane-perception-topic.md §6.2](../../docs/lane-perception-topic.md).
+캡처 폴더 내용: `frame.png`, `preview.png`, `yellow_dash_points.png`, `yellow_connected.png`, `meta.yaml` 등.  
+에이전트 확인용: `data/captures/lane_tune_logs/LATEST.txt` · `INDEX.md`.
+
+상세: [lane-perception-topic.md §6.2](../../docs/lane-perception-topic.md) · [lane-occlusion-fork-strategy.md](../../docs/lane-occlusion-fork-strategy.md).
 
 ---
 

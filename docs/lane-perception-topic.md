@@ -234,6 +234,9 @@ y = ((width - 1) / 2 - col) * meters_per_pixel
 현재 임시 planner(`lane_planner`, 레거시)는 **흰 L/R polyline**만 사용했다.  
 `MainPlanner`는 `fork_active` / `branches` / centerline / drivable를 **이미 소비**한다 — 필드 이름·단위를 바꾸지 말 것.
 
+**코스 ↔ 색:** Out → `white_centerline` / 흰 fork · In → `yellow_centerline` / 노란 fork.  
+SSOT: [lane-occlusion-fork-strategy.md §0.1](./lane-occlusion-fork-strategy.md).
+
 ---
 
 ## 5. Launch · 실행 방법
@@ -363,6 +366,10 @@ camera frame
 **담당:** **안승현(임시)** — 갈림길·곡선·한쪽선 L/R. **조향·MainPlanner FSM은 건드리지 않음.**  
 장원태 복귀 후 공동 소유·핸드오프. Metric IPM 계약·msg 필드 삭제/개명은 팀장과 합의.
 
+**개발 전략 SSOT (소실·갈림·중심선):**  
+[lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md) — **4선→2+2 매칭→갈래 중앙**이 본게임; 점선 정밀 연결은 커터/힌트.  
+핵심: 단일 차로 2선은 유지하고, 분기 시 경계 4가닥을 잡아 `RoadBranch[]`로 넘긴다. 선택은 MainPlanner.
+
 ### 6.2 모드 튜너 순차 검증 (`tune_lane_detect.py`)
 
 구현·버그픽스 **전에** 모드별로 관측 로그를 남긴다. DISPLAY가 있는 PC에서, **sim-bringup만** 켠 뒤 튜너 실행.
@@ -373,8 +380,8 @@ camera frame
 | 2 | `yellow` (`2`) | 노란 경계·점선 연결이 합리적인가 |
 | 3 | `dash` (`3`) | 분기/합류 점선(노랑·흰)이 분리·연결되는가 |
 | 4 | `dash_left` / `dash_right` (`4`/`5`) | 선택한 갈래 쪽 점선만 남고 반대 고어 선은 빠지는가 |
-| 5 | `fork` (`6`) | 갈림길에서 branch 2개가 안정적인가 |
-| 6 | `fork_left` / `fork_right` (`7`/`8`) | 좌·우 갈래를 따로 구분할 수 있는가 |
+| 5 | `fork` (`6`) | 갈림 L/R **outer+inner+center** 쌍이 맞는지 (`src=yellow_marks`, pairs=2) |
+| 6 | `fork_left` / `fork_right` (`7`/`8`) | 한쪽 쌍만 강조했을 때 의도한 갈래인가 |
 | 7 | `red` (`9`) | 동적 장애물 빨간 차로 커버리지가 뜨는가 |
 | 8 | `crossing` (`0`) | 가로 정지선/진입선이 경계를 오염시키지 않는가 |
 
@@ -385,6 +392,9 @@ python3 scripts/vision_tune/tune_lane_detect.py --mode white
 ```
 
 트랙바는 모드별 HSV·`detect_tune` 스칼라. `s` → `config/lane_vision.yaml` (`hsv:` + `detect_tune:`).
+
+**단계:** Phase A(`2`/`3` 점선 연결 → 4가닥) 완료 후에만 Phase C(`6`–`8` 갈래 분리).  
+**피드백 캡처:** `c` / `SPACE` → `data/captures/lane_tune_logs/<stamp>_<mode>/` (+ `LATEST.txt`).
 
 버그픽스는 `feature/seunghyun-lane-fork-audit` 등에서 모드 1→6 검증 후 진행.
 

@@ -361,7 +361,7 @@ def test_in_course_exits_on_second_debounced_branch():
 
     assert planner.branch_counter.events == 2
     assert output.state is DrivingState.ROUNDABOUT_EXIT
-    assert output.decision == 'roundabout_exit_branch'
+    assert output.decision == 'roundabout_exit_rank0'
 
 
 def test_out_fork_state_does_not_treat_single_branch_as_turn_path():
@@ -398,10 +398,27 @@ def test_out_fork_state_does_not_treat_single_branch_as_turn_path():
         output = planner.step(frame, now_sec=0.0)
 
     assert output.path_source is PathSource.WHITE_CENTERLINE
-    assert output.decision == 'out_fork_lane_follow'
+    assert output.decision == 'out_fork_color_resume'
 
 
-def test_out_fork_debug_reports_sign_selected_branch():
+def test_force_fork_choice_left_rank0_right_rank1():
+    planner = MainPlanner(PlannerConfig(min_points=5))
+    planner.force_fork_choice(TurnSign.LEFT, state=DrivingState.FORK_TURN)
+    assert planner._fork_selected_rank == 0
+    assert planner.state is DrivingState.FORK_TURN
+    planner.force_fork_choice(TurnSign.RIGHT, state=DrivingState.ROUNDABOUT_EXIT)
+    assert planner._fork_selected_rank == 1
+    assert planner.state is DrivingState.ROUNDABOUT_EXIT
+
+
+def test_ranked_branch_matches_lateral_rank():
+    left = SimpleNamespace(points=np.zeros((5, 2), np.float32), confidence=1.0, lateral_rank=0)
+    right = SimpleNamespace(points=np.ones((5, 2), np.float32), confidence=1.0, lateral_rank=1)
+    # Deliberately reverse list order — lateral_rank must win.
+    lane = SimpleNamespace(branches=(right, left))
+    assert MainPlanner._ranked_branch(lane, 0) is left
+    assert MainPlanner._ranked_branch(lane, 1) is right
+
     left_path = np.array(
         [[0.2, 0.15], [0.4, 0.2], [0.6, 0.25], [0.8, 0.3], [1.0, 0.35]],
         dtype=np.float32,
@@ -440,7 +457,7 @@ def test_out_fork_debug_reports_sign_selected_branch():
     assert output.path_source is PathSource.RIGHT_BRANCH
     assert output.debug['turn_sign'] == 'right'
     assert output.debug['desired_turn'] == 'right'
-    assert output.debug['selected_branch_rank'] == -1
+    assert output.debug['selected_branch_rank'] == 1
     assert output.debug['branch_selection_reason'] == 'sign_right'
 
 
