@@ -310,13 +310,13 @@ LANE_VISUALIZE=1 ros2 run inference inference_node
 
 ---
 
-## 7. 임시 제어 (`lane_control_node` + `lane_planner`)
+## 7. 이전 호환 제어 (`lane_control_node` + `lane_planner`)
 
 - 구독 → `detections_from_msg` → `LanePlanner.step` (P + EMA + rate limit)
 - throttle = `cruise_throttle * throttle_scale`
 - `/perception/lane`가 `lane_timeout_sec`(기본 0.5s) 이상 없으면 **throttle=0**
 - 게인: `config/lane_control.yaml` (`tune_lane_control.py`)
-- **양서준 Pure Pursuit / MainPlanner는 이 노드에 넣지 않음** — 별도 브랜치에서 `/perception/lane` 구독 노드로 교체·합류 PR
+- 현재 auto-driving launch에서는 사용하지 않으며 MainPlanner와 동시 실행하지 않는다.
 
 ---
 
@@ -324,12 +324,13 @@ LANE_VISUALIZE=1 ros2 run inference inference_node
 
 | 경로 | 용도 |
 |------|------|
-| **토픽 분리 (기본 ROS)** | `inference_node` + `lane_control_node` |
-| **단프로세스 / pytest / CI** | `pipeline.run_perception` → adapter → planner → `fuse_control` |
+| **현재 ROS 런타임** | `inference_node` 내부 `MainPlanner.step(frame)` |
+| **검증 토픽** | `/perception/lane`, `/debug/aruco`, `/debug/planner` |
+| **호환 API** | `fuse_control` (기존 단위 테스트용) |
 
-런타임 launch는 pipeline을 **쓰지 않는다.**  
-모듈 단위 테스트·import 검증용으로만 유지한다.  
-`fuse_control` 우선순위(ArUco→빨간불→회전교차로→차선)는 **향후 미션 통합 시** control 쪽으로 옮길 예정.
+런타임 미션 우선순위와 경로 선택은 모두 `MainPlanner`가 소유한다.
+`fuse_control`은 이전 호환 테스트를 위해 유지하지만 auto-driving 경로에서는
+사용하지 않는다.
 
 ---
 
@@ -339,7 +340,7 @@ LANE_VISUALIZE=1 ros2 run inference inference_node
 
 - [ ] `main`에서 feature 브랜치 생성
 - [ ] [collaboration.md](./collaboration.md) 담당 파일만 수정
-- [ ] `/control`을 인지 모듈에서 발행하지 않음
+- [ ] 인지 모듈은 결과만 반환하고 최종 `/control`은 `MainPlanner`만 발행함
 - [ ] 시뮬 테스트 시 **하드웨어 노드**(`camera_node`/`control_node`)를 요구하지 않음
 - [ ] 시뮬 또는 보드에서 build 성공
 

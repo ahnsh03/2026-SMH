@@ -356,26 +356,24 @@ TrafficResult(signal=TrafficSignal.GREEN, turn=TurnSign.LEFT)
 2. `stop_logic.should_stop_for_markers(ids)` → `(bool, int | None)`
 
 facade `aruco_detection.detect()` → `ArucoResult`.  
-런타임: `inference_node`가 `/debug/aruco` 발행 (정지→`/control` 합류는 추후).
+런타임: `inference_node`가 `/debug/aruco`를 발행하고 `MainPlanner`가 정지를
+최우선 `/control`에 반영한다.
 
-### roundabout.plan(frame) → `RoundaboutResult`
+### 회전교차로
 
-```python
-RoundaboutResult(active=True, steering=0.3, throttle=0.2)
-```
+별도 `roundabout.plan()` override는 사용하지 않는다. 색상 센터라인,
+branch/가로선 이벤트와 주행 상태를 `pipeline.MainPlanner`에서 통합한다.
 
 ### 통합 우선순위
 
-**ROS 기본 경로:** 임시 `lane_control_node`는 **lane-only** (ArUco/신호 미반영).
-
-**단프로세스 `pipeline.fuse_control` (테스트용):**
+**현재 ROS 기본 경로:** `inference_node` 내 `MainPlanner`가 통합한다.
 
 1. ArUco 정지
 2. 빨간 신호등 정지
-3. 회전교차로 override
-4. 차선 추종
+3. 미션 상태별 경로(회전교차로/갈림길)
+4. 기본 색상 센터라인
 
-미션 합류·우선순위 변경 → **팀장**이 control 경로에 반영.
+미션 합류·우선순위 변경 → **팀장**과 `pipeline.py` 담당자가 협의.
 ---
 
 ## 4. 개발 환경별 역할

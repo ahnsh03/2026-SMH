@@ -56,23 +56,18 @@
 /camera/image/compressed
         │
         ▼
-  inference_node          ← 인지만 (lane + aruco)
+  inference_node
         │
-        ├─ /perception/lane  (lane_msgs)
-        └─ /debug/aruco
-                │
-                ▼
-        lane_control_node   ← detections_from_msg + lane_planner
-                │
-                ▼
-            /control
+        ├─ MainPlanner(lane + traffic + aruco + mission FSM)
+        ├─ /perception/lane, /debug/*  (검증·기록)
+        └─ /control
                 │
      ┌──────────┴──────────┐
      ▼                     ▼
 sim_control_bridge    control_node (실차)
 ```
 
-단프로세스 테스트: `pipeline.run_perception` → adapter → planner → `fuse_control`  
+단프로세스 테스트: `MainPlanner.step(frame)` 또는 planner 기하·FSM 단위 테스트
 상세·PR 체크리스트: [lane-perception-topic.md](./lane-perception-topic.md)
 
 ## 검증 환경
