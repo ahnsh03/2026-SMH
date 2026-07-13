@@ -29,7 +29,7 @@
 
 - [ ] PC 또는 보드에서 `colcon build --symlink-install --packages-up-to inference` 성공
 - [ ] (시뮬) `sim_auto_driving.launch.py`로 `/control` 확인
-- [ ] (인지) `LANE_VISUALIZE=control` 또는 `on`으로 창 검증 (해당 시)
+- [ ] (인지) `tune_lane_detect.py` 모드 검증 (bringup만 · Gazebo 재기동 금지) 또는 레거시 `LANE_VISUALIZE`
 - [ ] (보드) `./scripts/board_sync.sh --no-pull` 성공
 - [ ] (보드, 가능 시) `ros2 launch inference auto_driving.launch.py` 실행 확인
 

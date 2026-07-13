@@ -62,8 +62,9 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 
 - 텍스처: `models/track_plane/materials/textures/track_cw_real.png` (팀 CW 트랙)
 - **실제 크기**: 이미지 가로 전체 **12.0 m**, 세로 **8.9975 m** (1211×908 px 비율)
-- 스폰 기본값: `spawn_x=2.6`, `spawn_y=-3.92`, `spawn_yaw=-3.14`
+- 스폰 기본값: `spawn_pose:=start` (x=2.6, y=-3.92, yaw=-π) — 미션 프리셋은 `config/spawn_poses.yaml`
 - **카메라 프리뷰**: `sim_bringup` 기본 `use_camera_view:=true` (320×180 → 창 640×360)
+- **BEV 프리뷰**: 기본 `use_bev_view:=true` — Metric IPM (`config/lane_vision.yaml`, y_half=0.77 / x_max=1.5) 가이드 포함
 
 ### 미션 표지판 (갈림길 · ArUco)
 
@@ -115,7 +116,8 @@ src/dracer_sim/
 상세 튜닝 가이드: [docs/simulation-setup.md § 미션 표지판](../../docs/simulation-setup.md#미션-표지판-갈림길--aruco)
 
 ```bash
-ros2 launch dracer_sim sim_bringup.launch.py spawn_x:=0.0 spawn_y:=-3.6 spawn_yaw:=1.57
+ros2 launch dracer_sim sim_bringup.launch.py spawn_pose:=out_fork
+ros2 launch dracer_sim sim_bringup.launch.py spawn_pose:=custom spawn_x:=0.0 spawn_y:=-3.6 spawn_yaw:=1.57
 ```
 
 상세 WSL 설치·팀원 재현: [docs/simulation-setup.md](../../docs/simulation-setup.md)

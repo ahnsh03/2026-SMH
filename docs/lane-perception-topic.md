@@ -293,11 +293,26 @@ ros2 launch inference auto_driving.launch.py
 
 ### 디버그 시각화 (로컬만 · DISPLAY 필요)
 
-```bash
-# 제어에 필요한 창만 (boundaries / road_branches 등)
-LANE_VISUALIZE=control ros2 launch dracer_sim sim_auto_driving.launch.py
+**권장 (Gazebo 중복 방지):** bringup만 켠 뒤 모드 튜너로 검증한다.
+`sim_auto_driving`을 다시 띄우면 Gazebo가 **하나 더** 뜬다.
 
-# 전체 창 (HSV·점선·보간·drivable 등)
+```bash
+# 터미널1 — 이미 실행 중이면 그대로
+./scripts/dev_container.sh sim-bringup
+
+# 터미널2 — 컨테이너 안
+source /opt/ros/humble/setup.bash && source install/setup.bash
+python3 scripts/vision_tune/tune_lane_detect.py --mode white
+# 키 1–7: white / yellow / fork / fork_left / fork_right / red / crossing
+```
+
+오프라인: `--image path.png` 또는 `--folder data/captures/sim`.
+
+레거시(전체 OpenCV 창, **launch가 Gazebo를 포함**하므로 bringup과 중복 주의):
+
+```bash
+# bringup이 없을 때만
+LANE_VISUALIZE=control ros2 launch dracer_sim sim_auto_driving.launch.py
 LANE_VISUALIZE=on ros2 launch dracer_sim sim_auto_driving.launch.py
 ```
 
@@ -335,7 +350,7 @@ camera frame
 - 갈림길: half-split → **셀 추적** + 같은 색만 분기 + 깜빡임 완화
 - 한쪽 선만 보일 때: IPM `valid` 마스크 + 반대색 반박 + 기울기 기반 폭 `1/cosθ`
 - 점선 연결, 가로 실선 catch-22 수정, 성능 ~55ms/frame
-- 시각화: `LANE_VISUALIZE=off|control|on` (기본 off)
+- 시각화: `LANE_VISUALIZE=off|control|on` (기본 off) · **검증 주 경로 = `tune_lane_detect.py`**
 
 **아직 약하거나 검증이 필요한 것 (승현 임시 합류):**
 
@@ -343,41 +358,46 @@ camera frame
 2. 갈림길에서 **바깥 선 미검출** 시 branch/L-R이 헷갈리는지
 3. `fork_active` rising이 BEV 1.5 m 한계로 늦게 뜨는지 (planner 체감과 연결)
 4. 실차 HSV vs 시뮬 HSV
-5. (문서) 예전 `lane_control_node` 서술과 런타임 불일치 — 본 문서로 정리
+5. 빨간 장애물 차로(`red_road`) 커버리지·미션 힌트
 
 **담당:** **안승현(임시)** — 갈림길·곡선·한쪽선 L/R. **조향·MainPlanner FSM은 건드리지 않음.**  
 장원태 복귀 후 공동 소유·핸드오프. Metric IPM 계약·msg 필드 삭제/개명은 팀장과 합의.
 
-### 6.2 `LANE_VISUALIZE` 창 순차 검증 체크리스트
+### 6.2 모드 튜너 순차 검증 (`tune_lane_detect.py`)
 
-구현·버그픽스 **전에** 창으로 관측 로그를 남긴다. DISPLAY가 있는 PC/시뮬에서만.
+구현·버그픽스 **전에** 모드별로 관측 로그를 남긴다. DISPLAY가 있는 PC에서, **sim-bringup만** 켠 뒤 튜너 실행.
 
-| 순서 | 창 / 모드 | 확인 질문 |
-|------|-----------|-----------|
-| 1 | `LANE_VISUALIZE=on` → `white_hsv`, `yellow_hsv` | 색 마스크가 분리되는가 |
-| 2 | `white_boundaries`, `yellow_boundaries` (또는 `control`) | 빨강=L / 파랑=R 레이어가 맞는가 |
-| 3 | `white_interpolation` / `yellow_interpolation` | 한쪽만 보일 때 가설 L/R이 합리적인가 |
-| 4 | 단차로 곡선 구간 | 바깥/안쪽 선 소실 시 `side_hint`·중심선이 유지되는가 |
-| 5 | `road_branches` + `drivable_area` | 갈림길에서 branch 2개 안정·바깥선 소실 시 구분되는가 |
-| 6 | `line_fill`, dash 창 | 가로선/점선이 경계를 오염시키지 않는가 |
+| 순서 | `--mode` / 키 | 확인 질문 |
+|------|---------------|-----------|
+| 1 | `white` (`1`) | 흰 마스크·L(빨강)/R(파랑) 경계가 맞는가 |
+| 2 | `yellow` (`2`) | 노란 경계·점선 연결이 합리적인가 |
+| 3 | `dash` (`3`) | 분기/합류 점선(노랑·흰)이 분리·연결되는가 |
+| 4 | `dash_left` / `dash_right` (`4`/`5`) | 선택한 갈래 쪽 점선만 남고 반대 고어 선은 빠지는가 |
+| 5 | `fork` (`6`) | 갈림길에서 branch 2개가 안정적인가 |
+| 6 | `fork_left` / `fork_right` (`7`/`8`) | 좌·우 갈래를 따로 구분할 수 있는가 |
+| 7 | `red` (`9`) | 동적 장애물 빨간 차로 커버리지가 뜨는가 |
+| 8 | `crossing` (`0`) | 가로 정지선/진입선이 경계를 오염시키지 않는가 |
 
 ```bash
-LANE_VISUALIZE=control ros2 launch dracer_sim sim_auto_driving.launch.py
-# 전체 창: LANE_VISUALIZE=on
+# ❌ bringup이 이미 있을 때 sim_auto_driving 재실행 금지 (Gazebo 중복)
+# ✅
+python3 scripts/vision_tune/tune_lane_detect.py --mode white
 ```
 
-버그픽스는 별도 브랜치(예: `feature/seunghyun-lane-fork-audit`)에서 창 1→6 검증 후 진행.
+트랙바는 모드별 HSV·`detect_tune` 스칼라. `s` → `config/lane_vision.yaml` (`hsv:` + `detect_tune:`).
+
+버그픽스는 `feature/seunghyun-lane-fork-audit` 등에서 모드 1→6 검증 후 진행.
 
 ### 6.3 파이프라인 요약 (파라미터)
 
 - **BEV SSOT:** `config/lane_vision.yaml` → `metric_ipm` + `scripts/vision_tune/metric_ipm.py`
   - 전방 ≈0.22~1.5 m, 횡 ±0.77 m, m/px=0.004
   - 사다리꼴 `bev_roi` / `tune_bev_roi.py`는 **시각 참고 툴만**
-- **HSV:** YAML `hsv:` (`tune_hsv.py`로 시뮬·실차 각각 맞춘 뒤 저장)
-- **출력:** 조향 없음. `LaneDetections` + fork/branches
+- **HSV:** YAML `hsv:` (`tune_hsv.py` / `tune_lane_detect.py`)
+- **detect_tune:** crossing coverage / branch separation / red hue wrap (`tune_lane_detect.py`)
+- **출력:** 조향 없음. `LaneDetections` + fork/branches · 디버그는 `detect_with_debug` / `LaneDebugFrame`
 
 ---
-
 ## 7. 이전 호환 제어 (`lane_control_node` + `lane_planner`)
 
 - 구독 → `detections_from_msg` → `LanePlanner.step` (P + EMA + rate limit)
@@ -417,9 +437,9 @@ LANE_VISUALIZE=control ros2 launch dracer_sim sim_auto_driving.launch.py
 
 - [ ] 반환은 인지 `LaneDetections` (조향 필드에 의미 있는 값 넣지 않음)
 - [ ] BEV는 Metric IPM 유지 (사다리꼴 런타임 복구 금지)
-- [ ] `LANE_VISUALIZE` 기본 off / `control`·`on`만 사용
+- [ ] `LANE_VISUALIZE` 기본 off / 검증은 `tune_lane_detect.py` (bringup만) · `control`·`on`은 레거시
 - [ ] msg에 이미 있는 필드명·단위(m, base_link) 유지
-- [ ] 갈림길·곡선 작업 시 §6.2 창 순서로 관측 로그
+- [ ] 갈림길·곡선 작업 시 §6.2 모드 순서로 관측 로그
 - [ ] **MainPlanner / `main_planner.yaml`을 인지 PR에 섞지 않음**
 - [ ] 가능하면 `ros2 topic echo /perception/lane --once`로 발행 확인
 

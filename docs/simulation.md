@@ -92,7 +92,7 @@ docker exec -it 2026-smh-sim bash           # 터미널2 → inference
 | 실제 가로 | **12.0 m** (대회 도면 기준) |
 | Gazebo 평면 | 12.0 m × 8.9975 m (`<plane>`, box 아님 — 세로 늘어남 방지) |
 | 트랙 바닥 z | **0.01 m** (`track_plane` pose, 지면 z=0 위 1 cm) |
-| 기본 스폰 | `spawn_x=2.6`, `spawn_y=-3.92`, `spawn_yaw=-3.14`, LIMO `spawn_z=0.15` |
+| 기본 스폰 | `spawn_pose:=start` (x=2.6, y=-3.92, yaw=-π). 미션 프리셋: `config/spawn_poses.yaml` |
 
 미션 표지판(좌/우회전·ArUco) 배치·크기·높이: [simulation-setup.md § 미션 표지판](./simulation-setup.md#미션-표지판-갈림길--aruco)
 

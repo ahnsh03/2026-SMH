@@ -21,9 +21,22 @@ def generate_launch_description():
   pkg_share = get_package_share_directory('dracer_sim')
   vehicle_config_path = get_vehicle_config_path()
   use_sim_time = LaunchConfiguration('use_sim_time')
+  spawn_pose = LaunchConfiguration('spawn_pose')
+  spawn_x = LaunchConfiguration('spawn_x')
+  spawn_y = LaunchConfiguration('spawn_y')
+  spawn_z = LaunchConfiguration('spawn_z')
+  spawn_yaw = LaunchConfiguration('spawn_yaw')
 
   return LaunchDescription([
     DeclareLaunchArgument('use_sim_time', default_value='true'),
+    DeclareLaunchArgument(
+      'spawn_pose', default_value='start',
+      description='Mission spawn preset (see config/spawn_poses.yaml)',
+    ),
+    DeclareLaunchArgument('spawn_x', default_value='2.6'),
+    DeclareLaunchArgument('spawn_y', default_value='-3.92'),
+    DeclareLaunchArgument('spawn_z', default_value='0.15'),
+    DeclareLaunchArgument('spawn_yaw', default_value='-3.14'),
 
     IncludeLaunchDescription(
       PythonLaunchDescriptionSource(
@@ -32,6 +45,11 @@ def generate_launch_description():
       launch_arguments={
         'use_sim_time': use_sim_time,
         'use_monitor': 'false',
+        'spawn_pose': spawn_pose,
+        'spawn_x': spawn_x,
+        'spawn_y': spawn_y,
+        'spawn_z': spawn_z,
+        'spawn_yaw': spawn_yaw,
       }.items(),
     ),
 

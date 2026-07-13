@@ -55,6 +55,7 @@ setup(
       'sim_joystick_bridge = dracer_sim.joystick_bridge:main',
       'sim_robot_description_publisher = dracer_sim.robot_description_publisher:main',
       'sim_camera_preview = dracer_sim.camera_preview:main',
+      'sim_bev_preview = dracer_sim.bev_preview:main',
     ],
   },
 )

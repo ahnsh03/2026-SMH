@@ -92,4 +92,18 @@ hsv:
     v_min: 161
     v_max: 229
   note: >
-    Sim/real shared via tune_hsv.py. Won Tae may refine final competition values.
+    Sim/real shared via tune_hsv.py / tune_lane_detect.py.
+    Won Tae may refine final competition values.
+
+# Optional scalars for scripts/vision_tune/tune_lane_detect.py (also applied at import).
+detect_tune:
+  crossing_coverage_ratio: 0.40
+  crossing_min_rows: 3
+  min_branch_separation_m: 0.15
+  dash_max_lateral_error_m: 0.05
+  dash_max_forward_gap_m: 0.30
+  dash_max_heading_diff_deg: 30
+  dash_min_component_area_px: 12
+  dash_branch_assoc_m: 0.22
+  red_h_low_wrap: 0
+  note: Tuned with scripts/vision_tune/tune_lane_detect.py

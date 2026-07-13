@@ -201,7 +201,7 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 **시뮬 기본 설정**
 
 - 카메라: **320×180** JPEG (`config/vehicle_config.yaml`)
-- 시각화: **OpenCV 카메라 프리뷰** (`sim_camera_preview`, 기본 640×360)
+- 시각화: **OpenCV 카메라** (`sim_camera_preview`, 640×360) + **Metric IPM BEV** (`sim_bev_preview`, `lane_vision.yaml`)
 - 웹 모니터: **OFF** (`use_monitor:=true`로 선택 가능)
 
 상세 트러블슈팅: [simulation.md](./simulation.md)
