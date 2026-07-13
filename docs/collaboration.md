@@ -208,7 +208,7 @@ gh pr create --title "feat(lane): HSV 차선 중심 추정" --body "$(cat <<'EOF
 - [x] main과 rebase/pull로 맞춤
 
 ## 담당 모듈
-- [x] `lane_detection.py` (장원태)
+- [x] `lane_detection.py` (안승현 임시 / 장원태)
 
 ## 변경 범위 확인
 - [x] 담당 파일만 수정
@@ -272,77 +272,68 @@ PR 템플릿 원본: [`.github/pull_request_template.md`](../.github/pull_reques
 
 | 규칙 | 설명 |
 |------|------|
-| **모듈은 각자, 통합은 팀장** | 담당자는 `modules/` 아래 **자기 파일만** 수정 |
-| **pipeline은 공유 자원** | `pipeline.py`, `types.py` 변경은 팀장 PR만 |
+| **모듈은 각자, 통합은 팀장** | 담당자는 아래 표의 **자기 파일만** 수정 |
+| **MainPlanner는 공유 자원** | `pipeline.py`(MainPlanner), `types.py`, `inference_node.py` 변경은 **양서준·팀장 협의** |
 
 ### 디렉터리 ↔ 담당자
 
 ```
 src/inference/inference/
 ├── types.py                 ← 팀장 (SSOT dataclass)
-├── lane_adapters.py         ← 팀장 (module/msg → types)
-├── pipeline.py              ← 팀장 (단프로세스/테스트 fusion)
-├── inference_node.py        ← 팀장 (인지 ROS — /perception/lane)
-├── lane_control_node.py     ← 팀장/승현 (임시 제어 — /control)
+├── lane_adapters.py         ← 팀장 (module/msg → types, 검증용)
+├── pipeline.py              ← 양서준 + 팀장 (MainPlanner — 최종 /control)
+├── inference_node.py        ← 팀장 (카메라 → MainPlanner → /control)
+├── lane_control_node.py     ← 레거시 (실행 금지 — auto launch 미포함)
 └── modules/
-    ├── lane_detection.py          ← 장원태 (인지 only, Metric IPM)
-    ├── lane_planner.py            ← 안승현 (임시 P/EMA)
+    ├── lane_detection.py          ← 안승현(임시) / 장원태 (인지 only, Metric IPM)
+    ├── lane_planner.py            ← 레거시 (MainPlanner로 대체)
     ├── traffic_sign.py            ← 장원정
-    ├── roundabout.py              ← 양서준
     ├── aruco_detection.py         ← facade (팀장)
     └── aruco/
         ├── detector.py            ← 안승현
         └── stop_logic.py          ← 박성준
 
 config/
-├── lane_vision.yaml         ← Metric IPM + HSV SSOT (팀장 잠금, HSV는 원태 튜닝)
-└── lane_control.yaml        ← planner 게인 (승현)
+├── lane_vision.yaml         ← Metric IPM + HSV (metric_ipm 팀장 잠금)
+├── main_planner.yaml        ← MainPlanner 게인 (양서준)
+└── lane_control.yaml        ← 레거시 lane_planner용 (런타임 미사용)
 ```
 
-런타임 구조·시뮬/실차 차이·PR 체크리스트:
-**[lane-perception-topic.md](./lane-perception-topic.md)** ★
+런타임·시각화·PR 체크리스트:
+**[lane-perception-topic.md](./lane-perception-topic.md)** ★ · **[main-planner.md](./main-planner.md)** ★
 
 ### 수정 가능 / 불가 파일
 
 | 파일 | 담당 | feature 브랜치 PR |
 |------|------|-------------------|
-| `modules/lane_detection.py` | 장원태 | ✅ (조향·BEV SSOT 계약 준수) |
+| `modules/lane_detection.py` | 안승현(임시) / 장원태 | ✅ (조향 없음 · Metric IPM 유지) |
 | `modules/traffic_sign.py` | 장원정 | ✅ |
-| `modules/roundabout.py` | 양서준 | ✅ |
-| `modules/lane_planner.py` | 안승현 | ✅ (임시 제어) |
 | `modules/aruco/detector.py` | 안승현 | ✅ |
 | `modules/aruco/stop_logic.py` | 박성준 | ✅ |
+| `pipeline.py` (MainPlanner) | 양서준 | ✅ (팀장과 계약 합의) |
+| `config/main_planner.yaml` | 양서준 | ✅ |
 | `modules/aruco_detection.py` | facade | ❌ (팀장만) |
-| `types.py`, `lane_adapters.py`, `pipeline.py` | 팀장 | ❌ (팀원 PR 금지) |
-| `inference_node.py`, `lane_control_node.py` | 팀장 | ❌ (합의 없이 금지) |
+| `types.py`, `lane_adapters.py` | 팀장 | ❌ (합의 없이 금지) |
+| `inference_node.py` | 팀장 | ❌ (합의 없이 금지) |
+| `lane_control_node.py` / `lane_planner.py` | 레거시 | ❌ (신규 기능 넣지 말 것) |
 | `config/lane_vision.yaml` `metric_ipm:` | 팀장 | ❌ (숫자 잠금) |
-| `config/lane_vision.yaml` `hsv:` | 원태·툴 | ✅ (튜닝 후 PR, metric_ipm 건드리지 말 것) |
-| `config/lane_control.yaml` | 승현 | ✅ |
+| `config/lane_vision.yaml` `hsv:` | 인지 담당 | ✅ (`metric_ipm` 건드리지 말 것) |
 
 ---
 
 ## 3. 모듈 입출력 규격
 
-**판제·테스트의 SSOT는 `inference.types`.**  
-원태 모듈 dataclass와 ROS msg는 어댑터로 변환한다. dict/raw tuple 금지.
+인지 모듈은 **조향을 넣지 않는다.** 최종 `/control`은 `inference_node` → `MainPlanner` 하나만 발행한다.
 
 ### lane_detection.detect(frame) → 모듈 `LaneDetections` (인지 only)
 
-조향을 넣지 않는다. ROS에서는 `inference_node`가 `lane_msgs`로 발행한다.
-
 ```python
-# planner / 양서준이 쓸 때
-from inference.lane_adapters import detections_from_msg, detections_from_module
-dets = detections_from_msg(msg)          # 또는 detections_from_module(dc)
-# dets: types.LaneDetections  (white_left/right, fork_active, branches, …)
+# MainPlanner는 모듈 dataclass를 같은 프레임에서 직접 사용
+lane = lane_detection.detect(frame)
+# lanes[], white/yellow centerline, fork_active, branches[], drivable_area, …
 ```
 
-임시 조향 결과(노드 내부):
-
-```python
-LaneResult(steering_offset=-0.2, confidence=0.9, throttle_scale=0.8)
-# steering_offset: -1.0(좌) ~ +1.0(우)  D-Racer 규약
-```
+검증·외부용 변환: `lane_adapters.detections_from_module` / `detections_from_msg`.
 
 ### traffic_sign.detect(frame) → `TrafficResult`
 
@@ -356,24 +347,21 @@ TrafficResult(signal=TrafficSignal.GREEN, turn=TurnSign.LEFT)
 2. `stop_logic.should_stop_for_markers(ids)` → `(bool, int | None)`
 
 facade `aruco_detection.detect()` → `ArucoResult`.  
-런타임: `inference_node`가 `/debug/aruco`를 발행하고 `MainPlanner`가 정지를
-최우선 `/control`에 반영한다.
+런타임: `MainPlanner`가 정지를 최우선 `/control`에 반영하고, `/debug/aruco`도 발행한다.
 
-### 회전교차로
+### 회전교차로 / 갈림길
 
-별도 `roundabout.plan()` override는 사용하지 않는다. 색상 센터라인,
-branch/가로선 이벤트와 주행 상태를 `pipeline.MainPlanner`에서 통합한다.
+별도 `roundabout.py` 없음. `MainPlanner` In/Out 상태 + `lane.fork_active` / `branches`로 통합.  
+상세: [main-planner.md](./main-planner.md).
 
-### 통합 우선순위
-
-**현재 ROS 기본 경로:** `inference_node` 내 `MainPlanner`가 통합한다.
+### 통합 우선순위 (`MainPlanner`)
 
 1. ArUco 정지
-2. 빨간 신호등 정지
-3. 미션 상태별 경로(회전교차로/갈림길)
-4. 기본 색상 센터라인
+2. 빨간 신호등 정지 (설정 시)
+3. 미션 상태 (FORK_TURN / ROUNDABOUT_*)
+4. 기본 색상 센터라인 Pure Pursuit
 
-미션 합류·우선순위 변경 → **팀장**과 `pipeline.py` 담당자가 협의.
+우선순위·FSM 변경 → **양서준 + 팀장** 협의.
 ---
 
 ## 4. 개발 환경별 역할
@@ -414,11 +402,11 @@ cd ~/2026-SMH
 ./scripts/board_sync.sh          # pull + init + build
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py
-# inference_node(인지) + lane_control_node(제어) + camera/control 하드웨어
+# inference_node(MainPlanner → /control) + camera/control 하드웨어
 ```
 
 보드에서는 **feature 브랜치로 주행 테스트하지 않습니다.** PR merge 후 `main`을 pull해서 확인합니다.  
-구조 설명: [lane-perception-topic.md](./lane-perception-topic.md)
+구조: [main-planner.md](./main-planner.md) · [lane-perception-topic.md](./lane-perception-topic.md)
 
 ---
 

@@ -200,7 +200,7 @@ Launch: `inference/auto_driving.launch.py`
 | `/control` 소비자 | `sim_control_bridge` | `control_node` |
 | 카메라 소스 | Gazebo → `sim_camera_republish` | `camera_node` |
 | `monitor_node` | 기본 OFF | launch에 포함 (관측용) |
-| 시각화 | `LANE_VISUALIZE=1`만 | 보드 headless 기본 OFF |
+| 시각화 | `LANE_VISUALIZE=off\|control\|on` (기본 off) | 보드 headless 기본 off |
 
 실차 trim이 시뮬에 들어가면 직진이 한쪽으로 기운다 → **시뮬 launch만** trim=0.
 
@@ -231,8 +231,8 @@ x = x_forward_max - row * meters_per_pixel
 y = ((width - 1) / 2 - col) * meters_per_pixel
 ```
 
-현재 임시 planner(`lane_planner`)는 **흰 L/R polyline**만 사용한다.  
-`fork_active` / `branches` / centerline / drivable는 **미션 planner(양서준 등)용으로 이미 전달**된다 — 필드 이름·단위를 바꾸지 말 것.
+현재 임시 planner(`lane_planner`, 레거시)는 **흰 L/R polyline**만 사용했다.  
+`MainPlanner`는 `fork_active` / `branches` / centerline / drivable를 **이미 소비**한다 — 필드 이름·단위를 바꾸지 말 것.
 
 ---
 
@@ -240,12 +240,13 @@ y = ((width - 1) / 2 - col) * meters_per_pixel
 
 ### 시뮬 (권장)
 
-**한 번에** (bringup + 인지 + 제어 — 보통 이걸 씀):
+**한 번에** (bringup + 인지 + MainPlanner — 보통 이걸 씀):
 
 ```bash
 ros2 launch dracer_sim sim_auto_driving.launch.py
-# Gazebo 스택 + joystick + inference_node + lane_control_node
+# Gazebo 스택 + joystick + inference_node(MainPlanner)
 # use_sim_time=true, STEER_TRIM=0, monitor 기본 OFF
+# lane_control_node 는 포함되지 않음 — 실행하지 말 것
 ```
 
 **월드만 먼저** 켠 뒤, 코어만 따로 (bringup이 이미 떠 있을 때):
@@ -257,22 +258,22 @@ ros2 launch dracer_sim sim_bringup.launch.py
 
 # 터미널2 — sim_auto_driving 을 또 치지 말 것 (Gazebo 중복)
 ros2 run inference inference_node --ros-args -p use_sim_time:=true
-ros2 run inference lane_control_node --ros-args \
-  -p use_sim_time:=true -p steer_trim_override:=true -p steer_trim:=0.0
+# MainPlanner가 같은 프로세스에서 /control 발행
+# lane_control_node 를 추가로 실행하지 말 것
 ```
 
 확인:
 
 ```bash
 ros2 node list
-# 있어야: inference_node, lane_control_node, sim_control_bridge, …
-# 없어야: camera_node, control_node (실차 하드웨어)
+# 있어야: inference_node, sim_control_bridge, …
+# 없어야: lane_control_node, camera_node, control_node (실차 하드웨어)
 
 ros2 topic echo /perception/lane --once
 ros2 topic echo /control --once
 ```
 
-`inference_node`만 띄우면 **차가 안 움직인다.**
+`inference_node`만 띄우면 `/control`은 나오지만, **시뮬에서 차가 움직이려면** bringup의 `sim_control_bridge`가 필요하다.
 
 ### 실차 (보드)
 
@@ -282,31 +283,98 @@ cd ~/2026-SMH
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py
 # camera_node + control_node + battery_node + monitor_node
-# + joystick + inference_node + lane_control_node
+# + joystick + inference_node(MainPlanner)
 # STEER_TRIM = vehicle_config
+# lane_control_node 미포함
 ```
 
 웹 모니터: `http://<보드IP>:5000` (또는 `vehicle_config`의 `WEB_HOST`/`WEB_PORT`).  
 주행 로직만 보면 되고 모니터가 거슬리면 launch에서 빼도 **조향·인지 동작은 동일**하다.
 
-### 디버그 시각화 (로컬만)
+### 디버그 시각화 (로컬만 · DISPLAY 필요)
 
 ```bash
-LANE_VISUALIZE=1 ros2 run inference inference_node
+# 제어에 필요한 창만 (boundaries / road_branches 등)
+LANE_VISUALIZE=control ros2 launch dracer_sim sim_auto_driving.launch.py
+
+# 전체 창 (HSV·점선·보간·drivable 등)
+LANE_VISUALIZE=on ros2 launch dracer_sim sim_auto_driving.launch.py
 ```
 
-보드/SSH에서는 **켜지 마세요** (OpenCV 창·성능).
+| 값 | 의미 |
+|----|------|
+| `off` / 미설정 | 창 없음 (기본) |
+| `control` | 경계·분기 등 주행 관련 창 (`white_boundaries`, `yellow_boundaries`, `road_branches`) |
+| `on` / `1` | 전체 창 |
+
+보드/SSH에서는 **켜지 마세요** (OpenCV 창·성능). 순차 검증은 **§6.2**.
 
 ---
 
-## 6. 인지 파이프라인 요약 (`modules/lane_detection.py`)
+## 6. 인지 파이프라인 · 시각화 검증 (`modules/lane_detection.py`)
+
+### 6.1 원태 인지 상태 브리핑 (현재 main)
+
+파일 하나: `modules/lane_detection.py` (~3.8k줄). BEV = Metric IPM (`config/lane_vision.yaml`). **조향 없음.**
+
+```
+camera frame
+  → HSV white / yellow / black / red
+  → Metric IPM warp_mask
+  → fill_road_surface_holes + yellow dash connect
+  → crossing line detect + fill holes
+  → build_global_boundary_course L/R → LaneMarking (white/yellow, side_hint)
+  → build_road_branches_cells → fork_active + RoadBranch
+  → LaneDetections
+```
+
+**이미 잘 된 것 (#26+#27):**
+
+- 흰/노란 **마스크 분리** (`white_hsv` / `yellow_hsv`)
+- L/R을 **별도 경계 배열**로 추적 (`white_left/right`, `yellow_left/right`) → `LaneMarking.side_hint`
+- 갈림길: half-split → **셀 추적** + 같은 색만 분기 + 깜빡임 완화
+- 한쪽 선만 보일 때: IPM `valid` 마스크 + 반대색 반박 + 기울기 기반 폭 `1/cosθ`
+- 점선 연결, 가로 실선 catch-22 수정, 성능 ~55ms/frame
+- 시각화: `LANE_VISUALIZE=off|control|on` (기본 off)
+
+**아직 약하거나 검증이 필요한 것 (승현 임시 합류):**
+
+1. 곡선에서 한쪽 선이 FOV 밖으로 나갈 때 L/R ID가 뒤집히는지
+2. 갈림길에서 **바깥 선 미검출** 시 branch/L-R이 헷갈리는지
+3. `fork_active` rising이 BEV 1.5 m 한계로 늦게 뜨는지 (planner 체감과 연결)
+4. 실차 HSV vs 시뮬 HSV
+5. (문서) 예전 `lane_control_node` 서술과 런타임 불일치 — 본 문서로 정리
+
+**담당:** **안승현(임시)** — 갈림길·곡선·한쪽선 L/R. **조향·MainPlanner FSM은 건드리지 않음.**  
+장원태 복귀 후 공동 소유·핸드오프. Metric IPM 계약·msg 필드 삭제/개명은 팀장과 합의.
+
+### 6.2 `LANE_VISUALIZE` 창 순차 검증 체크리스트
+
+구현·버그픽스 **전에** 창으로 관측 로그를 남긴다. DISPLAY가 있는 PC/시뮬에서만.
+
+| 순서 | 창 / 모드 | 확인 질문 |
+|------|-----------|-----------|
+| 1 | `LANE_VISUALIZE=on` → `white_hsv`, `yellow_hsv` | 색 마스크가 분리되는가 |
+| 2 | `white_boundaries`, `yellow_boundaries` (또는 `control`) | 빨강=L / 파랑=R 레이어가 맞는가 |
+| 3 | `white_interpolation` / `yellow_interpolation` | 한쪽만 보일 때 가설 L/R이 합리적인가 |
+| 4 | 단차로 곡선 구간 | 바깥/안쪽 선 소실 시 `side_hint`·중심선이 유지되는가 |
+| 5 | `road_branches` + `drivable_area` | 갈림길에서 branch 2개 안정·바깥선 소실 시 구분되는가 |
+| 6 | `line_fill`, dash 창 | 가로선/점선이 경계를 오염시키지 않는가 |
+
+```bash
+LANE_VISUALIZE=control ros2 launch dracer_sim sim_auto_driving.launch.py
+# 전체 창: LANE_VISUALIZE=on
+```
+
+버그픽스는 별도 브랜치(예: `feature/seunghyun-lane-fork-audit`)에서 창 1→6 검증 후 진행.
+
+### 6.3 파이프라인 요약 (파라미터)
 
 - **BEV SSOT:** `config/lane_vision.yaml` → `metric_ipm` + `scripts/vision_tune/metric_ipm.py`
   - 전방 ≈0.22~1.5 m, 횡 ±0.77 m, m/px=0.004
   - 사다리꼴 `bev_roi` / `tune_bev_roi.py`는 **시각 참고 툴만**
 - **HSV:** YAML `hsv:` (`tune_hsv.py`로 시뮬·실차 각각 맞춘 뒤 저장)
 - **출력:** 조향 없음. `LaneDetections` + fork/branches
-- **담당:** 장원태 — 알고리즘·HSV·마스크. **Metric IPM 계약·msg 필드 삭제/개명은 팀장과 합의**
 
 ---
 
@@ -316,7 +384,8 @@ LANE_VISUALIZE=1 ros2 run inference inference_node
 - throttle = `cruise_throttle * throttle_scale`
 - `/perception/lane`가 `lane_timeout_sec`(기본 0.5s) 이상 없으면 **throttle=0**
 - 게인: `config/lane_control.yaml` (`tune_lane_control.py`)
-- 현재 auto-driving launch에서는 사용하지 않으며 MainPlanner와 동시 실행하지 않는다.
+- **현재 auto-driving launch에서는 사용하지 않으며 MainPlanner와 동시 실행하지 않는다.**
+- 신규 기능·튜닝을 이 경로에 넣지 말 것. 제어 SSOT는 [main-planner.md](./main-planner.md).
 
 ---
 
@@ -344,19 +413,21 @@ LANE_VISUALIZE=1 ros2 run inference inference_node
 - [ ] 시뮬 테스트 시 **하드웨어 노드**(`camera_node`/`control_node`)를 요구하지 않음
 - [ ] 시뮬 또는 보드에서 build 성공
 
-### 장원태 (`lane_detection.py`)
+### 안승현(임시) / 장원태 (`lane_detection.py`)
 
 - [ ] 반환은 인지 `LaneDetections` (조향 필드에 의미 있는 값 넣지 않음)
 - [ ] BEV는 Metric IPM 유지 (사다리꼴 런타임 복구 금지)
-- [ ] `VISUALIZE` 기본 False / `LANE_VISUALIZE`만 사용
+- [ ] `LANE_VISUALIZE` 기본 off / `control`·`on`만 사용
 - [ ] msg에 이미 있는 필드명·단위(m, base_link) 유지
+- [ ] 갈림길·곡선 작업 시 §6.2 창 순서로 관측 로그
+- [ ] **MainPlanner / `main_planner.yaml`을 인지 PR에 섞지 않음**
 - [ ] 가능하면 `ros2 topic echo /perception/lane --once`로 발행 확인
 
-### 양서준 (경로·PP / roundabout)
+### 양서준 (MainPlanner / PP / In·Out)
 
-- [ ] 입력은 `types.LaneDetections` 또는 `detections_from_msg`
-- [ ] `/perception/lane` 구독 → `/control` 발행 패턴을 따를 것
-- [ ] 임시 `lane_control_node`와 **동시에** `/control`을 쓰지 말 것 (launch에서 하나만)
+- [ ] 입력은 모듈 `LaneDetections` (같은 프로세스) 또는 `types`/`adapters`
+- [ ] `/control`은 `inference_node`의 MainPlanner만 발행
+- [ ] `lane_control_node`와 **동시에** `/control`을 쓰지 말 것
 - [ ] `fork_active` / `branches` 활용 시 msg 계약 준수
 - [ ] `types.py` / `lane_adapters.py` 변경 필요 시 팀장과 먼저 합의
 
@@ -368,12 +439,13 @@ LANE_VISUALIZE=1 ros2 run inference inference_node
 ### 박성준 / ArUco
 
 - [ ] 인지는 `inference_node`가 `/debug/aruco` 발행
-- [ ] 정지를 `/control`에 넣으려면 control 쪽 합류 (임시 노드는 lane-only)
+- [ ] 정지를 `/control`에 넣으려면 MainPlanner/통합 쪽 합류
 
 ### 안승현 (통합·시뮬)
 
-- [ ] `types` / `adapters` / `lane_control_node` / launch / YAML SSOT
+- [ ] `types` / `adapters` / launch / YAML SSOT · Metric IPM 잠금
 - [ ] 시뮬·실차 **노드 세트**와 launch 파라미터 차이 유지
+- [ ] 레거시 `lane_control_node`를 auto launch에 되넣지 않음
 
 ---
 
@@ -401,16 +473,17 @@ python3 -m pytest src/inference/test/test_lane_planner.py \
 
 | 경로 | 역할 |
 |------|------|
-| `modules/lane_detection.py` | 인지 (원태) |
-| `modules/lane_planner.py` | 임시 P/EMA 조향 (승현) |
+| `modules/lane_detection.py` | 인지 (승현 임시 / 원태) |
+| `pipeline.py` | **MainPlanner** (양서준) — 런타임 조향 |
+| `config/main_planner.yaml` | PP·FSM 게인 |
+| `modules/lane_planner.py` | 레거시 P/EMA (실행 금지) |
 | `types.py` | SSOT dataclass |
 | `lane_adapters.py` | module/msg → types |
-| `inference_node.py` | 인지 ROS 노드 |
-| `lane_control_node.py` | 제어 ROS 노드 |
-| `pipeline.py` | 단프로세스/테스트 |
+| `inference_node.py` | ROS 노드 (MainPlanner 호스트) |
+| `lane_control_node.py` | 레거시 제어 노드 (실행 금지) |
 | `config/lane_vision.yaml` | Metric IPM + HSV |
-| `config/lane_control.yaml` | planner 게인 |
+| `config/lane_control.yaml` | 레거시 planner 게인 |
 | `src/lane_msgs/` | ROS 인터페이스 |
 | `launch/auto_driving.launch.py` | **실차** 노드 세트 |
 | `dracer_sim/.../sim_bringup.launch.py` | **시뮬** 월드·브리지 |
-| `dracer_sim/.../sim_auto_driving.launch.py` | **시뮬** 자율 (bringup+코어) |
+| `dracer_sim/.../sim_auto_driving.launch.py` | **시뮬** 자율 (bringup+inference_node) |
