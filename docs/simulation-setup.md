@@ -37,14 +37,15 @@ cd 2026-SMH && chmod +x scripts/*.sh
 
 | 구분 | 노드 | 설명 |
 |------|------|------|
-| **자율 코어 (필수)** | `inference_node`, `lane_control_node` | 인지 → `/control` |
+| **자율 코어 (필수)** | `inference_node` | MainPlanner → `/control` (+ 검증 토픽) |
 | **시뮬 브리지 (필수)** | `sim_control_bridge`, `sim_camera_republish`, Gazebo·spawn | 실차 camera/control 대용 |
 | **안전 (권장)** | `joystick_node` | E-Stop |
 | **선택** | `sim_camera_preview` | 로컬 카메라 창 |
-| **선택·기본 OFF** | `monitor_node` | 웹 UI. SSH로 **실차 보드** 볼 때용. 시뮬 자율주행엔 불필요. `use_monitor:=true`로 켤 수 있음 |
-| **실차만 (시뮬 ❌)** | `camera_node`, `control_node`, `battery_node` | 하드웨어. `inference/auto_driving.launch.py`에 있음 → 시뮬에 그대로 쓰지 말 것 |
+| **선택·기본 OFF** | `monitor_node` | 웹 UI. 실차 SSH 관측용. 시뮬 자율에 불필요 |
+| **레거시 (실행 금지)** | `lane_control_node` | MainPlanner와 `/control` 충돌 |
+| **실차만 (시뮬 ❌)** | `camera_node`, `control_node`, `battery_node` | 하드웨어 |
 
-전체 표·실차 세트: [lane-perception-topic.md §2](./lane-perception-topic.md)
+전체 표: [lane-perception-topic.md §2](./lane-perception-topic.md) · [main-planner.md](./main-planner.md)
 
 ---
 
@@ -67,15 +68,15 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
     │       └─ sim_camera_republish → /camera/image/compressed (320×180 JPEG)
     │                              → /camera/image_raw (프리뷰 창용)
     │
-    ├─ /perception/lane ← inference_node (인지)
-    ├─ /control ← lane_control_node ← /perception/lane
+    ├─ /control ← inference_node (MainPlanner)
     │       └─ sim_control_bridge → /cmd_vel → Ackermann Gazebo plugin
+    ├─ /perception/lane, /debug/* ← inference_node (검증용)
     │
     └─ /battery_status ← sim_battery_stub (80% 고정)
 
 카메라 프리뷰(`sim_camera_preview`): `/camera/image_raw` 320×180 → **640×360** 창 (16:9, 2배)
 
-자율주행 토픽 분리·실차와의 차이: [lane-perception-topic.md](./lane-perception-topic.md) ★
+현재 구조: [main-planner.md](./main-planner.md) · [lane-perception-topic.md](./lane-perception-topic.md) ★
 ```
 
 ### D-Racer 호환 토픽
@@ -84,7 +85,7 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
 |------|------|------|
 | `/camera/image/compressed` | `sensor_msgs/CompressedImage` | **inference_node** 입력 (320×180 JPEG) |
 | `/camera/image_raw` | `sensor_msgs/Image` | 카메라 프리뷰 창 |
-| `/perception/lane` | `lane_msgs/LaneDetections` | 인지 → **lane_control_node** |
+| `/perception/lane` | `lane_msgs/LaneDetections` | 검증·기록 (MainPlanner는 프레임 직접 사용) |
 | `/control` | `control_msgs/Control` | throttle (−1=후/+1=전) / steering (−1=좌/+1=우) |
 | `/battery_status` | `battery_msgs/Battery` | monitor 스텁 |
 | `/joint_states` | `sensor_msgs/JointState` | Gazebo 관절 |
@@ -94,7 +95,7 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
 
 `/control` 규약(실차와 동일): **steering −1=좌 / +1=우**, **throttle −1=후 / +1=전**.  
 `sim_control_bridge`가 Gazebo Ackermann용으로 `angular.z`(조향각 rad, +Z=좌)에 **부호 반전**해 전달하고, E-Stop은 `joystick`에서 실차 `control_node`처럼 래치합니다.  
-**주의:** `inference_node`만 실행하면 `/control`이 없어 차가 안 움직입니다. 인지+제어를 함께 띄우세요.
+자율주행: `sim_auto_driving.launch.py` → **`inference_node` 하나**가 `/control`을 발행합니다. `lane_control_node`는 실행하지 마세요.
 
 ---
 
@@ -497,7 +498,7 @@ launch 파일 위치: `src/dracer_sim/launch/`
 | launch 파일 | 용도 |
 |-------------|------|
 | `sim_bringup.launch.py` | Gazebo + 트랙 + 브리지 + 카메라 프리뷰 (**기본**) |
-| `sim_auto_driving.launch.py` | bringup + **inference_node + lane_control_node** 자율주행 |
+| `sim_auto_driving.launch.py` | bringup + **inference_node**(MainPlanner) 자율주행 |
 | `sim_manual_driving.launch.py` | bringup + 조이스틱 수동주행 |
 
 **기본 시뮬** (터미널 1 — 이 셸은 launch 전용으로 두는 것을 권장):
@@ -543,7 +544,7 @@ ros2 launch dracer_sim sim_bringup.launch.py
 docker exec -it 2026-smh-sim bash
 source /opt/ros/humble/setup.bash && source /workspace/install/setup.bash
 ros2 launch dracer_sim sim_auto_driving.launch.py
-# inference_node + lane_control_node (STEER_TRIM=0, use_sim_time=true)
+# inference_node(MainPlanner) (STEER_TRIM=0, use_sim_time=true)
 ```
 
 확인:

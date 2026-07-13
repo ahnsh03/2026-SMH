@@ -12,7 +12,7 @@ cd ~/2026-SMH
 ./scripts/board_sync.sh
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py
-# = camera + control_node + inference_node(인지) + lane_control_node(/control)
+# = camera + control_node + inference_node(MainPlanner → /control)
 #   + battery + joystick + monitor(웹 관측)
 ```
 
@@ -22,14 +22,15 @@ ros2 launch inference auto_driving.launch.py
 |------|-------|------|
 | `camera_node` | 필수 | USB 카메라 |
 | `control_node` | 필수 | `/control` → 모터 |
-| `inference_node` | 필수 | 인지 → `/perception/lane` |
-| `lane_control_node` | 필수 | → `/control` |
+| `inference_node` | 필수 | MainPlanner → `/control` (+ `/perception/lane` 검증용) |
 | `joystick_node` | 권장 | E-Stop |
 | `battery_node` | 권장 | 배터리 |
-| `monitor_node` | 선택 | PC 브라우저로 보드·영상 확인 (`http://<보드IP>:5000`). **없어도 주행 가능**. 켜 둬도 부담 적으면 유지 OK |
+| `monitor_node` | 선택 | PC 브라우저로 보드·영상 확인 (`http://<보드IP>:5000`). **없어도 주행 가능** |
+
+**실행하지 말 것:** `lane_control_node` (레거시 — MainPlanner와 `/control` 충돌).
 
 시뮬 전용(`sim_*`, Gazebo)은 보드에서 실행하지 않음.  
-전체 비교: [lane-perception-topic.md §2](./lane-perception-topic.md)
+전체 비교: [lane-perception-topic.md §2](./lane-perception-topic.md) · [main-planner.md](./main-planner.md)
 
 ---
 
@@ -197,17 +198,16 @@ ros2 topic echo /debug/aruco
 
 | 담당 | 파일 |
 |------|------|
-| 장원태 | `src/inference/inference/modules/lane_detection.py` |
+| **안승현(임시)** / 장원태 | `src/inference/inference/modules/lane_detection.py` |
 | 장원정 | `src/inference/inference/modules/traffic_sign.py` |
 | 안승현 | `src/inference/inference/modules/aruco/detector.py` |
 | 박성준 | `src/inference/inference/modules/aruco/stop_logic.py` |
-| 양서준 | `src/inference/inference/pipeline.py` |
+| **양서준** | `src/inference/inference/pipeline.py` (MainPlanner) · `config/main_planner.yaml` |
 
-**건드리지 말 것** (팀장 영역):
+**건드리지 말 것** (팀장 통합 / 양서준 플래너 영역 혼동 방지):
 
-- `pipeline.py`
-- `inference_node.py`
-- `types.py`
+- `inference_node.py`, `types.py`, `lane_adapters.py` — 팀장
+- MainPlanner FSM·PP 게인 — 양서준 (인지 작업 시 건드리지 않음)
 
 ### 모듈만 수정 후 빠른 빌드
 
