@@ -632,7 +632,10 @@ UNOBSERVED_LANE_PENALTY = 6.0
 # 도로가 기운 만큼 넓게 잘리므로, 관측선의 국소 기울기로 폭을 보정한다.
 SLOPE_ROW_DELTA = max(1, int(round(0.05 / METERS_PER_PIXEL)))  # 위/아래 50 mm
 SLOPE_MATCH_TOLERANCE_PX = 2.0 * SLOPE_ROW_DELTA               # |기울기| <= 2
-MAX_WIDTH_SCALE = 2.5                                          # 약 66도에서 포화
+# 상한이 너무 크면(2.5) 선이 BEV에서 거의 수평일 때 지어낸 차로가 0.87 m까지
+# 부풀어 도로 밖으로 나가고, 그 후보가 통째로 탈락해 검출이 끊긴다. 1.6이면
+# 45도에서 -6 mm, 55도에서 -31 mm로 우회전 차선 폭 보정은 살리면서 폭발은 막는다.
+MAX_WIDTH_SCALE = 1.6                                          # 약 58도에서 포화
 
 # 점수 정규화 분모. 후보마다 max()를 다시 부르면 프레임당 수십만 번이 된다.
 ROAD_WIDTH_NORM = float(max(1, ROAD_WIDTH_PX))
@@ -1234,6 +1237,8 @@ def enumerate_boundary_candidates(
         np.ndarray, np.ndarray, np.ndarray, np.ndarray | None
     ] | None = None,
     segment_slopes: list[float] | None = None,
+    is_ego_course: bool = False,
+    opposite_segments: list[tuple[int, int]] | None = None,
 ) -> list[tuple[float, float, float, int]]:
     """한 행의 가능한 모든 (왼쪽, 오른쪽, 지역 점수) 후보를 반환한다.
 
@@ -1338,6 +1343,7 @@ def enumerate_boundary_candidates(
             )
         ):
             return
+
 
         full_width = right_u - left_u
         visible_ratio = min(1.0, visible_width / max(1.0, full_width))
@@ -1477,6 +1483,40 @@ def enumerate_boundary_candidates(
                 BOUNDARY_SOURCE_PAIR,
             )
 
+    if opposite_segments is None or not is_ego_course:
+        # 옆 도로(내가 안 달리는 코스)까지 혼색으로 짝지으면, 나란히 달리는
+        # 흰 도로와 노란 도로 사이에 있지도 않은 차로가 생긴다. 내가 실제로
+        # 달리는 코스에서만 쓴다.
+        opposite_segments = []
+
+    # 좌우 색이 다른 차로. 연결로가 직선 도로에 합류하는 구간이 그렇다:
+    # 왼쪽은 연결로에서 이어진 노란 점선, 오른쪽은 직선 도로의 흰 실선이다.
+    # 같은 색끼리만 짝지으면 이 차로는 절대 못 만든다. 그래서 코드는 노란선
+    # 오른쪽 350 mm에 노란 경계를 '지어내는데', 그게 카메라 사각(검은 쐐기)에
+    # 떨어져 점수를 못 받고 결국 뒤쪽 아스팔트에 차로를 얹는 오답에 진다.
+    # 두 선을 실제로 관측한 짝이므로 지어낸 후보보다 근거가 강하다.
+    for index, (own_start, own_end) in enumerate(segments):
+        for other_start, other_end in opposite_segments:
+            pair_width = ROAD_WIDTH_PX * scales[index]
+            for left_u, right_u in (
+                (float(own_end), float(other_start)),
+                (float(other_end), float(own_start)),
+            ):
+                measured_width = right_u - left_u
+                width_error = abs(measured_width - pair_width)
+                if (
+                    measured_width <= 0.0
+                    or width_error > ROAD_WIDTH_TOLERANCE_PX
+                ):
+                    continue
+                append_if_valid(
+                    left_u,
+                    right_u,
+                    width_error,
+                    PATH_PAIR_BONUS,
+                    BOUNDARY_SOURCE_PAIR,
+                )
+
     # 한쪽 노란선만 보이는 경우 350 mm 도로 폭(수직)을 수평으로 환산해 추정
     for index, (segment_start, segment_end) in enumerate(segments):
         lane_width_px = ROAD_WIDTH_PX * scales[index]
@@ -1492,7 +1532,7 @@ def enumerate_boundary_candidates(
 
         detected_as_right = float(segment_start)
         append_if_valid(
-            detected_as_right - ROAD_WIDTH_PX,
+            detected_as_right - lane_width_px,
             detected_as_right,
             0.0,
             0.0,
@@ -1527,6 +1567,7 @@ def track_boundary_path(
     required_side: str | None,
     opposite_line_mask: np.ndarray | None = None,
     observable_mask: np.ndarray | None = None,
+    is_ego_course: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """모든 행의 후보를 연결해 위치/방향/곡률이 연속인 경로를 찾는다."""
 
@@ -1546,6 +1587,12 @@ def track_boundary_path(
     # 전부 모아 위/아래 행과 이어 본다.
     segments_by_row = [find_line_segments(boundary_mask[v]) for v in range(height)]
     slopes_by_row = estimate_segment_slopes(segments_by_row, height)
+    # 좌우 색이 다른 차로(합류부)를 만들려면 반대색 선의 세그먼트도 필요하다.
+    opposite_by_row = (
+        None
+        if opposite_line_mask is None
+        else [find_line_segments(opposite_line_mask[v]) for v in range(height)]
+    )
 
     for v in range(height - 1, -1, -1):
         segments = segments_by_row[v]
@@ -1571,6 +1618,8 @@ def track_boundary_path(
                 None if all_sums[3] is None else all_sums[3][v],
             ),
             slopes_by_row[v],
+            is_ego_course,
+            None if opposite_by_row is None else opposite_by_row[v],
         )
         if row_candidates:
             candidates_by_row[v] = row_candidates
@@ -2215,6 +2264,7 @@ def build_global_boundary_course(
     smooth_course: bool = False,
     opposite_line_mask: np.ndarray | None = None,
     observable_mask: np.ndarray | None = None,
+    is_ego_course: bool = False,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -2239,6 +2289,7 @@ def build_global_boundary_course(
         required_side,
         opposite_line_mask,
         observable_mask,
+        is_ego_course,
     )
     if use_yellow_gap_limit:
         interpolated_left, interpolated_right = interpolate_yellow_boundary_pair(
@@ -3128,6 +3179,10 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
             last_white_left, last_white_right
         )
 
+    # 직전 프레임에서 확정한 ego 코스 색. 그 코스의 차로만 차량을 품어야 한다.
+    # (흰 도로를 달리는 중이면 노란 코스는 '옆 도로'이므로 품을 이유가 없다.)
+    ego_course = last_ego_course_color
+
     (
         _,
         white_raw_left,
@@ -3151,6 +3206,7 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         # 가로선(정지선/진입선)은 코스 경계가 아니므로 제거한 마스크를 쓴다.
         opposite_line_mask=yellow_boundary_bev,
         observable_mask=observable_bev,
+        is_ego_course=ego_course == "white",
     )
 
     previous_yellow_center = None
@@ -3166,6 +3222,11 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         white_centerline, road_clean
     )
 
+    # 흰 경계 둘 다 관측된 행 = 흰 차로 확정. 노란 코스는 그 위에 못 얹는다.
+    # inner_course_reference(=흰 중심선)가 center_error/PATH_REFERENCE_PENALTY로
+    # 노란 후보를 흰 차로 쪽으로 당기기 때문에, 이 금지 구간이 없으면 오른쪽에
+    # 노란선 하나만 보일 때 그 선을 '오른쪽 경계'로 읽어 노란 차로를 흰 차로
+    # 위에 통째로 올려놓는다(= 왼쪽선을 오른쪽선으로 인식).
     (
         _,
         yellow_raw_left,
@@ -3180,7 +3241,15 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         boundary_mask=yellow_boundary_bev,
         raw_road_mask=road_raw,
         clean_road_mask=road_clean,
-        reference_centerline=inner_course_reference,
+        # 이미 노란 코스 위를 달리고 있다면 '흰 도로 중심선'은 기준이 아니다.
+        # 그걸 기준으로 두면 center_error가 노란 차로를 흰 도로 쪽으로 끌어당겨,
+        # 노란선 하나만 보일 때 그 선을 반대쪽 경계로 읽게 만든다.
+        # 기준을 None으로 두면 BEV 중앙(=차량)이 기준이 되고, 이건 참이다.
+        # 인코스 우선(required_side)도 '진입 전에 어느 노란 코스냐'를 고르는
+        # 규칙이지, 이미 그 위에 있을 때 쓰는 규칙이 아니다.
+        reference_centerline=(
+            None if ego_course == "yellow" else inner_course_reference
+        ),
         temporal_centerline=previous_yellow_center,
         temporal_left=last_yellow_left,
         temporal_right=last_yellow_right,
@@ -3192,6 +3261,7 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         # (흰 도로 주행 중 옆 노란선 하나만 보일 때 좌/우 모호성을 푼다)
         opposite_line_mask=white_bev,
         observable_mask=observable_bev,
+        is_ego_course=ego_course == "yellow",
     )
 
     yellow_left = temporally_smooth_boundary(
