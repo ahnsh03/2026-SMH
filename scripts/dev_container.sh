@@ -247,6 +247,7 @@ Usage: ./scripts/dev_container.sh <command>
   sim-up           시뮬 컨테이너 생성·시작 (백그라운드, sleep)
   sim-down         시뮬 컨테이너 중지·삭제
   sim-bringup      build-sim + Gazebo launch (Ctrl+C 시 launch만 종료, 컨테이너 유지)
+  lane-tune        인지 모드 튜너 안내 (Gazebo 미기동 — bringup 후 컨테이너에서 실행)
   sim              build-sim + 자율주행 launch
   sim-manual       build-sim + 수동주행 launch
   verify-sim       토픽 검증 (bringup 실행 중)
@@ -267,6 +268,9 @@ Examples:
   ./scripts/dev_container.sh sim-bringup
   docker exec -it ${SIM_CONTAINER_NAME} bash
   ./scripts/dev_container.sh sim-bringup use_camera_view:=false headless:=true
+  # 인지 검증 (Gazebo 재기동 금지):
+  #   source /opt/ros/humble/setup.bash && source install/setup.bash
+  #   python3 scripts/vision_tune/tune_lane_detect.py --mode white
 EOF
 }
 
@@ -327,6 +331,22 @@ case "${cmd}" in
     ensure_sim_display
     shift || true
     sim_exec_launch dracer_sim sim_bringup.launch.py "$@"
+    ;;
+  lane-tune)
+    cat <<EOF
+[SEA-Me] 인지 모드 튜너 — Gazebo를 이 명령으로 켜지 않습니다.
+
+  터미널1:  ./scripts/dev_container.sh sim-bringup
+  터미널2:  docker exec -it ${SIM_CONTAINER_NAME} bash
+            source /opt/ros/humble/setup.bash && source install/setup.bash
+            python3 scripts/vision_tune/tune_lane_detect.py --mode white
+
+  키 1–9 / 0: white yellow dash dash_left dash_right fork fork_left fork_right red crossing
+  문서: docs/lane-perception-topic.md §6.2 · scripts/vision_tune/README.md
+
+  ❌ LANE_VISUALIZE=… ros2 launch dracer_sim sim_auto_driving.launch.py
+     (bringup이 이미 있으면 Gazebo가 하나 더 뜸)
+EOF
     ;;
   sim)
     ensure_sim_display

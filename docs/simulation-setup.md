@@ -74,7 +74,8 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
     │
     └─ /battery_status ← sim_battery_stub (80% 고정)
 
-카메라 프리뷰(`sim_camera_preview`): `/camera/image_raw` 320×180 → **640×360** 창 (16:9, 2배)
+카메라 프리뷰(`sim_camera_preview`): `/camera/image_raw` 320×180 → **640×360** 창 (16:9, 2배)  
+BEV 프리뷰(`sim_bev_preview`): 같은 토픽 → **Metric IPM** (`lane_vision.yaml` 잠정 SSOT, 가이드 오버레이). `use_bev_view:=false`로 끌 수 있음.
 
 현재 구조: [main-planner.md](./main-planner.md) · [lane-perception-topic.md](./lane-perception-topic.md) ★
 ```
@@ -251,7 +252,8 @@ docker rm -f 2026-smh-sim
 
 ```bash
 ./scripts/dev_container.sh sim-bringup camera_view_width:=800 camera_view_height:=450
-./scripts/dev_container.sh sim-bringup use_camera_view:=false   # 프리뷰 창 끔
+./scripts/dev_container.sh sim-bringup use_camera_view:=false   # 카메라 프리뷰 끔
+./scripts/dev_container.sh sim-bringup use_bev_view:=false      # Metric IPM BEV 창만 끔
 ```
 
 ### 4.3 터미널 2 — 코드 개발·실행 (`docker exec`)
@@ -354,18 +356,22 @@ ros2 topic pub /control control_msgs/msg/Control "{steering: 0.0, throttle: 0.3}
 ./scripts/dev_container.sh sim-bringup headless:=true
 ./scripts/dev_container.sh sim-bringup use_camera_view:=false
 ./scripts/dev_container.sh sim-bringup use_monitor:=true   # 웹 모니터 (Docker Flask 이슈 가능)
-./scripts/dev_container.sh sim-bringup spawn_x:=0.0 spawn_y:=-3.6
+./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork
+./scripts/dev_container.sh sim-bringup spawn_pose:=custom spawn_x:=0.0 spawn_y:=-3.6 spawn_yaw:=1.57
 ```
 
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
 | `headless` | `false` | `true`면 Gazebo 3D 창 끔 (물리·카메라는 동작) |
 | `use_camera_view` | `true` | OpenCV 카메라 프리뷰 (`/camera/image_raw`) |
+| `use_bev_view` | `true` | Metric IPM BEV 프리뷰 (`config/lane_vision.yaml`) |
+| `bev_view_scale` | `2.0` | BEV 창 배율 |
 | `camera_view_width` | `640` | 프리뷰 창 가로 (16:9) |
 | `camera_view_height` | `360` | 프리뷰 창 세로 |
 | `use_monitor` | `false` | D-Racer **웹 모니터**. 실차 SSH 관측용. 시뮬 자율주행엔 **불필요**(기본 OFF). 켜도 로직은 동작 |
 | `robot` | `limo` | `dracer` = 경량 박스 모델 |
-| `spawn_x/y/z/yaw` | 2.6 / -3.92 / 0.15 / -3.14 | 트랙 위 스폰 위치 |
+| `spawn_pose` | `start` | 미션 구간 프리셋 ([§5.0](#50-미션-구간-스폰-pose-limo)) |
+| `spawn_x/y/z/yaw` | (custom용) | `spawn_pose:=custom`일 때만 사용 |
 
 ### 4.8 직접 명령어 치트시트 (스크립트 없이)
 
@@ -590,6 +596,37 @@ docker rm -f 2026-smh-sim
 ## 5. 미션 표지판 (갈림길 · ArUco)
 
 대회 미션 검증용 표지판 **3종**이 기본 월드에 포함됩니다. **별도 맵 파일·launch 인자 없이** `sim-bringup` / `sim`만 실행하면 함께 로드됩니다.
+
+### 5.0 미션 구간 스폰 pose (LIMO)
+
+미션 구간별로 LIMO를 바로 스폰하려면 `spawn_pose:=…` 를 사용한다.  
+SSOT: [`src/dracer_sim/config/spawn_poses.yaml`](../src/dracer_sim/config/spawn_poses.yaml)
+
+```bash
+./scripts/dev_container.sh sim-bringup spawn_pose:=start              # 기본 출발점
+./scripts/dev_container.sh sim-bringup spawn_pose:=inout_fork
+./scripts/dev_container.sh sim-bringup spawn_pose:=in_roundabout_entry
+./scripts/dev_container.sh sim-bringup spawn_pose:=obstacle
+./scripts/dev_container.sh sim spawn_pose:=out_fork route_mode:=out
+# 수동 좌표
+./scripts/dev_container.sh sim-bringup spawn_pose:=custom spawn_x:=0.0 spawn_y:=-3.6 spawn_yaw:=1.57
+```
+
+| `spawn_pose` | 구간 | x | y | yaw (rad) |
+|--------------|------|---|---|-----------|
+| `start` | 출발점 (**기본**) | 2.6 | −3.92 | −π |
+| `inout_fork` | In/Out 코스 분기 | −0.3 | −3.92 | −π |
+| `in_roundabout_entry` | In · 회전교차로 진입 직전 | −1.97 | −2.15 | π/2 |
+| `in_roundabout_exit` | In · 회전교차로 탈출 분기 | −0.9 | 1.39 | 0.15 |
+| `in_out_merge` | In → Out 합류 | 0.45 | 2.45 | π/2 |
+| `out_fork` | Out · 갈림길 분기 | −4.4 | 3.72 | 0 |
+| `out_fork_merge_left` | Out 갈림 합류 (왼쪽 경로) | −1.14 | 4.05 | 0 |
+| `out_fork_merge_right` | Out 갈림 합류 (오른쪽 경로) | −1.14 | 3.38 | 0 |
+| `out_in_merge` | Out → In 합류 | 0 | 3.71 | 0 |
+| `obstacle` | 동적 장애물 구간 | 4.7 | 2.97 | −1.13 |
+| `custom` | 수동 | `spawn_x/y/z/yaw` | | |
+
+좌표·yaw를 고치면 **yaml만** 수정한 뒤 `sim-bringup`을 다시 실행하면 된다 (월드 파일 수정 불필요).
 
 ### 5.1 무엇이 배치되나
 

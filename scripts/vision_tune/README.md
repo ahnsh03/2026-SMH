@@ -14,10 +14,40 @@
 | D3-G 보드 | ✅ | |
 
 ```bash
-./scripts/dev_container.sh sim-bringup     # 터미널1
+./scripts/dev_container.sh sim-bringup     # 터미널1 — Gazebo만
 docker exec -it 2026-smh-sim bash          # 터미널2
 source /opt/ros/humble/setup.bash
+source install/setup.bash
 ```
+
+**인지 검증은 Gazebo를 다시 띄우지 마세요.** `sim_auto_driving` / `LANE_VISUALIZE=… launch`는 bringup이 이미 있으면 Gazebo가 하나 더 뜹니다. 카메라 토픽만 구독하는 튜너를 쓰세요.
+
+---
+
+## 인지 모드 튜너 (주 검증 경로 · Gazebo-free)
+
+흰/노란/갈림길(좌·우·합)/빨간 장애물 차로/가로선을 **모드별로** 보고 트랙바로 맞춘다.  
+이미지와 트랙바는 **한 창** (`lane_detect_tune`).
+
+```bash
+python3 scripts/vision_tune/tune_lane_detect.py --mode white
+python3 scripts/vision_tune/tune_lane_detect.py --folder data/captures/sim
+python3 scripts/vision_tune/tune_lane_detect.py --image /path/to/frame.png
+```
+
+| 키 | 모드 |
+|----|------|
+| `1` | `white` — 흰 차선 L/R |
+| `2` | `yellow` — 노란 차선·점선 오버레이 |
+| `3` / `4` / `5` | `dash` / `dash_left` / `dash_right` — 점선 전용 (갈래별 필터) |
+| `6` / `7` / `8` | `fork` / `fork_left` / `fork_right` |
+| `9` | `red` — 빨간 장애물 차로 |
+| `0` | `crossing` — 가로 정지선/진입선 |
+| `s` | `hsv:` + `detect_tune:` 저장 |
+| `n` / `p` | 폴더 다음/이전 |
+| `q` | 종료 |
+
+상세 체크리스트: [lane-perception-topic.md §6.2](../../docs/lane-perception-topic.md).
 
 ---
 
@@ -189,15 +219,16 @@ Metric IPM이면 종·횡이 이미 등방이라 검증용; 사다리꼴 쓸 때
 
 | 파일 | 역할 |
 |------|------|
-| `tune_bev.py` | **기본 진입** → Metric IPM |
+| `tune_lane_detect.py` | **인지 모드 검증·튜너** (Gazebo 미기동, topic/image) |
+| `tune_bev.py` | **기본 BEV 진입** → Metric IPM |
 | `tune_metric_ipm.py` | Metric IPM UI·로직 (`tune_bev.py`가 호출) |
 | `metric_ipm.py` | remapping · `(u,v)→(x,y) m` |
 | `tune_hsv.py` | **HSV 마스크** (흰/노란/검/빨) |
 | `hsv.py` | HSV load/save/mask |
-| `tune_lane_control.py` | **Pure Pursuit** 게인 튜너 |
+| `tune_lane_control.py` | **Pure Pursuit** 게인 튜너 (레거시 경로) |
 | `window_layout.py` | OpenCV 창 화면 안 배치 (`w`) |
 | `tune_bev_roi.py` | 사다리꼴만 (참고) |
 | `bev_roi.py` | 사다리꼴 기하 |
 | `capture_camera.py` | 핫키 캡처 |
-| `../../config/lane_vision.yaml` | `metric_ipm:` + `hsv:` SSOT |
+| `../../config/lane_vision.yaml` | `metric_ipm:` + `hsv:` + `detect_tune:` SSOT |
 | `../../config/lane_control.yaml` | planner 게인 |

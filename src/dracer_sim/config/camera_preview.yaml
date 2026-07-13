@@ -4,3 +4,5 @@ sim_camera_preview:
     window_name: D-Racer Camera
     window_width: 640
     window_height: 360
+    window_x: 40
+    window_y: 40

@@ -17,11 +17,15 @@ class CameraPreview(Node):
     self.declare_parameter('window_name', 'D-Racer Camera')
     self.declare_parameter('window_width', 640)
     self.declare_parameter('window_height', 360)
+    self.declare_parameter('window_x', 40)
+    self.declare_parameter('window_y', 40)
 
     topic = str(self.get_parameter('image_topic').value)
     self.window_name = str(self.get_parameter('window_name').value)
     width = int(self.get_parameter('window_width').value)
     height = int(self.get_parameter('window_height').value)
+    window_x = int(self.get_parameter('window_x').value)
+    window_y = int(self.get_parameter('window_y').value)
 
     if width <= 0 or height <= 0:
       raise ValueError('window_width and window_height must be positive')
@@ -29,6 +33,10 @@ class CameraPreview(Node):
     self.bridge = CvBridge()
     cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(self.window_name, width, height)
+    try:
+      cv2.moveWindow(self.window_name, window_x, window_y)
+    except cv2.error:
+      pass
 
     image_qos = QoSProfile(
       history=HistoryPolicy.KEEP_LAST,

@@ -197,6 +197,73 @@ class LaneDetections:
     confidence: float = 0.0
 
 
+@dataclass
+class LaneDebugFrame:
+    """Intermediate masks/boundaries for mode tuners (not on the ROS wire)."""
+
+    bev: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0, 3), dtype=np.uint8)
+    )
+    white_bev: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    yellow_bev: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    red_bev: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    black_bev: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    road_clean: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    road_raw: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    yellow_dash_points_bev: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    yellow_connected_bev: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    white_dash_points_bev: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    white_dash_connected_bev: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    crossing_mask: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    white_crossing_mask: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    white_left: np.ndarray = field(
+        default_factory=lambda: np.empty((0,), dtype=np.float32)
+    )
+    white_right: np.ndarray = field(
+        default_factory=lambda: np.empty((0,), dtype=np.float32)
+    )
+    yellow_left: np.ndarray = field(
+        default_factory=lambda: np.empty((0,), dtype=np.float32)
+    )
+    yellow_right: np.ndarray = field(
+        default_factory=lambda: np.empty((0,), dtype=np.float32)
+    )
+    road_cells: np.ndarray = field(
+        default_factory=lambda: np.empty((0, 0), dtype=np.uint8)
+    )
+    road_branches: tuple = ()
+    ego_road_color: str | None = None
+    fork_active: bool = False
+    yellow_crossing_line: bool = False
+    white_crossing_line: bool = False
+    red_coverage: float = 0.0
+    red_pixel_count: int = 0
+
+
 # =========================================================
 # Metric IPM geometry (config/lane_vision.yaml → metric_ipm)
 # =========================================================
@@ -292,6 +359,106 @@ WHITE_LOWER, WHITE_UPPER = _HSV["white"]
 YELLOW_LOWER, YELLOW_UPPER = _HSV["yellow"]
 BLACK_LOWER, BLACK_UPPER = _HSV["black_road"]
 RED_ROAD_LOWER, RED_ROAD_UPPER = _HSV["red_road"]
+
+# Hue wrap for red (OpenCV H wraps at 0/179). 0 = disabled.
+# When >0, OR inRange(H∈[0, wrap], S/V from red_road) with the high band.
+RED_H_LOW_WRAP = 0
+
+
+def apply_hsv_thresholds(
+    ranges: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> None:
+    """Live-tune HSV inRange bounds (tuner). Keys: white/yellow/black_road/red_road."""
+
+    global WHITE_LOWER, WHITE_UPPER
+    global YELLOW_LOWER, YELLOW_UPPER
+    global BLACK_LOWER, BLACK_UPPER
+    global RED_ROAD_LOWER, RED_ROAD_UPPER
+    if "white" in ranges:
+        WHITE_LOWER, WHITE_UPPER = ranges["white"]
+    if "yellow" in ranges:
+        YELLOW_LOWER, YELLOW_UPPER = ranges["yellow"]
+    if "black_road" in ranges:
+        BLACK_LOWER, BLACK_UPPER = ranges["black_road"]
+    if "red_road" in ranges:
+        RED_ROAD_LOWER, RED_ROAD_UPPER = ranges["red_road"]
+
+
+def apply_detect_tune(
+    *,
+    crossing_coverage_ratio: float | None = None,
+    crossing_min_rows: int | None = None,
+    min_branch_separation_m: float | None = None,
+    dash_max_lateral_error_m: float | None = None,
+    dash_max_forward_gap_m: float | None = None,
+    dash_max_heading_diff_deg: float | None = None,
+    dash_min_component_area_px: int | None = None,
+    dash_branch_assoc_m: float | None = None,
+    red_h_low_wrap: int | None = None,
+) -> None:
+    """Live-tune detection scalars exposed by tune_lane_detect."""
+
+    global CROSSING_COVERAGE_RATIO, CROSSING_MIN_ROWS
+    global MIN_BRANCH_SEPARATION_M, MIN_BRANCH_SEPARATION_ROWS
+    global DASH_MAX_LATERAL_ERROR_M, DASH_MAX_FORWARD_GAP_M
+    global DASH_MAX_HEADING_DIFF_DEG, DASH_MIN_COMPONENT_AREA_PX
+    global DASH_BRANCH_ASSOC_M, RED_H_LOW_WRAP
+    if crossing_coverage_ratio is not None:
+        CROSSING_COVERAGE_RATIO = float(np.clip(crossing_coverage_ratio, 0.05, 1.0))
+    if crossing_min_rows is not None:
+        CROSSING_MIN_ROWS = max(1, int(crossing_min_rows))
+    if min_branch_separation_m is not None:
+        MIN_BRANCH_SEPARATION_M = float(max(0.02, min_branch_separation_m))
+        MIN_BRANCH_SEPARATION_ROWS = max(
+            1, int(round(MIN_BRANCH_SEPARATION_M / METERS_PER_PIXEL))
+        )
+    if dash_max_lateral_error_m is not None:
+        DASH_MAX_LATERAL_ERROR_M = float(max(0.005, dash_max_lateral_error_m))
+    if dash_max_forward_gap_m is not None:
+        DASH_MAX_FORWARD_GAP_M = float(max(0.05, dash_max_forward_gap_m))
+    if dash_max_heading_diff_deg is not None:
+        DASH_MAX_HEADING_DIFF_DEG = float(
+            np.clip(dash_max_heading_diff_deg, 5.0, 90.0)
+        )
+    if dash_min_component_area_px is not None:
+        DASH_MIN_COMPONENT_AREA_PX = max(3, int(dash_min_component_area_px))
+    if dash_branch_assoc_m is not None:
+        DASH_BRANCH_ASSOC_M = float(max(0.05, dash_branch_assoc_m))
+    if red_h_low_wrap is not None:
+        RED_H_LOW_WRAP = int(np.clip(red_h_low_wrap, 0, 30))
+
+
+def get_detect_tune() -> dict[str, float | int]:
+    """Snapshot of scalars the lane-detect tuner may edit."""
+
+    return {
+        "crossing_coverage_ratio": float(CROSSING_COVERAGE_RATIO),
+        "crossing_min_rows": int(CROSSING_MIN_ROWS),
+        "min_branch_separation_m": float(MIN_BRANCH_SEPARATION_M),
+        "dash_max_lateral_error_m": float(DASH_MAX_LATERAL_ERROR_M),
+        "dash_max_forward_gap_m": float(DASH_MAX_FORWARD_GAP_M),
+        "dash_max_heading_diff_deg": float(DASH_MAX_HEADING_DIFF_DEG),
+        "dash_min_component_area_px": int(DASH_MIN_COMPONENT_AREA_PX),
+        "dash_branch_assoc_m": float(DASH_BRANCH_ASSOC_M),
+        "red_h_low_wrap": int(RED_H_LOW_WRAP),
+    }
+
+
+def _red_inrange(hsv_source: np.ndarray) -> np.ndarray:
+    """Red road mask; optional low-H wrap band ORed in."""
+
+    mask = cv2.inRange(hsv_source, RED_ROAD_LOWER, RED_ROAD_UPPER)
+    if RED_H_LOW_WRAP > 0:
+        lo = np.array(
+            [0, int(RED_ROAD_LOWER[1]), int(RED_ROAD_LOWER[2])],
+            dtype=np.uint8,
+        )
+        hi = np.array(
+            [RED_H_LOW_WRAP, int(RED_ROAD_UPPER[1]), int(RED_ROAD_UPPER[2])],
+            dtype=np.uint8,
+        )
+        mask = cv2.bitwise_or(mask, cv2.inRange(hsv_source, lo, hi))
+    return mask
 
 
 # =========================================================
@@ -2348,6 +2515,9 @@ DASH_MIN_ROAD_SUPPORT_RATIO = 0.0005
 DASH_MAX_LINE_THICKNESS_PX = 8
 DASH_ENDPOINT_TANGENT_LENGTH_M = 0.08
 DASH_DIRECTIONAL_EIGEN_RATIO = 2.0
+# Max lateral distance (m) from a RoadBranch centerline to keep a dash blob
+# for that fork path (tune_lane_detect dash_left / dash_right).
+DASH_BRANCH_ASSOC_M = 0.22
 
 
 def find_crossing_lines(color_bev: np.ndarray, road_mask: np.ndarray) -> np.ndarray:
@@ -2859,6 +3029,13 @@ def show_visualization(
 def detect(frame: np.ndarray) -> LaneDetections:
     """색상별 좌우 경계, 노란선 플래그와 road_clean을 반환한다."""
 
+    detections, _debug = detect_with_debug(frame)
+    return detections
+
+
+def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame]:
+    """Runtime detections plus intermediate masks for mode tuners."""
+
     global cached_shape
     global last_white_left
     global last_white_right
@@ -2866,7 +3043,7 @@ def detect(frame: np.ndarray) -> LaneDetections:
     global last_yellow_right
 
     if frame is None or frame.size == 0:
-        return LaneDetections()
+        return LaneDetections(), LaneDebugFrame()
 
     original_h, original_w = frame.shape[:2]
     current_shape = (original_w, original_h)
@@ -2887,7 +3064,7 @@ def detect(frame: np.ndarray) -> LaneDetections:
     )
     yellow_source = cv2.inRange(hsv_source, YELLOW_LOWER, YELLOW_UPPER)
     black_source = cv2.inRange(hsv_source, BLACK_LOWER, BLACK_UPPER)
-    red_source = cv2.inRange(hsv_source, RED_ROAD_LOWER, RED_ROAD_UPPER)
+    red_source = _red_inrange(hsv_source)
 
     white_bev = warp_mask(white_source)
     yellow_bev = warp_mask(yellow_source)
@@ -2937,6 +3114,12 @@ def detect(frame: np.ndarray) -> LaneDetections:
     white_cut_bev = remove_crossing_from_boundary_mask(
         white_bev,
         white_crossing_mask,
+    )
+    # 세로형 흰 점선(갈림/합류 가이드) — 가로 진입선은 extract에서 걸러진다.
+    white_dash_points_bev = extract_dash_point_mask(white_cut_bev)
+    white_dash_connected_bev = connect_dashed_components(
+        white_cut_bev,
+        road_clean,
     )
 
     previous_white_center = None
@@ -3059,9 +3242,25 @@ def detect(frame: np.ndarray) -> LaneDetections:
     )
     # 노란 가로 실선(정지선/진입선) 등장 여부
     yellow_crossing_line = has_crossing_line(crossing_mask)
+    white_crossing_line = has_crossing_line(white_crossing_mask)
+
+    observable = observable_bev
+    if observable is not None and observable.size == red_bev.size:
+        obs_count = int(np.count_nonzero(observable))
+        red_in_view = int(np.count_nonzero(red_bev[observable]))
+        red_coverage = (
+            float(red_in_view) / float(obs_count) if obs_count > 0 else 0.0
+        )
+        red_pixel_count = red_in_view
+    else:
+        total = max(1, int(red_bev.size))
+        red_pixel_count = int(np.count_nonzero(red_bev))
+        red_coverage = float(red_pixel_count) / float(total)
+
+    bev_color = warp_metric_ipm(frame, METRIC_IPM_PARAMS)
 
     if VISUALIZE:
-        bev = warp_metric_ipm(frame, METRIC_IPM_PARAMS)
+        bev = bev_color
         if window_enabled("road_branches"):
             branch_preview = make_course_cell_preview(
                 bev, road_cells, road_branches, ego_road_color
@@ -3141,7 +3340,7 @@ def detect(frame: np.ndarray) -> LaneDetections:
         lanes, side=LaneMarking.SIDE_RIGHT
     )
 
-    return LaneDetections(
+    detections = LaneDetections(
         lanes=tuple(lanes),
         white_visible=white_confidence > 0.0,
         yellow_visible=yellow_is_detected,
@@ -3158,6 +3357,34 @@ def detect(frame: np.ndarray) -> LaneDetections:
         fork_active=fork_active,
         branches=tuple(road_branches),
     )
+    debug = LaneDebugFrame(
+        bev=bev_color,
+        white_bev=white_bev,
+        yellow_bev=yellow_bev,
+        red_bev=red_bev,
+        black_bev=black_bev,
+        road_clean=road_clean,
+        road_raw=road_raw,
+        yellow_dash_points_bev=yellow_dash_points_bev,
+        yellow_connected_bev=yellow_boundary_bev,
+        white_dash_points_bev=white_dash_points_bev,
+        white_dash_connected_bev=white_dash_connected_bev,
+        crossing_mask=crossing_mask,
+        white_crossing_mask=white_crossing_mask,
+        white_left=white_left,
+        white_right=white_right,
+        yellow_left=yellow_left,
+        yellow_right=yellow_right,
+        road_cells=road_cells,
+        road_branches=tuple(road_branches),
+        ego_road_color=ego_road_color,
+        fork_active=fork_active,
+        yellow_crossing_line=yellow_crossing_line,
+        white_crossing_line=white_crossing_line,
+        red_coverage=red_coverage,
+        red_pixel_count=red_pixel_count,
+    )
+    return detections, debug
 
 
 # =============================================================
@@ -3487,6 +3714,44 @@ MIN_BRANCH_SEPARATION_M = 0.15
 MIN_BRANCH_SEPARATION_ROWS = max(
     1, int(round(MIN_BRANCH_SEPARATION_M / METERS_PER_PIXEL))
 )
+
+
+def _apply_detect_tune_from_yaml() -> None:
+    """Optional ``detect_tune:`` block from lane_vision.yaml (tuner saves here)."""
+
+    try:
+        with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except OSError:
+        return
+    block = data.get("detect_tune")
+    if not isinstance(block, dict):
+        return
+    kwargs: dict = {}
+    if "crossing_coverage_ratio" in block:
+        kwargs["crossing_coverage_ratio"] = float(block["crossing_coverage_ratio"])
+    if "crossing_min_rows" in block:
+        kwargs["crossing_min_rows"] = int(block["crossing_min_rows"])
+    if "min_branch_separation_m" in block:
+        kwargs["min_branch_separation_m"] = float(block["min_branch_separation_m"])
+    if "dash_max_lateral_error_m" in block:
+        kwargs["dash_max_lateral_error_m"] = float(block["dash_max_lateral_error_m"])
+    if "dash_max_forward_gap_m" in block:
+        kwargs["dash_max_forward_gap_m"] = float(block["dash_max_forward_gap_m"])
+    if "dash_max_heading_diff_deg" in block:
+        kwargs["dash_max_heading_diff_deg"] = float(block["dash_max_heading_diff_deg"])
+    if "dash_min_component_area_px" in block:
+        kwargs["dash_min_component_area_px"] = int(block["dash_min_component_area_px"])
+    if "dash_branch_assoc_m" in block:
+        kwargs["dash_branch_assoc_m"] = float(block["dash_branch_assoc_m"])
+    if "red_h_low_wrap" in block:
+        kwargs["red_h_low_wrap"] = int(block["red_h_low_wrap"])
+    if kwargs:
+        apply_detect_tune(**kwargs)
+
+
+_apply_detect_tune_from_yaml()
+
 # 가짜 분기(노이즈)를 건너뛰며 재탐색할 최대 횟수
 MAX_FORK_PROBES = 8
 
@@ -3971,3 +4236,347 @@ def make_course_cell_preview(
         cv2.LINE_AA,
     )
     return preview
+
+
+def vehicle_xy_to_bev_uv(x_m: float, y_m: float) -> tuple[float, float]:
+    """base_link (x forward, y left) → BEV pixel (u=col, v=row)."""
+
+    row = (X_MAX_M - float(x_m)) / METERS_PER_PIXEL
+    col = (BEV_WIDTH - 1) / 2.0 - float(y_m) / METERS_PER_PIXEL
+    return col, row
+
+
+def bev_uv_to_vehicle_xy(u: float, v: float) -> tuple[float, float]:
+    """BEV pixel (u=col, v=row) → base_link meters."""
+
+    x_m = X_MAX_M - float(v) * METERS_PER_PIXEL
+    y_m = ((BEV_WIDTH - 1) / 2.0 - float(u)) * METERS_PER_PIXEL
+    return x_m, y_m
+
+
+def _point_to_polyline_distance_m(
+    point_xy: np.ndarray,
+    polyline_xy: np.ndarray,
+) -> float:
+    """Min distance from a 2D point to a polyline (both in meters)."""
+
+    if polyline_xy.shape[0] == 0:
+        return float("inf")
+    if polyline_xy.shape[0] == 1:
+        return float(np.linalg.norm(point_xy - polyline_xy[0]))
+    best = float("inf")
+    for i in range(polyline_xy.shape[0] - 1):
+        a = polyline_xy[i]
+        b = polyline_xy[i + 1]
+        ab = b - a
+        denom = float(np.dot(ab, ab))
+        if denom < 1e-12:
+            dist = float(np.linalg.norm(point_xy - a))
+        else:
+            t = float(np.clip(np.dot(point_xy - a, ab) / denom, 0.0, 1.0))
+            proj = a + t * ab
+            dist = float(np.linalg.norm(point_xy - proj))
+        if dist < best:
+            best = dist
+    return best
+
+
+def select_road_branch(
+    branches: tuple | list,
+    focus: str,
+):
+    """Pick branch for focus in {all, left, right}. all → None."""
+
+    items = list(branches)
+    if not items or focus == "all":
+        return None
+    ranks = [int(b.lateral_rank) for b in items]
+    keep = min(ranks) if focus == "left" else max(ranks)
+    for branch in items:
+        if int(branch.lateral_rank) == keep:
+            return branch
+    return None
+
+
+def filter_dash_mask_by_branch(
+    dash_mask: np.ndarray,
+    branch,
+    *,
+    max_lateral_m: float | None = None,
+) -> np.ndarray:
+    """Keep connected dash blobs whose centroid is near the branch centerline.
+
+    Used so dash_left / dash_right only promote the dashed markings that belong
+    to the chosen fork path (merge/split gore lines otherwise bleed into both).
+    """
+
+    if dash_mask.size == 0 or branch is None:
+        return dash_mask
+    pts = np.asarray(branch.points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[0] == 0:
+        return np.zeros_like(dash_mask)
+    poly = pts[:, :2]
+    limit = float(DASH_BRANCH_ASSOC_M if max_lateral_m is None else max_lateral_m)
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        dash_mask, connectivity=8
+    )
+    out = np.zeros_like(dash_mask)
+    kept = 0
+    for label in range(1, count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < max(3, DASH_MIN_COMPONENT_AREA_PX // 2):
+            continue
+        ys, xs = np.nonzero(labels == label)
+        if ys.size == 0:
+            continue
+        cu = float(np.mean(xs))
+        cv_ = float(np.mean(ys))
+        xy = np.array(bev_uv_to_vehicle_xy(cu, cv_), dtype=np.float32)
+        if _point_to_polyline_distance_m(xy, poly) <= limit:
+            out[labels == label] = 255
+            kept += 1
+    return out
+
+
+def make_dash_preview(
+    debug: "LaneDebugFrame",
+    *,
+    focus: str = "all",
+) -> np.ndarray:
+    """Dash-lane mode: raw points + connected, optionally filtered by fork path."""
+
+    if debug.bev.size == 0:
+        return np.zeros((BEV_HEIGHT, BEV_WIDTH, 3), dtype=np.uint8)
+
+    preview = debug.bev.copy()
+    road_overlay = np.zeros_like(preview)
+    road_overlay[debug.road_clean > 0] = DRIVABLE_COLOR
+    preview = cv2.addWeighted(preview, 1.0, road_overlay, 0.35, 0.0)
+
+    yellow_pts = debug.yellow_dash_points_bev
+    yellow_conn = debug.yellow_connected_bev
+    white_pts = debug.white_dash_points_bev
+    white_conn = debug.white_dash_connected_bev
+    if yellow_pts.size == 0:
+        yellow_pts = np.zeros(debug.bev.shape[:2], dtype=np.uint8)
+    if yellow_conn.size == 0:
+        yellow_conn = yellow_pts
+    if white_pts.size == 0:
+        white_pts = np.zeros(debug.bev.shape[:2], dtype=np.uint8)
+    if white_conn.size == 0:
+        white_conn = white_pts
+
+    branch = select_road_branch(debug.road_branches, focus)
+    if branch is not None:
+        yellow_pts = filter_dash_mask_by_branch(yellow_pts, branch)
+        yellow_conn = filter_dash_mask_by_branch(yellow_conn, branch)
+        white_pts = filter_dash_mask_by_branch(white_pts, branch)
+        white_conn = filter_dash_mask_by_branch(white_conn, branch)
+        draw_vehicle_polyline(
+            preview,
+            branch.points[:, :2],
+            BRANCH_COLORS[int(branch.lateral_rank) % len(BRANCH_COLORS)],
+            f"B{int(branch.lateral_rank)}",
+        )
+    elif focus == "all":
+        for b in debug.road_branches:
+            draw_vehicle_polyline(
+                preview,
+                b.points[:, :2],
+                BRANCH_COLORS[int(b.lateral_rank) % len(BRANCH_COLORS)],
+                f"B{int(b.lateral_rank)}",
+            )
+
+    # Dim connected envelopes, bright raw dash points.
+    preview[yellow_conn > 0] = (
+        0.55 * preview[yellow_conn > 0] + 0.45 * np.array([0, 180, 255])
+    ).astype(np.uint8)
+    preview[white_conn > 0] = (
+        0.55 * preview[white_conn > 0] + 0.45 * np.array([200, 200, 200])
+    ).astype(np.uint8)
+    preview[yellow_pts > 0] = (0, 255, 255)
+    preview[white_pts > 0] = (255, 255, 255)
+
+    y_n = int(np.count_nonzero(yellow_pts))
+    w_n = int(np.count_nonzero(white_pts))
+    cv2.putText(
+        preview,
+        (
+            f"DASH focus={focus.upper()}  Ypx={y_n} Wpx={w_n}  "
+            f"assoc<={DASH_BRANCH_ASSOC_M:.2f}m  "
+            f"gap={DASH_MAX_FORWARD_GAP_M:.2f}m lat={DASH_MAX_LATERAL_ERROR_M:.3f}m"
+        ),
+        (4, 16),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.34,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        preview,
+        "cyan=yellow dash  white=white dash  tint=connected  branch=L/R path",
+        (4, 32),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.32,
+        (200, 255, 200),
+        1,
+        cv2.LINE_AA,
+    )
+    return preview
+
+
+def make_red_zone_preview(debug: LaneDebugFrame) -> np.ndarray:
+    """Red obstacle-lane mask over BEV with coverage readout."""
+
+    if debug.bev.size == 0:
+        return np.zeros((BEV_HEIGHT, BEV_WIDTH, 3), dtype=np.uint8)
+    preview = debug.bev.copy()
+    tint = np.zeros_like(preview)
+    tint[debug.red_bev > 0] = (0, 0, 255)
+    preview = cv2.addWeighted(preview, 1.0, tint, 0.55, 0.0)
+    contours, _ = cv2.findContours(
+        debug.red_bev, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    cv2.drawContours(preview, contours, -1, (0, 255, 255), 1)
+    cv2.putText(
+        preview,
+        (
+            f"RED ZONE  cov={100.0 * debug.red_coverage:.1f}%  "
+            f"px={debug.red_pixel_count}  wrapH={RED_H_LOW_WRAP}"
+        ),
+        (4, 16),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.38,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return preview
+
+
+def make_crossing_preview(debug: LaneDebugFrame) -> np.ndarray:
+    """Yellow/white crossing masks over road_raw."""
+
+    base = debug.road_raw
+    if base.size == 0:
+        return np.zeros((BEV_HEIGHT, BEV_WIDTH, 3), dtype=np.uint8)
+    preview = cv2.cvtColor(base, cv2.COLOR_GRAY2BGR)
+    preview[debug.crossing_mask > 0] = (0, 0, 255)
+    preview[debug.white_crossing_mask > 0] = (0, 255, 255)
+    cv2.putText(
+        preview,
+        (
+            f"CROSSING  Y={debug.yellow_crossing_line}  "
+            f"W={debug.white_crossing_line}  "
+            f"cov>={CROSSING_COVERAGE_RATIO:.2f}  rows>={CROSSING_MIN_ROWS}"
+        ),
+        (4, 16),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.36,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return preview
+
+
+def make_fork_focus_preview(
+    debug: LaneDebugFrame,
+    *,
+    focus: str = "all",
+) -> np.ndarray:
+    """Fork preview; focus in {all, left, right} dims non-selected branches."""
+
+    if debug.bev.size == 0:
+        return np.zeros((BEV_HEIGHT, BEV_WIDTH, 3), dtype=np.uint8)
+    branches = list(debug.road_branches)
+    preview = make_course_cell_preview(
+        debug.bev, debug.road_cells, branches, debug.ego_road_color
+    )
+    if focus == "all" or not branches:
+        return preview
+    ranks = [b.lateral_rank for b in branches]
+    if focus == "left":
+        keep = min(ranks)
+    else:
+        keep = max(ranks)
+    dim = preview.copy()
+    dim = (dim.astype(np.float32) * 0.35).astype(np.uint8)
+    for branch in branches:
+        if branch.lateral_rank != keep:
+            continue
+        color = BRANCH_COLORS[branch.lateral_rank % len(BRANCH_COLORS)]
+        draw_vehicle_polyline(
+            dim, branch.points[:, :2], color, f"B{branch.lateral_rank}"
+        )
+    cv2.putText(
+        dim,
+        f"FORK FOCUS={focus.upper()}  keep=B{keep}  n={len(branches)}",
+        (4, 46),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.36,
+        (0, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return dim
+
+
+def render_mode_preview(mode: str, debug: LaneDebugFrame) -> np.ndarray:
+    """Build a single BGR preview for tune_lane_detect modes."""
+
+    mode = (mode or "white").strip().lower()
+    if debug.bev.size == 0:
+        return np.zeros((BEV_HEIGHT, BEV_WIDTH, 3), dtype=np.uint8)
+
+    if mode == "white":
+        return make_boundary_preview(
+            debug.bev,
+            debug.road_clean,
+            debug.white_left,
+            debug.white_right,
+            "WHITE",
+        )
+    if mode == "yellow":
+        base = make_boundary_preview(
+            debug.bev,
+            debug.road_clean,
+            debug.yellow_left,
+            debug.yellow_right,
+            "YELLOW",
+        )
+        # Dash points (cyan) + connected (yellow tint) for quick check.
+        overlay = base.copy()
+        if debug.yellow_dash_points_bev.size:
+            overlay[debug.yellow_dash_points_bev > 0] = (255, 255, 0)
+        if debug.yellow_connected_bev.size:
+            connected = cv2.cvtColor(
+                debug.yellow_connected_bev, cv2.COLOR_GRAY2BGR
+            )
+            return cv2.addWeighted(overlay, 0.75, connected, 0.25, 0.0)
+        return overlay
+    if mode == "dash":
+        return make_dash_preview(debug, focus="all")
+    if mode == "dash_left":
+        return make_dash_preview(debug, focus="left")
+    if mode == "dash_right":
+        return make_dash_preview(debug, focus="right")
+    if mode == "fork":
+        return make_fork_focus_preview(debug, focus="all")
+    if mode == "fork_left":
+        return make_fork_focus_preview(debug, focus="left")
+    if mode == "fork_right":
+        return make_fork_focus_preview(debug, focus="right")
+    if mode == "red":
+        return make_red_zone_preview(debug)
+    if mode == "crossing":
+        return make_crossing_preview(debug)
+    return make_boundary_preview(
+        debug.bev,
+        debug.road_clean,
+        debug.white_left,
+        debug.white_right,
+        mode.upper(),
+    )

@@ -1,0 +1,92 @@
+# LIMO / D-Racer sim spawn poses for mission-section testing.
+# Gazebo world frame (track_cw): x forward-ish per world, yaw in radians.
+#
+# Usage:
+#   ./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork
+#   ros2 launch dracer_sim sim_bringup.launch.py spawn_pose:=obstacle
+#   spawn_pose:=custom spawn_x:=… spawn_y:=… spawn_yaw:=…   # manual override
+#
+# SSOT for launch: this file. Docs: docs/simulation-setup.md §5.1
+
+default: start
+
+poses:
+  start:
+    label: 출발점 (기본)
+    x: 2.6
+    y: -3.92
+    z: 0.15
+    yaw: -3.141592653589793   # ≈ -π
+    note: CW 트랙 스타트 라인 부근
+
+  inout_fork:
+    label: In/Out 코스 분기
+    x: -0.3
+    y: -3.92
+    z: 0.15
+    yaw: -3.141592653589793   # -π
+    note: In/Out 코스 갈림 직전
+
+  in_roundabout_entry:
+    label: In 코스 · 회전교차로 진입 직전
+    x: -1.97
+    y: -2.15
+    z: 0.15
+    yaw: 1.5707963267948966   # π/2
+    note: 회전교차로 입구 직전
+
+  in_roundabout_exit:
+    label: In 코스 · 회전교차로 탈출 분기
+    x: -0.9
+    y: 1.39
+    z: 0.15
+    yaw: 0.15
+    note: 회전교차로 탈출 분기점
+
+  in_out_merge:
+    label: In → Out 합류
+    x: 0.45
+    y: 2.45
+    z: 0.15
+    yaw: 1.5707963267948966   # π/2
+    note: In 코스에서 Out 코스로 합류
+
+  out_fork:
+    label: Out 코스 · 갈림길 분기
+    x: -4.4
+    y: 3.72
+    z: 0.15
+    yaw: 0.0
+    note: Out 갈림길 분기점 (좌/우 표지판 구간)
+
+  out_fork_merge_left:
+    label: Out 갈림길 합류 · 왼쪽 경로
+    x: -1.14
+    y: 4.05
+    z: 0.15
+    yaw: 0.0
+    note: 왼쪽 갈림길을 지나 합류하는 지점
+
+  out_fork_merge_right:
+    label: Out 갈림길 합류 · 오른쪽 경로
+    x: -1.14
+    y: 3.38
+    z: 0.15
+    yaw: 0.0
+    note: 오른쪽 갈림길을 지나 합류하는 지점
+
+  out_in_merge:
+    label: Out → In 합류
+    x: 0.0
+    y: 3.71
+    z: 0.15
+    yaw: 0.0
+    note: Out 코스에서 In 코스로 합류
+
+  obstacle:
+    label: 동적 장애물 구간
+    x: 4.7
+    y: 2.97
+    z: 0.15
+    yaw: -1.13
+    note: 빨간 차로 · ArUco 정지 미션 구간
