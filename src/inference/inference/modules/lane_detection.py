@@ -120,6 +120,10 @@ RIGHT_BOUNDARY_COLOR = (255, 0, 0)
 DRIVABLE_COLOR = (0, 150, 0)
 INTERPOLATED_LINE_COLOR = (0, 255, 255)
 CENTERLINE_COLOR = (255, 0, 255)
+# 분기에서 선택되지 않은 나머지 경로(시각화 전용) — 주 경계와 겹치지 않는 색
+ALT_LEFT_BOUNDARY_COLOR = (0, 165, 255)
+ALT_RIGHT_BOUNDARY_COLOR = (255, 255, 0)
+ALT_CENTERLINE_COLOR = (255, 255, 255)
 
 
 @dataclass(frozen=True)
@@ -1516,71 +1520,22 @@ def enumerate_boundary_candidates(
     return ranked_candidates[:MAX_PATH_CANDIDATES_PER_ROW]
 
 
-def track_boundary_path(
-    boundary_mask: np.ndarray,
-    raw_road_mask: np.ndarray,
-    clean_road_mask: np.ndarray,
-    reference_centerline: np.ndarray | None,
-    temporal_centerline: np.ndarray | None,
-    temporal_left: np.ndarray | None,
-    temporal_right: np.ndarray | None,
-    required_side: str | None,
-    opposite_line_mask: np.ndarray | None = None,
-    observable_mask: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """모든 행의 후보를 연결해 위치/방향/곡률이 연속인 경로를 찾는다."""
+def _solve_boundary_dp(
+    candidates_by_row: dict[int, list[tuple[float, float, float, int]]],
+    height: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, set[tuple[int, int]]]:
+    """행별 후보를 이어 점수가 가장 높은 단일 경로 하나를 뽑는다.
 
-    height = boundary_mask.shape[0]
-    candidates_by_row: dict[int, list[tuple[float, float, float, int]]] = {}
-
-    # 후보 하나마다 마스크를 슬라이스해 세면 프레임당 수천 번 numpy를 부른다.
-    # 행 누적합을 한 번 만들어 두면 구간 합이 뺄셈 한 번으로 끝난다.
-    all_sums = _boundary_row_sums(
-        raw_road_mask,
-        clean_road_mask,
-        observable_mask,
-        opposite_line_mask,
-    )
-
-    # 도로 폭 보정에는 관측선의 국소 기울기가 필요하므로 세그먼트를 먼저
-    # 전부 모아 위/아래 행과 이어 본다.
-    segments_by_row = [find_line_segments(boundary_mask[v]) for v in range(height)]
-    slopes_by_row = estimate_segment_slopes(segments_by_row, height)
-
-    for v in range(height - 1, -1, -1):
-        segments = segments_by_row[v]
-        if not segments:
-            continue
-
-        row_candidates = enumerate_boundary_candidates(
-            segments,
-            raw_road_mask[v],
-            clean_road_mask[v],
-            v,
-            reference_centerline,
-            temporal_centerline,
-            temporal_left,
-            temporal_right,
-            required_side,
-            None
-            if all_sums is None
-            else (
-                all_sums[0][v],
-                all_sums[1][v],
-                all_sums[2][v],
-                None if all_sums[3] is None else all_sums[3][v],
-            ),
-            slopes_by_row[v],
-        )
-        if row_candidates:
-            candidates_by_row[v] = row_candidates
+    track_boundary_path의 DP 본체. 분기에서 선택되지 않은 나머지 경로를
+    같은 방식으로 다시 찾을 때도(시각화 전용) 이 함수를 재사용한다.
+    """
 
     raw_left = np.full(height, np.nan, dtype=np.float32)
     raw_right = np.full(height, np.nan, dtype=np.float32)
     left_observed = np.zeros(height, dtype=bool)
     right_observed = np.zeros(height, dtype=bool)
     if not candidates_by_row:
-        return raw_left, raw_right, left_observed, right_observed
+        return raw_left, raw_right, left_observed, right_observed, set()
 
     # key -> (누적 점수, 이전 key, 직전 중심선 기울기, 연결 노드 수)
     states: dict[
@@ -1697,6 +1652,7 @@ def track_boundary_path(
         ),
     )
 
+    used_keys: set[tuple[int, int]] = set()
     cursor: tuple[int, int] | None = best_key
     while cursor is not None:
         v, candidate_index = cursor
@@ -1711,9 +1667,157 @@ def track_boundary_path(
             BOUNDARY_SOURCE_PAIR,
             BOUNDARY_SOURCE_RIGHT,
         )
+        used_keys.add(cursor)
         cursor = states[cursor][1]
 
-    return raw_left, raw_right, left_observed, right_observed
+    return raw_left, raw_right, left_observed, right_observed, used_keys
+
+
+def track_boundary_path(
+    boundary_mask: np.ndarray,
+    raw_road_mask: np.ndarray,
+    clean_road_mask: np.ndarray,
+    reference_centerline: np.ndarray | None,
+    temporal_centerline: np.ndarray | None,
+    temporal_left: np.ndarray | None,
+    temporal_right: np.ndarray | None,
+    required_side: str | None,
+    opposite_line_mask: np.ndarray | None = None,
+    observable_mask: np.ndarray | None = None,
+    find_alternate: bool = False,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """모든 행의 후보를 연결해 위치/방향/곡률이 연속인 경로를 찾는다.
+
+    find_alternate=True면, 선택된 경로가 쓴 후보를 제외한 나머지 후보로
+    같은 DP를 한 번 더 풀어 분기에서 선택되지 않은 경로도 반환한다
+    (시각화 전용 — 코스 선택에는 쓰지 않는다).
+    """
+
+    height = boundary_mask.shape[0]
+
+    # 후보 하나마다 마스크를 슬라이스해 세면 프레임당 수천 번 numpy를 부른다.
+    # 행 누적합을 한 번 만들어 두면 구간 합이 뺄셈 한 번으로 끝난다.
+    all_sums = _boundary_row_sums(
+        raw_road_mask,
+        clean_road_mask,
+        observable_mask,
+        opposite_line_mask,
+    )
+
+    # 도로 폭 보정에는 관측선의 국소 기울기가 필요하므로 세그먼트를 먼저
+    # 전부 모아 위/아래 행과 이어 본다.
+    segments_by_row = [find_line_segments(boundary_mask[v]) for v in range(height)]
+    slopes_by_row = estimate_segment_slopes(segments_by_row, height)
+
+    def build_candidates_by_row(
+        use_temporal: bool,
+    ) -> dict[int, list[tuple[float, float, float, int]]]:
+        candidates_by_row: dict[int, list[tuple[float, float, float, int]]] = {}
+        for v in range(height - 1, -1, -1):
+            segments = segments_by_row[v]
+            if not segments:
+                continue
+
+            row_candidates = enumerate_boundary_candidates(
+                segments,
+                raw_road_mask[v],
+                clean_road_mask[v],
+                v,
+                reference_centerline,
+                temporal_centerline if use_temporal else None,
+                temporal_left if use_temporal else None,
+                temporal_right if use_temporal else None,
+                required_side,
+                None
+                if all_sums is None
+                else (
+                    all_sums[0][v],
+                    all_sums[1][v],
+                    all_sums[2][v],
+                    None if all_sums[3] is None else all_sums[3][v],
+                ),
+                slopes_by_row[v],
+            )
+            if row_candidates:
+                candidates_by_row[v] = row_candidates
+        return candidates_by_row
+
+    candidates_by_row = build_candidates_by_row(use_temporal=True)
+    raw_left, raw_right, left_observed, right_observed, _ = _solve_boundary_dp(
+        candidates_by_row, height
+    )
+
+    if not find_alternate:
+        empty = np.full(height, np.nan, dtype=np.float32)
+        empty_flags = np.zeros(height, dtype=bool)
+        return (
+            raw_left,
+            raw_right,
+            left_observed,
+            right_observed,
+            empty.copy(),
+            empty.copy(),
+            empty_flags.copy(),
+            empty_flags.copy(),
+        )
+
+    # 주 경로가 이전 프레임 위치(temporal_left/right)와 가까운 후보를
+    # 우대하도록 만든 candidates_by_row를 그대로 재사용하면, 분기의
+    # 반대쪽(원래부터 temporal 추적 대상이 아니었던) 후보들이 겹침 비율이
+    # 조금만 낮아도 identity 불일치로 통째로 걸러져 alt 경로가 차량과
+    # 가까운 몇 행에서만 겨우 이어지고 만다. alt는 temporal 없이 후보를
+    # 새로 만들어 이 편향을 없앤다(시각화 전용이라 프레임 간 일관성은
+    # 필요 없다).
+    alt_candidates_by_row = build_candidates_by_row(use_temporal=False)
+
+    # 선택된 경로와 같은 행에서 거의 같은 위치(도로 폭 허용오차 이내)를
+    # 가리키는 후보는 같은 선의 다른 추정치일 뿐이므로 제외한다. 그러지
+    # 않으면 분기가 없는 단일 도로 구간에서 alt 경로가 주 경로와 거의
+    # 같은 선을 다시 찾아 같은 차선이 두 번 칠해진다.
+    def is_duplicate_of_primary(v: int, left_u: float, right_u: float) -> bool:
+        primary_left = raw_left[v]
+        primary_right = raw_right[v]
+        if np.isnan(primary_left) or np.isnan(primary_right):
+            return False
+        return (
+            abs(left_u - primary_left) <= ROAD_WIDTH_TOLERANCE_PX
+            and abs(right_u - primary_right) <= ROAD_WIDTH_TOLERANCE_PX
+        )
+
+    remaining_candidates_by_row = {
+        v: remaining
+        for v, candidates in alt_candidates_by_row.items()
+        if (
+            remaining := [
+                candidate
+                for candidate in candidates
+                if not is_duplicate_of_primary(v, candidate[0], candidate[1])
+            ]
+        )
+    }
+    alt_left, alt_right, alt_left_observed, alt_right_observed, _ = (
+        _solve_boundary_dp(remaining_candidates_by_row, height)
+    )
+
+    return (
+        raw_left,
+        raw_right,
+        left_observed,
+        right_observed,
+        alt_left,
+        alt_right,
+        alt_left_observed,
+        alt_right_observed,
+    )
 
 
 def interpolate_boundary_pair(
@@ -2215,6 +2319,7 @@ def build_global_boundary_course(
     smooth_course: bool = False,
     opposite_line_mask: np.ndarray | None = None,
     observable_mask: np.ndarray | None = None,
+    find_alternate: bool = False,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -2225,10 +2330,26 @@ def build_global_boundary_course(
     np.ndarray,
     np.ndarray,
     np.ndarray,
+    np.ndarray,
+    np.ndarray,
 ]:
-    """행별 후보를 전체 경로로 연결해 교차로에서도 연속적인 경계를 만든다."""
+    """행별 후보를 전체 경로로 연결해 교차로에서도 연속적인 경계를 만든다.
 
-    raw_left, raw_right, left_observed, right_observed = track_boundary_path(
+    find_alternate=True면 분기에서 선택되지 않은 나머지 경로도 같은 방식
+    (DP + 보간 + 최근접 연속 구간 유지)으로 계산해 마지막 두 값으로 반환한다
+    (시각화 전용).
+    """
+
+    (
+        raw_left,
+        raw_right,
+        left_observed,
+        right_observed,
+        alt_raw_left,
+        alt_raw_right,
+        _,
+        _,
+    ) = track_boundary_path(
         boundary_mask,
         raw_road_mask,
         clean_road_mask,
@@ -2239,29 +2360,57 @@ def build_global_boundary_course(
         required_side,
         opposite_line_mask,
         observable_mask,
+        find_alternate=find_alternate,
     )
-    if use_yellow_gap_limit:
-        interpolated_left, interpolated_right = interpolate_yellow_boundary_pair(
-            raw_left,
-            raw_right,
+
+    def gap_fill(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if use_yellow_gap_limit:
+            return interpolate_yellow_boundary_pair(left, right)
+        return interpolate_boundary_pair(left, right)
+
+    def finalize(
+        left: np.ndarray,
+        right: np.ndarray,
+        keep_nearest: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if keep_nearest:
+            # 추적 허용 간격(0.35 m)보다 보간 간격(0.20 m)이 짧아서
+            # 같은 DP 경로에 포함됐지만 화면에서 떨어진 덩어리가 남을
+            # 수 있다. 차량에 가장 가까운 충분히 긴 연속 구간 하나만 유지한다.
+            left, right = keep_nearest_continuous_run(left, right)
+        if smooth_course:
+            left, right = smooth_boundary_pair(left, right)
+        return left, right
+
+    filled_left, filled_right = gap_fill(raw_left, raw_right)
+    interpolated_left, interpolated_right = finalize(filled_left, filled_right)
+
+    alt_interpolated_left = np.full_like(raw_left, np.nan)
+    alt_interpolated_right = np.full_like(raw_right, np.nan)
+    if find_alternate:
+        # 주 경로와 달리 alt는 "차량에서 가장 가까운 구간 하나만" 남기면
+        # 안 된다 — 분기에서 갈라진 먼 쪽 구간이 그 필터에 걸려 사라지고
+        # 가까운 조각만 남는 문제가 있었다. 끊긴 조각이 있어도 전부 그린다.
+        alt_filled_left, alt_filled_right = gap_fill(alt_raw_left, alt_raw_right)
+        alt_valid_rows = np.flatnonzero(
+            ~np.isnan(alt_filled_left) & ~np.isnan(alt_filled_right)
         )
-    else:
-        interpolated_left, interpolated_right = interpolate_boundary_pair(
-            raw_left,
-            raw_right,
+        if alt_valid_rows.size > 0:
+            # 분기가 합쳐진 뒤(차량에 더 가까운 행)에는 더 이상 별도
+            # 경로가 없으므로, 나머지 경로가 마지막으로 확인된 지점부터는
+            # 주 경로를 그대로 이어 붙인다. 평활화 *전에* 이어 붙여야
+            # 이어지는 지점에서 꺾이지 않고 하나의 매끄러운 곡선이 된다.
+            merge_row = int(alt_valid_rows[-1])
+            tail_rows = np.arange(merge_row + 1, len(alt_filled_left))
+            fillable = tail_rows[
+                ~np.isnan(filled_left[tail_rows]) & ~np.isnan(filled_right[tail_rows])
+            ]
+            alt_filled_left[fillable] = filled_left[fillable]
+            alt_filled_right[fillable] = filled_right[fillable]
+        alt_interpolated_left, alt_interpolated_right = finalize(
+            alt_filled_left, alt_filled_right, keep_nearest=False
         )
-    # 추적 허용 간격(0.35 m)보다 보간 간격(0.20 m)이 짧아서
-    # 같은 DP 경로에 포함됐지만 화면에서 떨어진 덩어리가 남을
-    # 수 있다. 차량에 가장 가까운 충분히 긴 연속 구간 하나만 유지한다.
-    interpolated_left, interpolated_right = keep_nearest_continuous_run(
-        interpolated_left,
-        interpolated_right,
-    )
-    if smooth_course:
-        interpolated_left, interpolated_right = smooth_boundary_pair(
-            interpolated_left,
-            interpolated_right,
-        )
+
     raw_centerline = centerline_from_boundaries(raw_left, raw_right)
     interpolated_centerline = centerline_from_boundaries(
         interpolated_left,
@@ -2283,6 +2432,8 @@ def build_global_boundary_course(
         interpolated_right,
         raw_centerline,
         interpolated_centerline,
+        alt_interpolated_left,
+        alt_interpolated_right,
     )
 
 
@@ -2873,8 +3024,14 @@ def make_boundary_preview(
     left_boundary: np.ndarray,
     right_boundary: np.ndarray,
     label: str,
+    alt_left_boundary: np.ndarray | None = None,
+    alt_right_boundary: np.ndarray | None = None,
 ) -> np.ndarray:
-    """road_clean과 좌우 경계 ID를 한 화면에 겹친다."""
+    """road_clean과 좌우 경계 ID를 한 화면에 겹친다.
+
+    alt_left_boundary/alt_right_boundary가 있으면 분기에서 선택되지 않은
+    나머지 경로도 같이 그린다(시각화 전용, 코스 선택과 무관).
+    """
 
     preview = bev.copy()
     road_overlay = np.zeros_like(preview)
@@ -2888,9 +3045,19 @@ def make_boundary_preview(
     centerline = centerline_from_boundaries(left_boundary, right_boundary)
     draw_boundary(preview, centerline, CENTERLINE_COLOR)
 
+    legend = f"{label}  LEFT=RED  RIGHT=BLUE  CENTER=MAGENTA"
+    if alt_left_boundary is not None and alt_right_boundary is not None:
+        draw_boundary(preview, alt_left_boundary, ALT_LEFT_BOUNDARY_COLOR)
+        draw_boundary(preview, alt_right_boundary, ALT_RIGHT_BOUNDARY_COLOR)
+        alt_centerline = centerline_from_boundaries(
+            alt_left_boundary, alt_right_boundary
+        )
+        draw_boundary(preview, alt_centerline, ALT_CENTERLINE_COLOR)
+        legend += "  ALT_LEFT=ORANGE  ALT_RIGHT=CYAN  ALT_CENTER=WHITE"
+
     cv2.putText(
         preview,
-        f"{label}  LEFT=RED  RIGHT=BLUE  CENTER=MAGENTA",
+        legend,
         (4, 16),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.38,
@@ -2938,6 +3105,10 @@ def show_visualization(
     white_right: np.ndarray,
     yellow_left: np.ndarray,
     yellow_right: np.ndarray,
+    white_alt_left: np.ndarray | None = None,
+    white_alt_right: np.ndarray | None = None,
+    yellow_alt_left: np.ndarray | None = None,
+    yellow_alt_right: np.ndarray | None = None,
 ) -> None:
     """현재 LANE_VISUALIZE 모드에서 켜진 창만 표시한다.
 
@@ -2981,6 +3152,8 @@ def show_visualization(
                     white_left,
                     white_right,
                     "WHITE",
+                    alt_left_boundary=white_alt_left,
+                    alt_right_boundary=white_alt_right,
                 )
             ),
         )
@@ -2994,6 +3167,8 @@ def show_visualization(
                     yellow_left,
                     yellow_right,
                     "YELLOW",
+                    alt_left_boundary=yellow_alt_left,
+                    alt_right_boundary=yellow_alt_right,
                 )
             ),
         )
@@ -3128,6 +3303,11 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
             last_white_left, last_white_right
         )
 
+    # 갈림길에서 선택되지 않은 반대편 경로는 CONTROL/ON 모드에서만 창에
+    # 그린다(시각화 전용, LaneDetections/MainPlanner 입력에는 안 들어감).
+    # DP를 한 번 더 돌리므로 OFF 모드(주행 루프)에는 비용이 없다.
+    find_alternate = VISUALIZE_MODE in (VISUALIZE_CONTROL, VISUALIZE_ON)
+
     (
         _,
         white_raw_left,
@@ -3138,6 +3318,8 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         white_right,
         _,
         white_centerline,
+        white_alt_left,
+        white_alt_right,
     ) = build_global_boundary_course(
         boundary_mask=white_bev,
         raw_road_mask=road_raw,
@@ -3151,6 +3333,7 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         # 가로선(정지선/진입선)은 코스 경계가 아니므로 제거한 마스크를 쓴다.
         opposite_line_mask=yellow_boundary_bev,
         observable_mask=observable_bev,
+        find_alternate=find_alternate,
     )
 
     previous_yellow_center = None
@@ -3176,6 +3359,8 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         yellow_right,
         _,
         _,
+        yellow_alt_left,
+        yellow_alt_right,
     ) = build_global_boundary_course(
         boundary_mask=yellow_boundary_bev,
         raw_road_mask=road_raw,
@@ -3192,6 +3377,7 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         # (흰 도로 주행 중 옆 노란선 하나만 보일 때 좌/우 모호성을 푼다)
         opposite_line_mask=white_bev,
         observable_mask=observable_bev,
+        find_alternate=find_alternate,
     )
 
     yellow_left = temporally_smooth_boundary(
@@ -3301,6 +3487,10 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
             white_right=white_right,
             yellow_left=yellow_left,
             yellow_right=yellow_right,
+            white_alt_left=white_alt_left,
+            white_alt_right=white_alt_right,
+            yellow_alt_left=yellow_alt_left,
+            yellow_alt_right=yellow_alt_right,
         )
 
     boundary_candidates = (
