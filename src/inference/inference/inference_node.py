@@ -1,12 +1,10 @@
 """
-Autonomous driving perception node.
+Autonomous driving inference node.
 
-Subscribes to camera images, runs lane/aruco perception, publishes:
-  - /perception/lane  (lane_msgs/LaneDetections)
-  - /debug/aruco
+Subscribes to camera images, runs perception/planning pipeline, publishes /control.
 
-Control (/control) is owned by ``lane_control_node`` (temporary P/EMA) or a
-future mission planner. See docs/lane-perception-topic.md.
+Integration is handled in pipeline.py — assignees edit modules/ only.
+See docs/collaboration.md for branch and PR rules.
 
 ArUco 보드 확인:
   ros2 topic echo /debug/aruco
@@ -15,20 +13,25 @@ ArUco 보드 확인:
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import cv2
 import numpy as np
 import rclpy
+import yaml
 from geometry_msgs.msg import Point32
+from control_msgs.msg import Control
 from lane_msgs.msg import LaneDetections as LaneDetectionsMsg
 from lane_msgs.msg import LaneMarking as LaneMarkingMsg
 from lane_msgs.msg import RoadBranch as RoadBranchMsg
-from pathlib import Path
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
 
-from inference.modules import aruco_detection, lane_detection
+from inference import pipeline
+from inference.pipeline import MainPlanner, load_planner_config
 from inference.types import ArucoResult
 
 
@@ -55,30 +58,59 @@ class InferenceNode(Node):
 
         self.declare_parameter('vehicle_config_file', get_default_vehicle_config_path())
         self.declare_parameter('image_topic', '/camera/image/compressed')
+        self.declare_parameter('control_topic', '/control')
         self.declare_parameter('lane_topic', '/perception/lane')
         self.declare_parameter('aruco_debug_topic', '/debug/aruco')
+        self.declare_parameter('planner_debug_topic', '/debug/planner')
+        self.declare_parameter(
+            'planner_config_file', str(pipeline.default_planner_config_path())
+        )
+        self.declare_parameter('route_mode', '')
         self.declare_parameter('aruco_debug_log', True)
+        self.declare_parameter('publish_hz', 10.0)
+        self.declare_parameter('steer_trim', 0.0)
+        self.declare_parameter('use_vehicle_steer_trim', True)
 
+        self.vehicle_config_file = os.path.expanduser(
+            str(self.get_parameter('vehicle_config_file').value)
+        )
         image_topic = str(self.get_parameter('image_topic').value)
+        control_topic = str(self.get_parameter('control_topic').value)
         lane_topic = str(self.get_parameter('lane_topic').value)
         aruco_debug_topic = str(self.get_parameter('aruco_debug_topic').value)
+        planner_debug_topic = str(self.get_parameter('planner_debug_topic').value)
+        planner_config_file = str(self.get_parameter('planner_config_file').value)
+        route_mode = str(self.get_parameter('route_mode').value).strip() or None
         self.aruco_debug_log = bool(self.get_parameter('aruco_debug_log').value)
+        publish_hz = float(self.get_parameter('publish_hz').value)
+        self.steer_trim = float(self.load_steer_trim())
+
+        if publish_hz <= 0.0:
+            raise ValueError('publish_hz must be greater than 0')
 
         image_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
-        )
-        lane_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=5,
-            reliability=ReliabilityPolicy.RELIABLE,
+            # Control must consume the newest camera frame. Queuing old frames
+            # creates apparent steering lag when perception is slower than FPS.
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
 
+        planner_config = load_planner_config(
+            planner_config_file,
+            route_mode=route_mode,
+        )
         self.latest_frame: np.ndarray | None = None
+        self.latest_command = pipeline.ControlCommand(
+            steering=self.steer_trim,
+            throttle=planner_config.default_throttle,
+        )
+        self._last_frame_time_sec: float | None = None
         self._last_aruco_log_key: tuple[bool, bool, int | None] | None = None
+        self._last_planner_log_key: tuple | None = None
+        self._last_planner_debug_publish_sec: float | None = None
+        self.planner = MainPlanner(planner_config, steer_trim=self.steer_trim)
 
         self.create_subscription(
             CompressedImage,
@@ -86,14 +118,17 @@ class InferenceNode(Node):
             self.image_callback,
             image_qos,
         )
-        # 인지 전용: /perception/lane 만 발행. /control 은 lane_control_node.
-        self.lane_pub = self.create_publisher(LaneDetectionsMsg, lane_topic, lane_qos)
+        self.lane_pub = self.create_publisher(LaneDetectionsMsg, lane_topic, 10)
         self.aruco_debug_pub = self.create_publisher(String, aruco_debug_topic, 10)
+        self.planner_debug_pub = self.create_publisher(String, planner_debug_topic, 10)
+        self.control_pub = self.create_publisher(Control, control_topic, 10)
+        self.create_timer(1.0 / publish_hz, self.publish_control)
 
         self.get_logger().info(
-            f'inference_node (perception-only) started: '
+            f'inference_node started: '
             f'image_topic={image_topic}, lane_topic={lane_topic}, '
-            f'aruco_debug_topic={aruco_debug_topic}'
+            f'control_topic={control_topic}, route={planner_config.route_mode.value}, '
+            f'planner_config={planner_config_file}'
         )
 
     def image_callback(self, msg: CompressedImage):
@@ -107,16 +142,114 @@ class InferenceNode(Node):
         self.run_pipeline(frame)
 
     def run_pipeline(self, frame: np.ndarray) -> None:
-        """인지 모듈만 직접 호출·발행한다.
+        """Run synchronized perception/planning and publish debug outputs."""
+        now_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
+        output = self.planner.step(frame, now_sec=now_sec)
+        self.latest_command = output.command
+        self._last_frame_time_sec = now_sec
+        # Do not wait for the lower-rate heartbeat timer: a valid corner path
+        # may exist for only one perception frame.
+        self._publish_control_command(self.latest_command)
+        self.publish_aruco_debug(output.aruco)
+        self.publish_lane_detections(output.lane)
+        self.publish_planner_debug(output)
 
-        판제(roundabout.plan 등)는 실행하지 않는다. run_perception은
-        판제(roundabout)까지 묶으므로 우회하고, 이 노드가 발행하는 인지
-        (lane, aruco)만 계산한다.
-        """
-        lane = lane_detection.detect(frame)
-        aruco = aruco_detection.detect(frame)
-        self.publish_aruco_debug(aruco)
-        self.publish_lane_detections(lane)
+    def publish_planner_debug(self, output) -> None:
+        """Publish sign/fork decisions immediately and periodic snapshots."""
+        debug = output.debug
+        key = (
+            output.state.value,
+            output.path_source.value,
+            output.decision,
+            debug['turn_sign'],
+            debug['desired_turn'],
+            debug['sign_candidate'],
+            debug['sign_candidate_frames'],
+            debug['fork_locked_turn'],
+            debug['fork_active'],
+            debug['branch_count'],
+            debug['selected_branch_rank'],
+            debug['branch_selection_reason'],
+        )
+        config = self.planner.config
+        state_changed = (
+            self._last_planner_log_key is None
+            or key[0] != self._last_planner_log_key[0]
+        )
+        decision_changed = (
+            self._last_planner_log_key is None
+            or key[1:3] != self._last_planner_log_key[1:3]
+        )
+        sign_changed = (
+            self._last_planner_log_key is None
+            or key[3:8] != self._last_planner_log_key[3:8]
+        )
+        fork_changed = (
+            self._last_planner_log_key is None
+            or key[8:] != self._last_planner_log_key[8:]
+        )
+        now_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
+        publish_period = 1.0 / config.debug_publish_hz
+        periodic_due = (
+            self._last_planner_debug_publish_sec is None
+            or now_sec < self._last_planner_debug_publish_sec
+            or now_sec - self._last_planner_debug_publish_sec >= publish_period
+        )
+        if not (
+            state_changed
+            or decision_changed
+            or sign_changed
+            or fork_changed
+            or periodic_due
+        ):
+            self._last_planner_log_key = key
+            return
+
+        msg = String()
+        selected_rank = debug['selected_branch_rank']
+        selected_rank_text = '-' if selected_rank is None else str(selected_rank)
+        msg.data = (
+            f"sign_seen={debug['turn_sign']} "
+            f"candidate={debug['sign_candidate']}/{debug['sign_candidate_frames']} "
+            f"latched={debug['desired_turn']} locked={debug['fork_locked_turn']} | "
+            f"state={debug['state']} fork={int(debug['fork_active'])}/"
+            f"{debug['branch_count']} event={int(debug['branch_event'])} "
+            f"events={debug['branch_events']} | "
+            f"choice={debug['branch_selection_reason']} rank={selected_rank_text} "
+            f"path={debug['path_source']} decision={debug['decision']} | "
+            f"steer={debug['steering']:+.3f} throttle={debug['throttle']:+.3f}"
+        )
+        self.planner_debug_pub.publish(msg)
+        self._last_planner_debug_publish_sec = now_sec
+
+        if (config.log_state_changes and state_changed) or (
+            config.log_decision_changes and decision_changed
+        ) or sign_changed or fork_changed:
+            self.get_logger().info(f'[sign] {msg.data}')
+        self._last_planner_log_key = key
+
+    def _publish_control_command(self, command: pipeline.ControlCommand) -> None:
+        """Publish one already validated planner command immediately."""
+        msg = Control()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'base_link'
+        msg.steering = float(command.steering)
+        msg.throttle = float(command.throttle)
+        self.control_pub.publish(msg)
+
+    def publish_control(self) -> None:
+        """Publish a command heartbeat and force neutral on stale camera."""
+        now_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
+        stale = (
+            self._last_frame_time_sec is None
+            or now_sec - self._last_frame_time_sec > self.planner.config.command_watchdog_sec
+        )
+        if stale:
+            self.planner.neutralize_steering()
+            command = pipeline.ControlCommand(steering=0.0, throttle=0.0)
+        else:
+            command = self.latest_command
+        self._publish_control_command(command)
 
     def publish_lane_detections(self, lane) -> None:
         """인지 LaneDetections(dataclass)를 단일 토픽 msg로 변환·발행한다."""
@@ -169,6 +302,8 @@ class InferenceNode(Node):
         drivable.data = grid.tobytes()
         msg.drivable_area = drivable
 
+        from inference.modules import lane_detection
+
         msg.meters_per_pixel = float(lane_detection.METERS_PER_PIXEL)
         msg.x_forward_max = float(lane_detection.X_MAX_M)
 
@@ -189,6 +324,28 @@ class InferenceNode(Node):
         if self.aruco_debug_log and key != self._last_aruco_log_key:
             self.get_logger().info(f'[aruco] {line}')
             self._last_aruco_log_key = key
+
+    def load_steer_trim(self) -> float:
+        param_trim = float(self.get_parameter('steer_trim').value)
+        use_vehicle_trim = bool(
+            self.get_parameter('use_vehicle_steer_trim').value
+        )
+        if not use_vehicle_trim:
+            return param_trim
+        if param_trim != 0.0:
+            return param_trim
+
+        if not os.path.exists(self.vehicle_config_file):
+            return 0.0
+
+        try:
+            with open(self.vehicle_config_file, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+        except OSError as exc:
+            self.get_logger().warning(f'Failed to read {self.vehicle_config_file}: {exc}')
+            return 0.0
+
+        return float(config.get('STEER_TRIM', 0.0))
 
 
 def main(args=None):

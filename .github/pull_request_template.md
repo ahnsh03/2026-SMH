@@ -14,7 +14,7 @@
 - [ ] `traffic_sign.py` (장원정)
 - [ ] `aruco/detector.py` (안승현)
 - [ ] `aruco/stop_logic.py` (박성준)
-- [ ] `roundabout.py` / 경로 추종 (양서준) — `/perception/lane` → types/adapters
+- [ ] `pipeline.py` / MainPlanner / 경로 추종 (양서준)
 - [ ] `lane_planner.py` (안승현)
 - [ ] 통합 (`types.py`, `lane_adapters.py`, `pipeline.py`, 노드) — 팀장 only
 
@@ -22,13 +22,14 @@
 
 - [ ] **담당 파일만** 수정했습니다 (`docs/collaboration.md` 참고)
 - [ ] `pipeline.py` / `types.py` / `lane_adapters.py` / 노드를 수정하지 않았습니다 (통합 PR이 아닌 경우)
-- [ ] `/control`을 인지 모듈에서 발행하지 않습니다
+- [ ] 인지 모듈은 결과만 반환하고 최종 `/control`은 `inference_node`의 MainPlanner 하나만 발행합니다
+- [ ] `lane_control_node`를 MainPlanner와 동시에 실행하지 않습니다
 - [ ] (원태) 런타임 BEV를 사다리꼴(`warp_bev`)로 되돌리지 않았습니다
 
 ## 테스트
 
 - [ ] PC 또는 보드에서 `colcon build --symlink-install --packages-up-to inference` 성공
-- [ ] (시뮬) `sim_auto_driving` 또는 `inference_node`+`lane_control_node`로 `/control` 확인
+- [ ] (시뮬) `sim_auto_driving` 또는 `sim_bringup`+`inference_node`로 `/control` 확인
 - [ ] (보드) `./scripts/board_sync.sh --no-pull` 성공
 - [ ] (보드, 가능 시) `ros2 launch inference auto_driving.launch.py` 실행 확인
 

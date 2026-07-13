@@ -39,4 +39,4 @@ jobs:
         run: |
           source /opt/ros/humble/setup.bash
           source install/setup.bash
-          python3 -c "from inference.pipeline import fuse_control, run_perception; print('ok')"
+          python3 -c "from inference.pipeline import MainPlanner, fuse_control; print('ok')"

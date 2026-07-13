@@ -167,7 +167,7 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 | **장원정** | 신호등·표지판 | `modules/traffic_sign.py` |
 | **안승현** | ArUco 검출 | `modules/aruco/detector.py` |
 | **박성준** | ArUco 정지 | `modules/aruco/stop_logic.py` |
-| **양서준** | 회전 교차로 | `modules/roundabout.py` |
+| **양서준** | 통합 판단·Pure Pursuit·회전교차로 | `pipeline.py` |
 
 상세: [docs/roles.md](docs/roles.md)
 
@@ -179,11 +179,15 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 /camera/image/compressed
         │
         ▼
-  inference_node → pipeline.run_perception()
-        │            (lane / traffic / aruco / roundabout)
+  inference_node → pipeline.MainPlanner.step()
+        │            (lane / traffic / aruco 직접 결과 전달)
         ▼
-  pipeline.fuse_control()  →  /control  →  control_node
+  Pure Pursuit + mission state  →  /control  →  control_node
+        └──────── 검증용 /perception/lane, /debug/*
 ```
+
+코스 선택: `ros2 launch inference auto_driving.launch.py route_mode:=in` (기본 `out`).
+주행·미션 파라미터는 `config/main_planner.yaml`에서 한 번에 조정합니다.
 
 ---
 

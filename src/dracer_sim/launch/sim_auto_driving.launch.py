@@ -17,28 +17,26 @@ def get_vehicle_config_path() -> str:
   return '/home/topst/2026-SMH/src/config/vehicle_config.yaml'
 
 
-def get_lane_control_config_path() -> str:
+def get_planner_config_path() -> str:
   for base_path in Path(__file__).resolve().parents:
-    candidate = base_path / 'config' / 'lane_control.yaml'
+    candidate = base_path / 'config' / 'main_planner.yaml'
     if candidate.exists():
       return str(candidate)
-  return '/home/topst/2026-SMH/config/lane_control.yaml'
+  return '/home/topst/2026-SMH/config/main_planner.yaml'
 
 
 def generate_launch_description():
   pkg_share = get_package_share_directory('dracer_sim')
   vehicle_config_path = get_vehicle_config_path()
-  control_config_path = get_lane_control_config_path()
-  cruise_throttle = LaunchConfiguration('cruise_throttle')
+  planner_config_path = get_planner_config_path()
+  route_mode = LaunchConfiguration('route_mode')
   use_sim_time = LaunchConfiguration('use_sim_time')
 
   return LaunchDescription([
     DeclareLaunchArgument('use_sim_time', default_value='true'),
-    DeclareLaunchArgument('cruise_throttle', default_value='0.35'),
     DeclareLaunchArgument(
-      'lane_follow_color',
-      default_value='white',
-      description='Single-color lane follow: white | yellow (no auto switch)',
+      'route_mode', default_value='', choices=['', 'in', 'out'],
+      description='Optional route override; empty uses main_planner.yaml',
     ),
 
     IncludeLaunchDescription(
@@ -73,27 +71,14 @@ def generate_launch_description():
       parameters=[
         {
           'vehicle_config_file': vehicle_config_path,
+          'planner_config_file': planner_config_path,
+          'route_mode': route_mode,
           'aruco_debug_topic': '/debug/aruco',
+          'planner_debug_topic': '/debug/planner',
           'aruco_debug_log': True,
-          'use_sim_time': use_sim_time,
-        },
-      ],
-    ),
-    # Sim: force steer_trim=0 so hardware STEER_TRIM does not bias Gazebo.
-    Node(
-      package='inference',
-      executable='lane_control_node',
-      name='lane_control_node',
-      output='screen',
-      parameters=[
-        {
-          'vehicle_config_file': vehicle_config_path,
-          'control_config_file': control_config_path,
-          'cruise_throttle': cruise_throttle,
-          'lane_follow_color': LaunchConfiguration('lane_follow_color'),
-          'steer_trim_override': True,
+          # Gazebo steering=0 is mechanically centred; ignore real-car trim.
+          'use_vehicle_steer_trim': False,
           'steer_trim': 0.0,
-          'lane_timeout_sec': 0.5,
           'use_sim_time': use_sim_time,
         },
       ],

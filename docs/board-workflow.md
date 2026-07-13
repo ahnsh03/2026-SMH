@@ -201,7 +201,7 @@ ros2 topic echo /debug/aruco
 | 장원정 | `src/inference/inference/modules/traffic_sign.py` |
 | 안승현 | `src/inference/inference/modules/aruco/detector.py` |
 | 박성준 | `src/inference/inference/modules/aruco/stop_logic.py` |
-| 양서준 | `src/inference/inference/modules/roundabout.py` |
+| 양서준 | `src/inference/inference/pipeline.py` |
 
 **건드리지 말 것** (팀장 영역):
 

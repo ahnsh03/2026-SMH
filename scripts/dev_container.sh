@@ -320,7 +320,7 @@ case "${cmd}" in
       set +u
       source install/setup.bash
       set -u
-      python3 -c "from inference.pipeline import fuse_control, run_perception; print(\"ok\")"
+      python3 -c "from inference.pipeline import MainPlanner, fuse_control; print(\"ok\")"
     '
     ;;
   sim-bringup)

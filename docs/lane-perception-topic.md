@@ -1,67 +1,65 @@
 # 차선 인지·제어 토픽 구조 (팀 SSOT)
 
+> **2026-07-13 구조 변경:** 현재 auto-driving 런타임은
+> `inference_node → pipeline.MainPlanner → /control` 단일 프로세스 구조다.
+> `/perception/lane`은 RViz·로그·외부 검증을 위해 계속 발행하지만 planner의
+> 연산 입력으로 재구독하지 않는다. 이 문서의 `lane_control_node` 설명은
+> 이전 토픽 분리 구조의 호환·참고 자료이며, 현재 제어 SSOT는
+> [main-planner.md](./main-planner.md)다.
+
 > **필독**: PR 전에 이 문서를 읽고, 담당 모듈이 **어디에 꽂히는지** 확인하세요.  
 > 관련: [lane-drive-strategy.md](./lane-drive-strategy.md) · [collaboration.md](./collaboration.md) · [roles.md](./roles.md)
 
-인지(`inference_node`)와 임시 제어(`lane_control_node`)를 **ROS 토픽으로 분리**한다.  
-**시뮬(Gazebo)과 실차(D3-G)는 같은 토픽·같은 메시지·같은 planner를 쓴다.** 환경 차이는 launch 파라미터뿐이다.
+인지 모듈은 독립적인 결과를 반환하고 `MainPlanner`가 같은 프레임에서 판단과
+최종 제어를 통합한다. 시뮬과 실차는 같은 planner/YAML을 사용하며 환경 차이는
+launch 파라미터와 actuator consumer뿐이다.
 
 ---
 
 ## 0. 한 줄 요약
 
 ```
-카메라 → inference_node(인지만) → /perception/lane
-      → lane_control_node(조향) → /control → (시뮬 bridge | 실차 control_node)
+카메라 → inference_node(MainPlanner 포함) → /control
+      └→ /perception/lane, /debug/* (검증용)
 ```
 
 | 하면 안 되는 것 | 올바른 방법 |
 |----------------|-------------|
-| `inference_node`에서 `/control` 발행 | 제어는 `lane_control_node` (또는 향후 미션 planner) |
+| `inference_node`와 `lane_control_node` 동시 실행 | `/control` publisher는 `inference_node` 하나만 실행 |
 | `lane_detection.detect()`가 조향 반환 | 인지는 `LaneDetections`만 (polyline m) |
-| planner가 원태 dataclass / msg를 직접 import | `types.LaneDetections` + `lane_adapters` |
-| `ros2 run inference inference_node`만으로 자율주행 | 인지+제어 **둘 다** launch (아래 §4) |
+| 외부 노드가 모듈 dataclass를 토픽처럼 사용 | ROS msg와 `lane_adapters` 사용 |
+| `ros2 run inference inference_node`만으로 자율주행 | 현재는 가능. 시뮬 bridge/실차 control consumer는 별도 필요 |
 | 사다리꼴 `warp_bev`를 런타임에 복구 | BEV SSOT = **Metric IPM** (`config/lane_vision.yaml`) |
 
 ---
 
-## 1. 런타임 노드 구조 (토픽 분리)
+## 1. 현재 런타임 노드 구조
 
 ```
 /camera/image/compressed
         │
         ▼
-┌──── inference_node (인지 전용) ────┐
-│  lane_detection.detect() 직접 호출 │
-│  aruco_detection.detect()          │
-│  ※ pipeline.run_perception 우회    │
-└───┬───────────────────────┬────────┘
-    │                       │
-    ▼                       ▼
-/perception/lane      /debug/aruco
-(lane_msgs)           (std_msgs/String)
-    │
-    ▼
-┌──── lane_control_node (임시 판제) ─┐
-│  detections_from_msg()             │
-│  lane_planner.step() → LaneResult  │
-│  lane_timeout → throttle=0         │
-└───────────────┬────────────────────┘
-                ▼
-            /control
-                │
-        ┌───────┴────────┐
-        ▼                ▼
-  sim_control_bridge   control_node (실차)
-  → /cmd_vel           → PCA9685 액추에이터
+┌────────────── inference_node ──────────────┐
+│ MainPlanner.step(frame)                    │
+│  ├─ lane_detection.detect()               │
+│  ├─ traffic_sign.detect()                 │
+│  ├─ aruco_detection.detect()              │
+│  └─ PP + heading + CTE + mission FSM      │
+└───────┬──────────────────────┬─────────────┘
+        ▼                      ▼
+    /control       /perception/lane, /debug/*
+   (실제 제어)             (검증·기록)
+        │
+        ▼
+ (sim bridge | 실차 control_node)
 ```
 
 노드 전체 목록(필수/선택/`monitor`): **§2**
 
 | 노드 | 구독 | 발행 | 환경 |
 |------|------|------|------|
-| `inference_node` | `/camera/image/compressed` | `/perception/lane`, `/debug/aruco` | 공통 |
-| `lane_control_node` | `/perception/lane` | `/control` | 공통 |
+| `inference_node` | `/camera/image/compressed` | `/control`, `/perception/lane`, `/debug/*` | 공통 |
+| `lane_control_node` | `/perception/lane` | `/control` | 이전 호환용, auto launch 미사용 |
 | `sim_control_bridge` | `/control` | `/cmd_vel` | **시뮬만** |
 | `control_node` | `/control` | (하드웨어) | **실차만** |
 | `monitor_node` | 카메라 등 | 웹 UI | 실차 관측용(선택) · 시뮬 기본 OFF |
@@ -72,7 +70,7 @@
 |----|------|------|
 | A. 원태 모듈 dataclass | `modules/lane_detection.py` | `detect()` 내부·반환 |
 | B. ROS msg | `lane_msgs/LaneDetections` | `/perception/lane` 와이어 |
-| C. 팀 SSOT | `inference.types.LaneDetections` | **planner·테스트·양서준 공통 입력** |
+| C. 공통 타입 | `inference.types.LaneDetections` | 토픽 adapter·외부 planner 호환 입력 |
 
 변환:
 
@@ -80,7 +78,9 @@
 - B → C: `inference.lane_adapters.detections_from_msg`
 - A → B: `inference_node.publish_lane_detections` (기존)
 
-**판제 코드는 C만 사용하세요.** A/B를 planner에 직접 넣지 마세요.
+현재 `MainPlanner`는 같은 프로세스에서 A를 직접 받아 불필요한 직렬화와 토픽
+지연을 피한다. B는 관측·검증용이고 C/adapter는 외부 소비자와 이전 분리형
+planner 호환을 위해 유지한다.
 
 ---
 
@@ -93,8 +93,8 @@
 
 | 노드 | 시뮬 | 실차(D3-G) | 역할 |
 |------|:----:|:----------:|------|
-| `inference_node` | **필수** | **필수** | 카메라 → `/perception/lane`, `/debug/aruco` |
-| `lane_control_node` | **필수** | **필수** | `/perception/lane` → `/control` |
+| `inference_node` | **필수** | **필수** | 인지·판단·제어 → `/control`, 검증 토픽 |
+| `lane_control_node` | ❌ | ❌ | 이전 호환용. MainPlanner와 동시 실행 금지 |
 | `joystick_node` | 권장 | 권장 | 게임패드·**E-Stop** (없으면 비상 정지 불가) |
 | `sim_control_bridge` | **필수** | ❌ | `/control` → Gazebo `/cmd_vel` |
 | `sim_camera_republish` | **필수** | ❌ | Gazebo 카메라 → `/camera/image/compressed` |
@@ -110,22 +110,23 @@
 
 ### 2.2 공통 — 팀 자율주행 코어 (시뮬·실차 동일)
 
-이 두 노드(+ 조이스틱 E-Stop)만 맞으면 **토픽 계약은 같다.**
+`inference_node`와 actuator consumer(+ 조이스틱 E-Stop)가 핵심이다.
 
 ```
 /camera/image/compressed
-        → inference_node → /perception/lane
-        → lane_control_node → /control
+        → inference_node/MainPlanner → /control
+        └→ /perception/lane, /debug/*
 joystick_node → (E-Stop 래치; 수동 조이스틱 모드는 실차 control 설정)
 ```
 
 | 노드 | 패키지 | 비고 |
 |------|--------|------|
-| `inference_node` | `inference` | 인지 전용. `/control` 안 씀 |
-| `lane_control_node` | `inference` | 임시 P/EMA. 시뮬은 trim=0 |
+| `inference_node` | `inference` | 인지·미션 FSM·PP와 최종 `/control` 소유 |
+| `lane_control_node` | `inference` | 이전 P/EMA 호환 노드. 현재 실행하지 않음 |
 | `joystick_node` | `joystick` | 이름 `gamepad_publisher`. E-Stop용 |
 
-`inference_node`만 띄우면 **인지 토픽만** 나오고 차는 안 움직인다.
+시뮬에서는 `sim_control_bridge`, 실차에서는 `control_node`가 함께 떠 있어야
+`/control`이 실제 차량 운동으로 이어진다.
 
 ### 2.3 시뮬 전용 — Gazebo 스택
 
@@ -164,7 +165,7 @@ Launch: `inference/auto_driving.launch.py`
 | | 설명 |
 |--|------|
 | **용도** | PC/노트북 브라우저로 D-Racer 상태·카메라 확인 (보드에 SSH 연결해 둔 뒤 `http://<보드IP>:5000` 등) |
-| **자율주행** | **없어도** `inference`→`lane_control`→액추에이터는 동작 |
+| **자율주행** | **없어도** `inference/MainPlanner`→액추에이터는 동작 |
 | **시뮬** | 기본 **OFF** (`sim_auto_driving` → `use_monitor:=false`). Gazebo 프리뷰·`topic echo`면 충분 |
 | **실차** | `auto_driving.launch.py`에 포함되어 있음. 켜 둬도 부담이 크지 않으면 그대로 둬도 됨 |
 | **켤 때(시뮬)** | `ros2 launch dracer_sim sim_bringup.launch.py use_monitor:=true` |
@@ -177,9 +178,9 @@ Launch: `inference/auto_driving.launch.py`
 | Launch | 환경 | 포함 노드 (요약) |
 |--------|------|------------------|
 | `dracer_sim/sim_bringup.launch.py` | 시뮬 | Gazebo + bridge + camera republish + control bridge (+ preview). **monitor 기본 OFF** |
-| `dracer_sim/sim_auto_driving.launch.py` | 시뮬 | bringup + `joystick` + `inference_node` + `lane_control_node` |
+| `dracer_sim/sim_auto_driving.launch.py` | 시뮬 | bringup + `joystick` + `inference_node` |
 | `dracer_sim/sim_manual_driving.launch.py` | 시뮬 | bringup + 조이스틱 수동 (자율 없음) |
-| `inference/auto_driving.launch.py` | **실차** | camera + control + joystick + battery + **monitor** + inference + lane_control |
+| `inference/auto_driving.launch.py` | **실차** | camera + control + joystick + battery + **monitor** + inference |
 
 권장 명령은 §5.
 
@@ -192,7 +193,7 @@ Launch: `inference/auto_driving.launch.py`
 | 토픽 이름 | 동일 (`/perception/lane`, `/control`) | 동일 |
 | 메시지 | `lane_msgs`, `control_msgs` | 동일 |
 | BEV | Metric IPM (`lane_vision.yaml`) | 동일 YAML |
-| 제어 게인 | `config/lane_control.yaml` | 동일 파일 (게인 튜닝은 시뮬→실차) |
+| 제어 게인 | `config/main_planner.yaml` | 동일 파일 (게인 튜닝은 시뮬→실차) |
 | Launch | `sim_auto_driving.launch.py` | `auto_driving.launch.py` |
 | `use_sim_time` | **true** | false (기본) |
 | `STEER_TRIM` | **강제 0** | `vehicle_config.yaml` |
@@ -309,13 +310,13 @@ LANE_VISUALIZE=1 ros2 run inference inference_node
 
 ---
 
-## 7. 임시 제어 (`lane_control_node` + `lane_planner`)
+## 7. 이전 호환 제어 (`lane_control_node` + `lane_planner`)
 
 - 구독 → `detections_from_msg` → `LanePlanner.step` (P + EMA + rate limit)
 - throttle = `cruise_throttle * throttle_scale`
 - `/perception/lane`가 `lane_timeout_sec`(기본 0.5s) 이상 없으면 **throttle=0**
 - 게인: `config/lane_control.yaml` (`tune_lane_control.py`)
-- **양서준 Pure Pursuit / MainPlanner는 이 노드에 넣지 않음** — 별도 브랜치에서 `/perception/lane` 구독 노드로 교체·합류 PR
+- 현재 auto-driving launch에서는 사용하지 않으며 MainPlanner와 동시 실행하지 않는다.
 
 ---
 
@@ -323,12 +324,13 @@ LANE_VISUALIZE=1 ros2 run inference inference_node
 
 | 경로 | 용도 |
 |------|------|
-| **토픽 분리 (기본 ROS)** | `inference_node` + `lane_control_node` |
-| **단프로세스 / pytest / CI** | `pipeline.run_perception` → adapter → planner → `fuse_control` |
+| **현재 ROS 런타임** | `inference_node` 내부 `MainPlanner.step(frame)` |
+| **검증 토픽** | `/perception/lane`, `/debug/aruco`, `/debug/planner` |
+| **호환 API** | `fuse_control` (기존 단위 테스트용) |
 
-런타임 launch는 pipeline을 **쓰지 않는다.**  
-모듈 단위 테스트·import 검증용으로만 유지한다.  
-`fuse_control` 우선순위(ArUco→빨간불→회전교차로→차선)는 **향후 미션 통합 시** control 쪽으로 옮길 예정.
+런타임 미션 우선순위와 경로 선택은 모두 `MainPlanner`가 소유한다.
+`fuse_control`은 이전 호환 테스트를 위해 유지하지만 auto-driving 경로에서는
+사용하지 않는다.
 
 ---
 
@@ -338,7 +340,7 @@ LANE_VISUALIZE=1 ros2 run inference inference_node
 
 - [ ] `main`에서 feature 브랜치 생성
 - [ ] [collaboration.md](./collaboration.md) 담당 파일만 수정
-- [ ] `/control`을 인지 모듈에서 발행하지 않음
+- [ ] 인지 모듈은 결과만 반환하고 최종 `/control`은 `MainPlanner`만 발행함
 - [ ] 시뮬 테스트 시 **하드웨어 노드**(`camera_node`/`control_node`)를 요구하지 않음
 - [ ] 시뮬 또는 보드에서 build 성공
 

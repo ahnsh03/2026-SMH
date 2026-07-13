@@ -1,0 +1,101 @@
+# Main driving planner — single place for course, Pure Pursuit and mission tuning.
+# route.mode may also be overridden at launch: route_mode:=in|out
+
+route:
+  mode: OUT
+  # IN: prefer yellow whenever its centerline is stable; white remains fallback.
+  prefer_yellow: false
+  # OUT fork: 0 = leftmost, -1 = rightmost. Normally the sign selects this.
+  default_out_branch_rank: 0
+  # Confirm the same direction before latching it. Once a fork starts, its
+  # direction/rank stays locked until the manoeuvre completes.
+  sign_confirm_frames: 3
+  # Keep the last selected branch through short fork-detection flicker.
+  fork_path_hold_frames: 3
+  # Prevent the same junction from immediately retriggering after exit.
+  fork_reentry_cooldown_sec: 2.0
+
+pure_pursuit:
+  # Adaptive LD: long on straights, short on curves.
+  lookahead_m: 0.80
+  curve_lookahead_m: 0.45
+  curvature_full_scale: 0.8
+  lookahead_shrink_rate_m: 0.15
+  lookahead_grow_rate_m: 0.07
+  curvature_near_m: 0.30
+  curvature_mid_m: 0.60
+  curvature_far_m: 0.90
+  # Camera blind zone: locally fit the nearest path and extend it back to the
+  # front axle. This keeps short curve/roundabout LD geometrically meaningful.
+  near_path_fit_span_m: 0.30
+  near_path_extrapolation_max_m: 0.35
+  wheelbase_m: 0.24
+  max_steer_angle_rad: 0.5236
+  max_steering_command: 1.0
+  # Time-based limits: behavior no longer changes with camera FPS.
+  # Faster reversal reduces entry/exit lag while remaining time-based.
+  steering_rate_limit_per_sec: 6.0
+  path_lost_steering_return_rate_per_sec: 2.5
+  nominal_control_dt_sec: 0.10
+  # PP handles curve feed-forward; this bounded Stanley-shaped term restores
+  # the front axle toward the closest centerline segment.
+  cte_gain: 0.08
+  cte_softening_m: 0.20
+  cte_deadband_m: 0.02
+  max_cte_steering: 0.18
+  # Relative path heading in the same rear-axle frame; no IMU is required.
+  heading_gain: 0.25
+  heading_preview_m: 0.30
+  heading_sample_span_m: 0.15
+  max_heading_steering: 0.20
+
+speed:
+  # Interpolated with the same path-curvature ratio as adaptive LD.
+  cruise_throttle: 0.17
+  curve_throttle: 0.08
+  curve_steering_threshold: 0.50  # legacy; curvature ratio is authoritative
+  default_throttle: 0.0
+
+path:
+  # Metric IPM x is measured from the camera. LIMO sim camera is 0.025 m
+  # ahead of the front axle: rear axle -> camera = 0.24 + 0.025 = 0.265 m.
+  # Positive means perception points are shifted forward into rear-axle frame.
+  perception_to_rear_axle_x_m: 0.265
+  min_points: 5
+  white_min_confidence: 0.15
+  yellow_min_confidence: 0.15
+  yellow_valid_on_frames: 3
+  # Preserve a valid corner command across brief centerline flicker. Longer
+  # loss still returns steering to neutral and eventually stops throttle.
+  path_lost_hold_frames: 2
+  path_lost_stop_frames: 10
+  fork_exit_off_frames: 8
+
+roundabout:
+  # Enter circle mode once a stable yellow path or a yellow crossing line appears.
+  entry_on_yellow: true
+  min_lap_time_sec: 5.0
+  exit_branch_rank: 0
+  branch_required_events: 2
+  crossing_required_events: 2
+  branch_on_frames: 3
+  branch_off_frames: 8
+  crossing_on_frames: 2
+  crossing_off_frames: 5
+  # Tight circle needs a dedicated target distance and lower speed.
+  lookahead_m: 0.6
+  throttle: 0.06
+
+signals:
+  # Keep false until start/finish signal context is validated on the real track.
+  require_green_to_start: false
+  stop_on_red: false
+
+safety:
+  command_watchdog_sec: 0.5
+
+debug:
+  log_state_changes: true
+  log_decision_changes: true
+  # State/path changes publish immediately; numeric snapshots use this rate.
+  publish_hz: 2.0

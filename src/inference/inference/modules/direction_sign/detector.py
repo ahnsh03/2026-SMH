@@ -8,7 +8,11 @@ from typing import NamedTuple
 
 import cv2
 import numpy as np
-import onnxruntime as ort
+
+try:
+    import onnxruntime as ort
+except ImportError:  # Rule-based fallback remains available without ONNX Runtime.
+    ort = None
 
 from inference.types import TurnSign
 
@@ -22,7 +26,16 @@ _IOU_THRESHOLD = 0.45
 _INTRA_OP_THREADS = 4
 _PAD_VALUE = 114
 
-_session: ort.InferenceSession | None = None
+_session = None
+
+# Rule-based fallback for the competition sign: blue circle + white arrow.
+_BLUE_LOWER = np.array([90, 70, 35], dtype=np.uint8)
+_BLUE_UPPER = np.array([140, 255, 255], dtype=np.uint8)
+_WHITE_LOWER = np.array([0, 0, 170], dtype=np.uint8)
+_WHITE_UPPER = np.array([179, 80, 255], dtype=np.uint8)
+_MIN_BLUE_AREA_RATIO = 0.001
+_MIN_ARROW_PIXELS = 15
+_MIN_ARROW_OFFSET_RATIO = 0.012
 
 
 class Detection(NamedTuple):
@@ -55,8 +68,10 @@ def _model_path() -> Path:
     )
 
 
-def _get_session() -> ort.InferenceSession:
+def _get_session():
     global _session
+    if ort is None:
+        raise RuntimeError('onnxruntime is not installed')
     if _session is None:
         options = ort.SessionOptions()
         options.log_severity_level = 3
@@ -169,7 +184,75 @@ def detect_signs(frame: np.ndarray) -> list[Detection]:
     return _postprocess(raw, scale, pad_x, pad_y, width, height)
 
 
+def detect_turn_rule_based(frame: np.ndarray) -> TurnSign:
+    """Detect blue-circle white-arrow signs without learned model weights.
+
+    The arrow head occupies the upper-middle band. Its white-pixel centroid is
+    left/right of the sign centre for LEFT/RIGHT respectively; the vertical stem
+    is deliberately down-weighted by excluding the lower band.
+    """
+    if frame is None or getattr(frame, 'size', 0) == 0:
+        return TurnSign.UNKNOWN
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    blue = cv2.inRange(hsv, _BLUE_LOWER, _BLUE_UPPER)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    blue = cv2.morphologyEx(blue, cv2.MORPH_OPEN, kernel)
+    contours, _ = cv2.findContours(blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    frame_area = float(frame.shape[0] * frame.shape[1])
+
+    candidates: list[tuple[float, TurnSign]] = []
+    white = cv2.inRange(hsv, _WHITE_LOWER, _WHITE_UPPER)
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        if area < frame_area * _MIN_BLUE_AREA_RATIO:
+            continue
+        x, y, width, height = cv2.boundingRect(contour)
+        if width < 8 or height < 8:
+            continue
+        aspect = width / float(height)
+        if not 0.55 <= aspect <= 1.45:
+            continue
+        perimeter = cv2.arcLength(contour, True)
+        circularity = 4.0 * np.pi * area / max(perimeter * perimeter, 1e-6)
+        if circularity < 0.35:
+            continue
+
+        region = np.zeros_like(blue)
+        cv2.drawContours(region, [contour], -1, 255, thickness=cv2.FILLED)
+        erode_px = max(1, int(round(min(width, height) * 0.03)))
+        region = cv2.erode(
+            region,
+            cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * erode_px + 1, 2 * erode_px + 1)
+            ),
+        )
+
+        band_top = y + int(round(0.25 * height))
+        band_bottom = y + int(round(0.58 * height))
+        arrow_mask = cv2.bitwise_and(white, region)
+        band = arrow_mask[band_top:band_bottom, x:x + width]
+        _, columns = np.nonzero(band)
+        if columns.size < _MIN_ARROW_PIXELS:
+            continue
+        offset = float(np.mean(columns) - (width - 1) / 2.0) / float(width)
+        if abs(offset) < _MIN_ARROW_OFFSET_RATIO:
+            continue
+        turn = TurnSign.LEFT if offset < 0.0 else TurnSign.RIGHT
+        score = area * max(circularity, 0.01) * abs(offset)
+        candidates.append((score, turn))
+
+    if not candidates:
+        return TurnSign.UNKNOWN
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def detect_turn(frame: np.ndarray) -> TurnSign:
-    """Return the turn direction of the most confident sign, else UNKNOWN."""
-    detections = detect_signs(frame)
-    return detections[0].turn if detections else TurnSign.UNKNOWN
+    """Use ONNX when available, otherwise the blue/white rule fallback."""
+    try:
+        detections = detect_signs(frame)
+    except (FileNotFoundError, RuntimeError, ValueError):
+        detections = []
+    if detections:
+        return detections[0].turn
+    return detect_turn_rule_based(frame)
