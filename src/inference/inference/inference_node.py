@@ -13,7 +13,6 @@ ArUco 보드 확인:
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -70,6 +69,7 @@ class InferenceNode(Node):
         self.declare_parameter('aruco_debug_log', True)
         self.declare_parameter('publish_hz', 10.0)
         self.declare_parameter('steer_trim', 0.0)
+        self.declare_parameter('use_vehicle_steer_trim', True)
 
         self.vehicle_config_file = os.path.expanduser(
             str(self.get_parameter('vehicle_config_file').value)
@@ -90,8 +90,10 @@ class InferenceNode(Node):
 
         image_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
+            # Control must consume the newest camera frame. Queuing old frames
+            # creates apparent steering lag when perception is slower than FPS.
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
 
@@ -106,7 +108,8 @@ class InferenceNode(Node):
         )
         self._last_frame_time_sec: float | None = None
         self._last_aruco_log_key: tuple[bool, bool, int | None] | None = None
-        self._last_planner_log_key: tuple[str, str, str] | None = None
+        self._last_planner_log_key: tuple | None = None
+        self._last_planner_debug_publish_sec: float | None = None
         self.planner = MainPlanner(planner_config, steer_trim=self.steer_trim)
 
         self.create_subscription(
@@ -144,17 +147,30 @@ class InferenceNode(Node):
         output = self.planner.step(frame, now_sec=now_sec)
         self.latest_command = output.command
         self._last_frame_time_sec = now_sec
+        # Do not wait for the lower-rate heartbeat timer: a valid corner path
+        # may exist for only one perception frame.
+        self._publish_control_command(self.latest_command)
         self.publish_aruco_debug(output.aruco)
         self.publish_lane_detections(output.lane)
         self.publish_planner_debug(output)
 
     def publish_planner_debug(self, output) -> None:
-        """Publish every decision as JSON; log only meaningful changes."""
-        msg = String()
-        msg.data = json.dumps(output.debug, ensure_ascii=False, sort_keys=True)
-        self.planner_debug_pub.publish(msg)
-
-        key = (output.state.value, output.path_source.value, output.decision)
+        """Publish sign/fork decisions immediately and periodic snapshots."""
+        debug = output.debug
+        key = (
+            output.state.value,
+            output.path_source.value,
+            output.decision,
+            debug['turn_sign'],
+            debug['desired_turn'],
+            debug['sign_candidate'],
+            debug['sign_candidate_frames'],
+            debug['fork_locked_turn'],
+            debug['fork_active'],
+            debug['branch_count'],
+            debug['selected_branch_rank'],
+            debug['branch_selection_reason'],
+        )
         config = self.planner.config
         state_changed = (
             self._last_planner_log_key is None
@@ -162,28 +178,78 @@ class InferenceNode(Node):
         )
         decision_changed = (
             self._last_planner_log_key is None
-            or key[1:] != self._last_planner_log_key[1:]
+            or key[1:3] != self._last_planner_log_key[1:3]
         )
+        sign_changed = (
+            self._last_planner_log_key is None
+            or key[3:8] != self._last_planner_log_key[3:8]
+        )
+        fork_changed = (
+            self._last_planner_log_key is None
+            or key[8:] != self._last_planner_log_key[8:]
+        )
+        now_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
+        publish_period = 1.0 / config.debug_publish_hz
+        periodic_due = (
+            self._last_planner_debug_publish_sec is None
+            or now_sec < self._last_planner_debug_publish_sec
+            or now_sec - self._last_planner_debug_publish_sec >= publish_period
+        )
+        if not (
+            state_changed
+            or decision_changed
+            or sign_changed
+            or fork_changed
+            or periodic_due
+        ):
+            self._last_planner_log_key = key
+            return
+
+        msg = String()
+        selected_rank = debug['selected_branch_rank']
+        selected_rank_text = '-' if selected_rank is None else str(selected_rank)
+        msg.data = (
+            f"sign_seen={debug['turn_sign']} "
+            f"candidate={debug['sign_candidate']}/{debug['sign_candidate_frames']} "
+            f"latched={debug['desired_turn']} locked={debug['fork_locked_turn']} | "
+            f"state={debug['state']} fork={int(debug['fork_active'])}/"
+            f"{debug['branch_count']} event={int(debug['branch_event'])} "
+            f"events={debug['branch_events']} | "
+            f"choice={debug['branch_selection_reason']} rank={selected_rank_text} "
+            f"path={debug['path_source']} decision={debug['decision']} | "
+            f"steer={debug['steering']:+.3f} throttle={debug['throttle']:+.3f}"
+        )
+        self.planner_debug_pub.publish(msg)
+        self._last_planner_debug_publish_sec = now_sec
+
         if (config.log_state_changes and state_changed) or (
             config.log_decision_changes and decision_changed
-        ):
-            self.get_logger().info(f'[planner] {msg.data}')
+        ) or sign_changed or fork_changed:
+            self.get_logger().info(f'[sign] {msg.data}')
         self._last_planner_log_key = key
 
+    def _publish_control_command(self, command: pipeline.ControlCommand) -> None:
+        """Publish one already validated planner command immediately."""
+        msg = Control()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'base_link'
+        msg.steering = float(command.steering)
+        msg.throttle = float(command.throttle)
+        self.control_pub.publish(msg)
+
     def publish_control(self) -> None:
-        """Publish the only vehicle command, with a stale-camera watchdog."""
+        """Publish a command heartbeat and force neutral on stale camera."""
         now_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
         stale = (
             self._last_frame_time_sec is None
             or now_sec - self._last_frame_time_sec > self.planner.config.command_watchdog_sec
         )
-        command = self.latest_command
-        msg = Control()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'base_link'
-        msg.steering = float(command.steering)
-        msg.throttle = 0.0 if stale else float(command.throttle)
-        self.control_pub.publish(msg)
+        if stale:
+            self.planner.neutralize_steering()
+            command = pipeline.ControlCommand(steering=0.0, throttle=0.0)
+        else:
+            command = self.latest_command
+        self._publish_control_command(command)
 
     def publish_lane_detections(self, lane) -> None:
         """인지 LaneDetections(dataclass)를 단일 토픽 msg로 변환·발행한다."""
@@ -261,6 +327,11 @@ class InferenceNode(Node):
 
     def load_steer_trim(self) -> float:
         param_trim = float(self.get_parameter('steer_trim').value)
+        use_vehicle_trim = bool(
+            self.get_parameter('use_vehicle_steer_trim').value
+        )
+        if not use_vehicle_trim:
+            return param_trim
         if param_trim != 0.0:
             return param_trim
 

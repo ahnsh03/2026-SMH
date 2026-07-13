@@ -97,6 +97,8 @@ def generate_launch_description():
                     'aruco_debug_topic': '/debug/aruco',
                     'planner_debug_topic': '/debug/planner',
                     'aruco_debug_log': True,
+                    # Real servo neutral is calibrated in vehicle_config.yaml.
+                    'use_vehicle_steer_trim': True,
                 },
             ],
         ),

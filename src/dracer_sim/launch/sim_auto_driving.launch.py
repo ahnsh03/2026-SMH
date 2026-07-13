@@ -76,6 +76,9 @@ def generate_launch_description():
           'aruco_debug_topic': '/debug/aruco',
           'planner_debug_topic': '/debug/planner',
           'aruco_debug_log': True,
+          # Gazebo steering=0 is mechanically centred; ignore real-car trim.
+          'use_vehicle_steer_trim': False,
+          'steer_trim': 0.0,
           'use_sim_time': use_sim_time,
         },
       ],
