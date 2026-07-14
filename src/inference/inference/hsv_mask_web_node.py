@@ -56,6 +56,30 @@ def _mask_bgr(mask: np.ndarray, color: tuple[int, int, int]) -> np.ndarray:
     return canvas
 
 
+def _overlay(bev: np.ndarray, mask: np.ndarray, color: tuple[int, int, int],
+             alpha: float = 0.55) -> np.ndarray:
+    """Tint masked pixels on the BEV so the lane/road context stays visible."""
+    out = bev.copy()
+    selected = mask > 0
+    if not np.any(selected):
+        return out
+    tint = np.array(color, dtype=np.float32)
+    out[selected] = (
+        (1.0 - alpha) * out[selected].astype(np.float32) + alpha * tint
+    ).astype(np.uint8)
+    return out
+
+
+def _binary_side(bev: np.ndarray, mask: np.ndarray,
+                 color: tuple[int, int, int]) -> np.ndarray:
+    """BEV | solid mask side-by-side for unambiguous mask check."""
+    left = bev
+    right = _mask_bgr(mask, color)
+    h = min(left.shape[0], right.shape[0])
+    w = min(left.shape[1], right.shape[1])
+    return np.hstack([left[:h, :w], right[:h, :w]])
+
+
 def _red_mask(bev_bgr: np.ndarray, rng, wrap: int) -> np.ndarray:
     """Primary red inRange (+ low-H wrap, same contract as lane_detection)."""
     hsv = cv2.cvtColor(bev_bgr, cv2.COLOR_BGR2HSV)
@@ -150,28 +174,39 @@ class HsvMaskWebNode(Node):
         black = make_mask(bev, self.ranges['black_road'], morph=True)
         red = _red_mask(bev, self.ranges['red_road'], self.red_wrap)
 
-        white_v = _label(_mask_bgr(white, (255, 255, 255)), 'white')
-        yellow_v = _label(_mask_bgr(yellow, (0, 220, 255)), 'yellow')
+        # Monitor UI titles stay Grayscale/Blur/Edge — bake HSV names into pixels.
+        # Left=BEV, right=binary mask (clearly not OpenCV grayscale/blur/edge).
+        white_v = _label(
+            _binary_side(bev, white, (255, 255, 255)),
+            f'WHITE mask  px={int(np.count_nonzero(white))}',
+        )
+        yellow_v = _label(
+            _binary_side(bev, yellow, (0, 220, 255)),
+            f'YELLOW mask  px={int(np.count_nonzero(yellow))}',
+        )
 
-        tiles = [
-            white_v,
-            yellow_v,
-            _label(_mask_bgr(black, (180, 180, 180)), 'black_road'),
-            _label(_mask_bgr(red, (40, 40, 255)), 'red_road'),
-        ]
-        h = min(t.shape[0] for t in tiles)
-        w = min(t.shape[1] for t in tiles)
-        tiles = [t[:h, :w] for t in tiles]
-        mosaic = np.vstack([np.hstack(tiles[:2]), np.hstack(tiles[2:])])
-        mosaic = _label(mosaic, '2x2 HSV')
-        if mosaic.shape[1] > 480:
-            mosaic = cv2.resize(
-                mosaic, None, fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA
+        # Edge: all masks tinted on BEV (W=white Y=cyan Bk=gray R=red).
+        edge_v = bev.copy()
+        edge_v = _overlay(edge_v, black, (60, 60, 60), alpha=0.45)
+        edge_v = _overlay(edge_v, red, (0, 0, 255), alpha=0.55)
+        edge_v = _overlay(edge_v, yellow, (0, 220, 255), alpha=0.55)
+        edge_v = _overlay(edge_v, white, (255, 255, 255), alpha=0.65)
+        edge_v = _label(edge_v, 'ALL overlay  W=white Y=cyan Bk=gray R=red')
+        if edge_v.shape[1] > 640:
+            edge_v = cv2.resize(
+                edge_v, None, fx=0.65, fy=0.65, interpolation=cv2.INTER_AREA
+            )
+        if white_v.shape[1] > 640:
+            white_v = cv2.resize(
+                white_v, None, fx=0.55, fy=0.55, interpolation=cv2.INTER_AREA
+            )
+            yellow_v = cv2.resize(
+                yellow_v, None, fx=0.55, fy=0.55, interpolation=cv2.INTER_AREA
             )
 
         self._publish(self.pub_white, white_v)
         self._publish(self.pub_yellow, yellow_v)
-        self._publish(self.pub_mosaic, mosaic)
+        self._publish(self.pub_mosaic, edge_v)
 
     def _publish(self, pub, image: np.ndarray) -> None:
         ok, buf = cv2.imencode(
