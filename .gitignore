@@ -17,9 +17,12 @@ dist/
 *.pt
 *.onnx
 *.weights
+*.tnnmodel
+*.tnnproto
 datasets/
 runs/
 wandb/
+weights/
 
 # IDE / OS
 .vscode/
@@ -33,7 +36,9 @@ Thumbs.db
 *.key
 
 # Vendor clone (use submodule or init script)
-external/D-Racer-Kit/
+# 슬래시 없음: 보드는 심볼릭 링크로 두는 경우가 있어 디렉터리 전용 매칭이면 새어나감
+external/D-Racer-Kit
+external/TNN
 
 # init_workspace.sh — D-Racer-Kit / limo_car 심볼릭 링크 (매 clone마다 스크립트로 생성)
 src/battery
