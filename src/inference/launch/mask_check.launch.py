@@ -44,7 +44,7 @@ def generate_launch_description():
             msg=[
                 'HSV mask check: camera + monitor(debug) + hsv_mask_web @ ',
                 max_hz,
-                ' Hz. Open http://<board-ip>:5000 — grayscale=white blur=yellow edge=2x2',
+                ' Hz. Open http://<board-ip>:5000 — grayscale=WHITE blur=YELLOW edge=ROAD(black|red) masked BEV',
             ]
         ),
         Node(
