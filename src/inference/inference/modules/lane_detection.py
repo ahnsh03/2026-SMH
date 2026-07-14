@@ -62,7 +62,7 @@ VISUALIZE_ON = "on"
 # │    "control"  주행 확인용 3개만 (아래 CONTROL_WINDOWS)    │
 # │    "on"       디버그 창 전부                              │
 # └──────────────────────────────────────────────────────────┘
-VISUALIZE_MODE = "on"
+VISUALIZE_MODE = "off"
 
 # 보드/SSH/headless에서는 창을 띄우면 죽는다. 코드를 안 고치고 끄려면
 # 환경변수로 덮어쓴다(있을 때만 우선).
@@ -4780,6 +4780,15 @@ def filter_dash_mask_by_branch(
     return out
 
 
+def _mask_or_blank(
+    mask: np.ndarray | None, reference: np.ndarray
+) -> np.ndarray:
+    """Return mask, or an all-zero mask shaped like reference when it is absent."""
+    if mask is None or mask.size == 0:
+        return np.zeros(reference.shape[:2], dtype=np.uint8)
+    return mask
+
+
 def make_dash_preview(
     debug: "LaneDebugFrame",
     *,
@@ -4795,17 +4804,15 @@ def make_dash_preview(
     road_overlay[debug.road_clean > 0] = DRIVABLE_COLOR
     preview = cv2.addWeighted(preview, 1.0, road_overlay, 0.35, 0.0)
 
-    yellow_pts = debug.yellow_dash_points_bev
+    # These masks are only built when their window is enabled, so they are None
+    # whenever visualization is off (the board's default).
+    yellow_pts = _mask_or_blank(debug.yellow_dash_points_bev, debug.bev)
     yellow_conn = debug.yellow_connected_bev
-    white_pts = debug.white_dash_points_bev
+    white_pts = _mask_or_blank(debug.white_dash_points_bev, debug.bev)
     white_conn = debug.white_dash_connected_bev
-    if yellow_pts.size == 0:
-        yellow_pts = np.zeros(debug.bev.shape[:2], dtype=np.uint8)
-    if yellow_conn.size == 0:
+    if yellow_conn is None or yellow_conn.size == 0:
         yellow_conn = yellow_pts
-    if white_pts.size == 0:
-        white_pts = np.zeros(debug.bev.shape[:2], dtype=np.uint8)
-    if white_conn.size == 0:
+    if white_conn is None or white_conn.size == 0:
         white_conn = white_pts
 
     branch = select_road_branch(debug.road_branches, focus)
@@ -4990,8 +4997,9 @@ def render_mode_preview(mode: str, debug: LaneDebugFrame) -> np.ndarray:
         )
         # Dash points (cyan) + connected (yellow tint) for quick check.
         overlay = base.copy()
-        if debug.yellow_dash_points_bev.size:
-            overlay[debug.yellow_dash_points_bev > 0] = (255, 255, 0)
+        yellow_pts = debug.yellow_dash_points_bev
+        if yellow_pts is not None and yellow_pts.size:
+            overlay[yellow_pts > 0] = (255, 255, 0)
         if debug.yellow_connected_bev.size:
             connected = cv2.cvtColor(
                 debug.yellow_connected_bev, cv2.COLOR_GRAY2BGR

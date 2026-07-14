@@ -30,6 +30,27 @@ else
   echo "[SEA-Me] D-Racer-Kit already present"
 fi
 
+# Team patches applied on top of the untouched D-Racer-Kit checkout. The kit is
+# the organizers' repo, so we cannot push fixes there — they live here instead
+# and are re-applied on every fresh clone. Idempotent: a patch already present
+# is skipped.
+PATCH_DIR="${ROOT}/patches"
+if [ -d "${PATCH_DIR}" ]; then
+  for patch in "${PATCH_DIR}"/*.patch; do
+    [ -e "${patch}" ] || continue
+    name="$(basename "${patch}")"
+    if git -C "${VENDOR}" apply --reverse --check "${patch}" >/dev/null 2>&1; then
+      echo "[SEA-Me] patch already applied: ${name}"
+    elif git -C "${VENDOR}" apply --check "${patch}" >/dev/null 2>&1; then
+      git -C "${VENDOR}" apply "${patch}"
+      echo "[SEA-Me] applied patch: ${name}"
+    else
+      echo "[SEA-Me] ERROR: cannot apply ${name} to D-Racer-Kit — kit changed?"
+      exit 1
+    fi
+  done
+fi
+
 OFFICIAL_PKGS=(
   camera control joystick monitor opencv battery topst_utils
   battery_msgs control_msgs joystick_msgs

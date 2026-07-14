@@ -91,6 +91,10 @@ def generate_launch_description():
           'vehicle_config_file': vehicle_config_path,
           'planner_config_file': planner_config_path,
           'route_mode': route_mode,
+          # Gazebo LIMO. profiles.sim is empty: the base sections of
+          # main_planner.yaml are the sim values, so this is a no-op today. It
+          # is set explicitly so sim never silently inherits a real-car override.
+          'planner_profile': 'sim',
           'aruco_debug_topic': '/debug/aruco',
           'planner_debug_topic': '/debug/planner',
           'aruco_debug_log': True,
