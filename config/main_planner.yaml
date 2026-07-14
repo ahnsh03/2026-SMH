@@ -8,6 +8,14 @@ route:
   # Confirm the same direction before latching it. Once a fork starts, its
   # direction/rank stays locked until the manoeuvre completes.
   sign_confirm_frames: 3
+  # OUT: only run fork/branch perception after a turn sign is seen.
+  # After the sign disappears (and after FORK_TURN ends), disable again —
+  # normal driving is white centerline / mask only.
+  out_fork_require_sign: true
+  out_fork_sign_hold_sec: 3.0
+  # Keep false: forced_turn:= only chooses L/R rank, does not arm forks all lap.
+  # Set true only for sign-less fork unit tests.
+  out_fork_forced_turn_arms: false
   # Keep the last selected branch through short fork-detection flicker.
   fork_path_hold_frames: 3
   # Prevent the same junction from immediately retriggering after exit.
@@ -17,12 +25,12 @@ route:
   # IN  — default True: when yellow is available prefer it; else white
   #       (approach → roundabout yellow → merge white). Not a yellow ladder.
 pure_pursuit:
-  # Adaptive LD: long on straights, short on curves.
-  lookahead_m: 0.80
-  curve_lookahead_m: 0.45
+  # Adaptive LD: long on straights, shorter on curves for earlier turn-in.
+  lookahead_m: 0.70
+  curve_lookahead_m: 0.38
   curvature_full_scale: 0.8
-  lookahead_shrink_rate_m: 0.15
-  lookahead_grow_rate_m: 0.07
+  lookahead_shrink_rate_m: 0.20
+  lookahead_grow_rate_m: 0.08
   curvature_near_m: 0.30
   curvature_mid_m: 0.60
   curvature_far_m: 0.90
@@ -35,27 +43,51 @@ pure_pursuit:
   max_steering_command: 1.0
   # Time-based limits: behavior no longer changes with camera FPS.
   # Faster reversal reduces entry/exit lag while remaining time-based.
-  steering_rate_limit_per_sec: 6.0
-  path_lost_steering_return_rate_per_sec: 2.5
+  steering_rate_limit_per_sec: 12.0
+  path_lost_steering_return_rate_per_sec: 4.0
   nominal_control_dt_sec: 0.10
   # PP handles curve feed-forward; this bounded Stanley-shaped term restores
   # the front axle toward the closest centerline segment.
-  cte_gain: 0.08
+  cte_gain: 0.10
   cte_softening_m: 0.20
   cte_deadband_m: 0.02
-  max_cte_steering: 0.18
+  max_cte_steering: 0.22
   # Relative path heading in the same rear-axle frame; no IMU is required.
-  heading_gain: 0.25
-  heading_preview_m: 0.30
+  heading_gain: 0.30
+  heading_preview_m: 0.45
   heading_sample_span_m: 0.15
-  max_heading_steering: 0.20
+  max_heading_steering: 0.25
 
 speed:
-  # Interpolated with the same path-curvature ratio as adaptive LD.
-  cruise_throttle: 0.17
-  curve_throttle: 0.08
+  # Trusted out-lap 20260714_120800: mask_p t1 lap_ok @ cruise≈0.33 (steer joint 4 rad/s).
+  cruise_throttle: 0.33
+  curve_throttle: 0.18
   curve_steering_threshold: 0.50  # legacy; curvature ratio is authoritative
   default_throttle: 0.0
+
+# NORMAL / roundabout-circle tracker. Fork / exit stay on Pure Pursuit.
+# normal: pp | mask_p  (mask_p ≈ limo_sim_code_v2 BEV road-COM + P + EMA)
+tracker:
+  normal: mask_p
+
+mask_pursuit:
+  # Match limo_sim_code_v2: steer_k=2.0, alpha=0.4, wide BEV COM (anticipation).
+  steer_k: 2.0
+  steer_alpha: 0.40
+  near_band_ratio: 0.85
+  min_area_px: 100.0
+  curve_steer_threshold: 0.50
+  curve_speed_scale: 0.80
+  # Course-color guard (OUT=white / IN=yellow priority via color_path).
+  # off | hard (AND corridor) | soft (distance-weighted COM).
+  # Bench 20260714_132840: hard+wide(0.38)+fork_force won full lap;
+  # fork_force alone won stress segments. Keep both for production default.
+  corridor_mode: hard
+  corridor_half_width_m: 0.38
+  path_weight_sigma_m: 0.20
+  # Fork/branch≥2 → PP on color path (do not COM-average both roads).
+  fork_force_pp: true
+  require_color_path: true
 
 path:
   # Metric IPM x is measured from the camera. LIMO sim camera is 0.025 m
@@ -79,13 +111,16 @@ roundabout:
   exit_branch_rank: 0
   branch_required_events: 2
   crossing_required_events: 2
-  branch_on_frames: 3
-  branch_off_frames: 8
-  crossing_on_frames: 2
-  crossing_off_frames: 5
-  # Tight circle needs a dedicated target distance and lower speed.
+  # Stricter than NORMAL fork flicker — reduces false exit arms in-circle.
+  branch_on_frames: 6
+  branch_off_frames: 10
+  crossing_on_frames: 3
+  crossing_off_frames: 6
+  # While circulating, do not switch mask→fork PP (count events only).
+  circle_ignore_fork_for_control: true
+  # Tight circle: dedicated lookahead; keep below cruise but usable for lane review.
   lookahead_m: 0.6
-  throttle: 0.06
+  throttle: 0.18
 
 signals:
   # Keep false until start/finish signal context is validated on the real track.

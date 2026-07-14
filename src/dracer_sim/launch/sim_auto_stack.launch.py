@@ -6,10 +6,10 @@ killing the world.
 
 Visualization profiles (``viz``)::
 
-  lane   — Lane/Fork Perception 창만 (기본, Out/In 갈림 실험)
+  lane   — Lane/Fork Perception 창만 (기본)
   off    — OpenCV 창 없음
-  debug  — lane 창 + inference ``lane_control`` 통합 1창
-  all    — lane 창 + inference 디버그 창 전부
+  debug  — lane + inference ``Lane drive`` 1창
+  all    — lane + ``Lane drive`` + ``HSV masks``
 
 Typical::
 

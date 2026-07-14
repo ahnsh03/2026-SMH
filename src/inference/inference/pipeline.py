@@ -47,6 +47,11 @@ class PlannerConfig:
     prefer_yellow: bool = False
     default_out_branch_rank: int = 0
     sign_confirm_frames: int = 3
+    out_fork_require_sign: bool = True
+    out_fork_sign_hold_sec: float = 3.0
+    # If True, forced_turn keeps fork perception armed (old sim behavior).
+    # Default False: forced_turn only picks L/R rank when a real sign arms the window.
+    out_fork_forced_turn_arms: bool = False
     fork_path_hold_frames: int = 3
     fork_reentry_cooldown_sec: float = 2.0
     perception_to_rear_axle_x_m: float = 0.0
@@ -96,12 +101,31 @@ class PlannerConfig:
     crossing_off_frames: int = 5
     roundabout_lookahead_m: float = 0.32
     roundabout_throttle: float = 0.06
+    circle_ignore_fork_for_control: bool = True
     require_green_to_start: bool = False
     stop_on_red: bool = False
     command_watchdog_sec: float = 0.5
     log_state_changes: bool = True
     log_decision_changes: bool = True
     debug_publish_hz: float = 2.0
+    # NORMAL / roundabout-circle tracker: 'pp' (default) or 'mask_p'
+    # (limo_sim_code_v2 BEV free-space COM + P + EMA + rate).
+    normal_tracker: str = 'pp'
+    mask_steer_k: float = 2.0
+    mask_steer_alpha: float = 0.4
+    mask_near_band_ratio: float = 0.55
+    mask_min_area_px: float = 100.0
+    mask_curve_steer_threshold: float = 0.50
+    mask_curve_speed_scale: float = 0.80
+    # Course-color / fork guard for mask_p (see mask_pursuit YAML).
+    # off | hard (AND dilate around color path) | soft (distance-weighted COM).
+    mask_corridor_mode: str = 'off'
+    mask_corridor_half_width_m: float = 0.28
+    mask_path_weight_sigma_m: float = 0.20
+    # When fork/branch≥2 visible, skip mask COM and use color/branch PP.
+    mask_fork_force_pp: bool = True
+    # If color_path missing under hard/soft corridor, fail mask → PP fallback.
+    mask_require_color_path: bool = True
 
 
 def load_planner_config(
@@ -125,6 +149,8 @@ def load_planner_config(
     signals = _section(data, 'signals')
     safety = _section(data, 'safety')
     debug = _section(data, 'debug')
+    tracker = _section(data, 'tracker')
+    mask = _section(data, 'mask_pursuit')
     selected_route = route_mode or route.get('mode', RouteMode.OUT.value)
     mode = RouteMode(str(selected_route).lower())
     # IN → yellow priority by default; OUT → white (prefer_yellow false).
@@ -137,6 +163,13 @@ def load_planner_config(
         prefer_yellow=prefer_yellow,
         default_out_branch_rank=int(route.get('default_out_branch_rank', 0)),
         sign_confirm_frames=max(1, int(route.get('sign_confirm_frames', 3))),
+        out_fork_require_sign=bool(route.get('out_fork_require_sign', True)),
+        out_fork_sign_hold_sec=max(
+            0.0, float(route.get('out_fork_sign_hold_sec', 3.0))
+        ),
+        out_fork_forced_turn_arms=bool(
+            route.get('out_fork_forced_turn_arms', False)
+        ),
         fork_path_hold_frames=max(0, int(route.get('fork_path_hold_frames', 3))),
         fork_reentry_cooldown_sec=max(
             0.0, float(route.get('fork_reentry_cooldown_sec', 2.0))
@@ -225,12 +258,37 @@ def load_planner_config(
         roundabout_throttle=float(
             np.clip(rb.get('throttle', 0.06), -1.0, 1.0)
         ),
+        circle_ignore_fork_for_control=bool(
+            rb.get('circle_ignore_fork_for_control', True)
+        ),
         require_green_to_start=bool(signals.get('require_green_to_start', False)),
         stop_on_red=bool(signals.get('stop_on_red', False)),
         command_watchdog_sec=max(0.1, float(safety.get('command_watchdog_sec', 0.5))),
         log_state_changes=bool(debug.get('log_state_changes', True)),
         log_decision_changes=bool(debug.get('log_decision_changes', True)),
         debug_publish_hz=max(0.1, float(debug.get('publish_hz', 2.0))),
+        normal_tracker=str(tracker.get('normal', 'pp')).strip().lower(),
+        mask_steer_k=max(0.01, float(mask.get('steer_k', 2.0))),
+        mask_steer_alpha=float(np.clip(mask.get('steer_alpha', 0.4), 0.01, 1.0)),
+        mask_near_band_ratio=float(
+            np.clip(mask.get('near_band_ratio', 0.55), 0.1, 1.0)
+        ),
+        mask_min_area_px=max(1.0, float(mask.get('min_area_px', 100.0))),
+        mask_curve_steer_threshold=float(
+            np.clip(mask.get('curve_steer_threshold', 0.50), 0.0, 1.0)
+        ),
+        mask_curve_speed_scale=float(
+            np.clip(mask.get('curve_speed_scale', 0.80), 0.05, 1.0)
+        ),
+        mask_corridor_mode=str(mask.get('corridor_mode', 'off')).strip().lower(),
+        mask_corridor_half_width_m=max(
+            0.05, float(mask.get('corridor_half_width_m', 0.28))
+        ),
+        mask_path_weight_sigma_m=max(
+            0.02, float(mask.get('path_weight_sigma_m', 0.20))
+        ),
+        mask_fork_force_pp=bool(mask.get('fork_force_pp', True)),
+        mask_require_color_path=bool(mask.get('require_color_path', True)),
     )
 
 
@@ -306,6 +364,8 @@ class MainPlanner:
         self._fork_selected_rank: int | None = None
         self._fork_selection_reason = 'none'
         self._forced_turn = TurnSign.UNKNOWN
+        self._last_out_sign_sec: float | None = None
+        self._fork_perception_enabled = True
         self._fork_cached_path = np.empty((0, 2), dtype=np.float32)
         self._fork_cached_source = PathSource.NONE
         self._fork_cached_confidence = 0.0
@@ -321,13 +381,16 @@ class MainPlanner:
         self._path_lost_frames = 0
         self._fork_absent_frames = 0
         self._steering = 0.0
+        self._steer_f = 0.0
         self._lookahead_m = self.config.lookahead_m
         self._last_path_source = PathSource.NONE
+        self._last_mask_debug: dict[str, Any] = {}
         self._last_step_time_sec: float | None = None
 
     def neutralize_steering(self) -> None:
         """Synchronize planner state with an externally forced neutral command."""
         self._steering = 0.0
+        self._steer_f = 0.0
 
     def _step_dt(self, now_sec: float) -> float:
         if self._last_step_time_sec is None or now_sec <= self._last_step_time_sec:
@@ -359,6 +422,8 @@ class MainPlanner:
         if state in (DrivingState.NORMAL, DrivingState.FINISHED):
             self._fork_absent_frames = 0
         if previous_state is DrivingState.FORK_TURN and state is DrivingState.NORMAL:
+            # Sign is past — resume white-only; do not re-arm on stale hold.
+            self._last_out_sign_sec = None
             if self._forced_turn is not TurnSign.UNKNOWN:
                 # Keep the sim override latched across fork completion.
                 self.apply_forced_turn(self._forced_turn)
@@ -873,6 +938,277 @@ class MainPlanner:
         )
         return error, correction
 
+    def _apply_rate_limited_steering(self, raw: float, dt_sec: float) -> float:
+        raw = float(
+            np.clip(
+                raw,
+                -self.config.max_steering_command,
+                self.config.max_steering_command,
+            )
+        )
+        dt = self.config.nominal_control_dt_sec if dt_sec is None else max(0.0, dt_sec)
+        maximum_delta = self.config.steering_rate_limit_per_sec * dt
+        delta = float(
+            np.clip(
+                raw - self._steering,
+                -maximum_delta,
+                maximum_delta,
+            )
+        )
+        self._steering = float(np.clip(self._steering + delta, -1.0, 1.0))
+        return self._steering
+
+    def _mask_com_pursuit(
+        self,
+        lane: Any,
+        dt_sec: float | None = None,
+        *,
+        color_path: np.ndarray | None = None,
+    ) -> PursuitResult:
+        """Free-space mask COM proportional steer (limo_sim BEV follower style).
+
+        Uses Metric-IPM ``drivable_area``. Optional ``color_path`` (course
+        white/yellow centerline in base_link) constrains COM via
+        ``mask_corridor_mode`` so OUT/IN forks do not average into the wrong
+        course. CTE metrics always prefer the color path when present.
+        """
+        import cv2
+        from inference.modules import lane_detection as ld
+
+        mask = np.asarray(getattr(lane, 'drivable_area', None), dtype=np.uint8)
+        if mask.ndim != 2 or mask.size == 0:
+            return PursuitResult(False)
+        binary = (mask > 0).astype(np.uint8)
+        height, width = binary.shape
+        if height < 4 or width < 4:
+            return PursuitResult(False)
+
+        path_xy = np.empty((0, 2), dtype=np.float32)
+        if color_path is not None:
+            arr = np.asarray(color_path, dtype=np.float32)
+            if arr.ndim == 2 and arr.shape[0] >= 2 and arr.shape[1] >= 2:
+                path_xy = arr[:, :2]
+
+        corridor_mode = str(self.config.mask_corridor_mode or 'off').lower()
+        if corridor_mode in ('hard', 'soft') and path_xy.shape[0] < 2:
+            if self.config.mask_require_color_path:
+                return PursuitResult(False)
+
+        mpp = float(getattr(lane, 'meters_per_pixel', 0.0) or 0.0)
+        if mpp <= 1e-9:
+            mpp = float(getattr(ld, 'METERS_PER_PIXEL', 0.01) or 0.01)
+
+        work = binary
+        weight = None
+        if corridor_mode in ('hard', 'soft') and path_xy.shape[0] >= 2:
+            corridor = self._bev_corridor_mask(
+                path_xy, height, width, mpp, self.config.mask_corridor_half_width_m
+            )
+            if corridor_mode == 'hard':
+                work = cv2.bitwise_and(binary, corridor)
+            else:
+                # Soft: distance to path skeleton → Gaussian weight on road.
+                skeleton = self._bev_path_skeleton(path_xy, height, width)
+                inv = np.where(skeleton > 0, 0, 255).astype(np.uint8)
+                dist_px = cv2.distanceTransform(inv, cv2.DIST_L2, 3)
+                dist_m = dist_px.astype(np.float32) * float(mpp)
+                sigma = float(self.config.mask_path_weight_sigma_m)
+                weight = np.exp(-(dist_m * dist_m) / (2.0 * sigma * sigma))
+                weight = weight * (binary > 0).astype(np.float32)
+
+        band = float(np.clip(self.config.mask_near_band_ratio, 0.1, 1.0))
+        y0 = int(max(0, math.floor(height * (1.0 - band))))
+        roi = work[y0:, :]
+        if weight is not None:
+            w_roi = weight[y0:, :]
+            area = float(np.sum(w_roi))
+            if area < self.config.mask_min_area_px:
+                return PursuitResult(False)
+            ys, xs = np.indices(roi.shape, dtype=np.float64)
+            cx = float(np.sum(xs * w_roi) / area)
+            cy_roi = float(np.sum(ys * w_roi) / area)
+        else:
+            moments = cv2.moments(roi, binaryImage=True)
+            area = float(moments.get('m00', 0.0))
+            if area < self.config.mask_min_area_px:
+                return PursuitResult(False)
+            cx = float(moments['m10'] / area)
+            cy_roi = float(moments['m01'] / area)
+        cy = cy_roi + float(y0)
+        # Image-center error: road left of center → need left (negative) steer.
+        # normalized_error in [-1, 1]: +1 means road is fully to the right.
+        half_w = 0.5 * float(max(width - 1, 1))
+        error_norm = (cx - half_w) / half_w
+        raw_p = float(error_norm) * self.config.mask_steer_k
+        alpha = self.config.mask_steer_alpha
+        self._steer_f = (1.0 - alpha) * self._steer_f + alpha * raw_p
+        raw = float(self._steer_f)
+        dt = self.config.nominal_control_dt_sec if dt_sec is None else max(0.0, dt_sec)
+        steered = self._apply_rate_limited_steering(raw, dt)
+
+        curve_ratio = float(
+            np.clip(
+                abs(steered) / max(self.config.mask_curve_steer_threshold, 1e-3),
+                0.0,
+                1.0,
+            )
+        )
+        cte = 0.0
+        if path_xy.shape[0] >= 2:
+            rear = self._path_in_rear_axle_frame(path_xy)
+            xy = self._ordered_path(rear)
+            if xy.shape[0] >= 2:
+                cte = self._cross_track_error(xy)
+
+        # Approximate mask COM in vehicle frame for debug (y left).
+        target_y = -(cx - half_w) * mpp if mpp > 1e-6 else error_norm
+        target_x = max(0.05, float(getattr(lane, 'x_forward_max', 0.0) or 0.0) * 0.35)
+        if target_x < 0.06:
+            target_x = 0.35
+
+        result = PursuitResult(
+            valid=True,
+            steering=steered,
+            target_x=target_x,
+            target_y=float(target_y),
+            path_points=int(area),
+            target_distance=math.hypot(target_x, float(target_y)),
+            lookahead_m=0.0,
+            desired_lookahead_m=0.0,
+            path_curvature=0.0,
+            curve_ratio=curve_ratio,
+            raw_steering=raw,
+            pp_steering=raw_p,
+            cross_track_error_m=float(cte),
+            cte_steering=0.0,
+            heading_error_rad=0.0,
+            heading_steering=0.0,
+            path_extrapolation_m=0.0,
+        )
+        # Attach transient debug for the caller (step()).
+        self._last_mask_debug = {
+            'mask_corridor_mode': corridor_mode,
+            'mask_area_px': round(float(area), 1),
+            'mask_com_cx': round(float(cx), 2),
+            'mask_com_cy': round(float(cy), 2),
+            'mask_error_norm': round(float(error_norm), 4),
+            'mask_color_path_points': int(path_xy.shape[0]),
+        }
+        return result
+
+    @staticmethod
+    def _bev_path_skeleton(
+        path_xy: np.ndarray, height: int, width: int
+    ) -> np.ndarray:
+        import cv2
+        from inference.modules import lane_detection as ld
+
+        canvas = np.zeros((height, width), dtype=np.uint8)
+        pts: list[list[int]] = []
+        for x, y in path_xy:
+            u, v = ld.vehicle_xy_to_bev_uv(float(x), float(y))
+            ui, vi = int(round(u)), int(round(v))
+            if 0 <= ui < width and 0 <= vi < height:
+                pts.append([ui, vi])
+        if len(pts) < 2:
+            return canvas
+        cv2.polylines(
+            canvas,
+            [np.asarray(pts, dtype=np.int32)],
+            isClosed=False,
+            color=255,
+            thickness=1,
+            lineType=cv2.LINE_8,
+        )
+        return canvas
+
+    @staticmethod
+    def _bev_corridor_mask(
+        path_xy: np.ndarray,
+        height: int,
+        width: int,
+        mpp: float,
+        half_width_m: float,
+    ) -> np.ndarray:
+        import cv2
+
+        skeleton = MainPlanner._bev_path_skeleton(path_xy, height, width)
+        if not np.any(skeleton):
+            return skeleton
+        thickness = max(1, int(round((2.0 * float(half_width_m)) / max(mpp, 1e-6))))
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (max(1, thickness), max(1, thickness)),
+        )
+        return cv2.dilate(skeleton, kernel)
+
+    def _note_out_sign_sighting(self, observed: TurnSign, now_sec: float) -> None:
+        """Refresh the OUT fork-arm timer whenever a turn sign is visible."""
+        if observed is not TurnSign.UNKNOWN:
+            self._last_out_sign_sec = now_sec
+
+    def _fork_perception_allowed(
+        self, *, now_sec: float, observed_sign: TurnSign
+    ) -> bool:
+        """Whether detect() should publish fork/branches this frame.
+
+        OUT: only after a recent turn sign (or mid-manoeuvre). Normal white
+        follow keeps enable_fork=False so cell/marking forks cannot yank the
+        robot. ``forced_turn`` selects rank only — it does **not** keep fork
+        perception armed for the whole lap (use out_fork_forced_turn_arms to
+        restore the old sim override).
+        IN: always (circle uses forks for exit counting; control gated elsewhere).
+        """
+        if self.state in (
+            DrivingState.FORK_TURN,
+            DrivingState.ROUNDABOUT_EXIT,
+            DrivingState.ROUNDABOUT_EXIT_READY,
+        ):
+            return True
+        if self.config.route_mode is not RouteMode.OUT:
+            return True
+        if not self.config.out_fork_require_sign:
+            return True
+        if (
+            self.config.out_fork_forced_turn_arms
+            and self._forced_turn is not TurnSign.UNKNOWN
+        ):
+            return True
+        self._note_out_sign_sighting(observed_sign, now_sec)
+        if self._last_out_sign_sec is None:
+            return False
+        return (now_sec - self._last_out_sign_sec) <= float(
+            self.config.out_fork_sign_hold_sec
+        )
+
+    def _forkish_for_mask(self, lane: Any) -> bool:
+        if not self.config.mask_fork_force_pp:
+            return False
+        # Circulating: stay on mask/yellow centerline; do not flicker to fork PP.
+        if (
+            self.config.circle_ignore_fork_for_control
+            and self.state is DrivingState.ROUNDABOUT_CIRCLE
+        ):
+            return False
+        if not self._fork_perception_enabled:
+            return False
+        if bool(getattr(lane, 'fork_active', False)):
+            return True
+        return len(getattr(lane, 'branches', ()) or ()) >= 2
+
+    def _track_normal_path(
+        self,
+        lane: Any,
+        color_path: np.ndarray,
+        dt_sec: float,
+    ) -> PursuitResult:
+        tracker = str(self.config.normal_tracker or 'pp').lower()
+        if tracker == 'mask_p':
+            if self._forkish_for_mask(lane):
+                return self._pure_pursuit(color_path, dt_sec)
+            return self._mask_com_pursuit(lane, dt_sec, color_path=color_path)
+        return self._pure_pursuit(color_path, dt_sec)
+
     def _pure_pursuit(
         self, path: np.ndarray, dt_sec: float | None = None
     ) -> PursuitResult:
@@ -915,23 +1251,8 @@ class MainPlanner:
         cte_steering = self._cte_correction(cte)
         heading_error, heading_steering = self._heading_correction(xy)
         raw = pp_steering + heading_steering + cte_steering
-        raw = float(
-            np.clip(
-                raw,
-                -self.config.max_steering_command,
-                self.config.max_steering_command,
-            )
-        )
         dt = self.config.nominal_control_dt_sec if dt_sec is None else max(0.0, dt_sec)
-        maximum_delta = self.config.steering_rate_limit_per_sec * dt
-        delta = float(
-            np.clip(
-                raw - self._steering,
-                -maximum_delta,
-                maximum_delta,
-            )
-        )
-        self._steering = float(np.clip(self._steering + delta, -1.0, 1.0))
+        self._apply_rate_limited_steering(raw, dt)
         return PursuitResult(
             valid=True,
             steering=self._steering,
@@ -963,6 +1284,12 @@ class MainPlanner:
             DrivingState.ROUNDABOUT_EXIT,
         ):
             throttle = self.config.roundabout_throttle
+        elif str(self.config.normal_tracker or 'pp').lower() == 'mask_p':
+            # limo_sim style: shrink cruise when |steer| is large.
+            scale = 1.0 - (
+                1.0 - self.config.mask_curve_speed_scale
+            ) * float(np.clip(pursuit.curve_ratio, 0.0, 1.0))
+            throttle = self.config.cruise_throttle * scale
         else:
             throttle = (
                 self.config.cruise_throttle * (1.0 - pursuit.curve_ratio)
@@ -988,15 +1315,21 @@ class MainPlanner:
             if self.config.route_mode is RouteMode.IN
             else False
         )
+        # Sign first so OUT can gate fork perception before detect().
+        traffic = traffic_sign.detect(frame)
+        aruco = aruco_detection.detect(frame)
+        self._note_out_sign_sighting(traffic.turn, now_sec)
+        self._update_desired_turn(traffic.turn)
+        enable_fork = self._fork_perception_allowed(
+            now_sec=now_sec, observed_sign=traffic.turn
+        )
+        self._fork_perception_enabled = enable_fork
         lane = lane_detection.detect(
             frame,
             active_branch_rank=active_rank,
             prefer_yellow=prefer_yellow,
+            enable_fork=enable_fork,
         )
-        traffic = traffic_sign.detect(frame)
-        aruco = aruco_detection.detect(frame)
-
-        self._update_desired_turn(traffic.turn)
 
         branch_event = self.branch_counter.update(bool(lane.fork_active))
         crossing_event = self.crossing_counter.update(bool(lane.yellow_crossing_line))
@@ -1026,6 +1359,7 @@ class MainPlanner:
         if (
             self.state is DrivingState.NORMAL
             and self.config.route_mode is RouteMode.OUT
+            and enable_fork
             and branch_event
             and now_sec >= self._fork_cooldown_until_sec
         ):
@@ -1195,14 +1529,54 @@ class MainPlanner:
             if self._fork_absent_frames >= self.config.fork_exit_off_frames:
                 self._set_state(DrivingState.NORMAL, now_sec)
         else:
-            pursuit = self._pure_pursuit(color_path, dt_sec)
-            decision = (
-                'roundabout_circle'
-                if self.state is DrivingState.ROUNDABOUT_CIRCLE
-                else 'roundabout_exit_wait_branch'
-                if self.state is DrivingState.ROUNDABOUT_EXIT_READY
-                else 'normal_lane_follow'
+            forkish = self._forkish_for_mask(lane)
+            use_mask = (
+                str(self.config.normal_tracker or 'pp').lower() == 'mask_p'
+                and self.state
+                in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
+                and not forkish
             )
+            if use_mask:
+                self._last_mask_debug = {}
+                pursuit = self._mask_com_pursuit(
+                    lane, dt_sec, color_path=color_path
+                )
+                if pursuit.valid:
+                    path_source = PathSource.MASK_DRIVABLE
+                    decision = (
+                        'roundabout_circle_mask'
+                        if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                        else 'normal_mask_follow'
+                    )
+                else:
+                    pursuit = self._pure_pursuit(color_path, dt_sec)
+                    decision = (
+                        'roundabout_circle_mask_fallback_pp'
+                        if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                        else 'normal_mask_fallback_pp'
+                    )
+            elif (
+                str(self.config.normal_tracker or 'pp').lower() == 'mask_p'
+                and forkish
+                and self.state
+                in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
+            ):
+                # Keep color path_source so logs show fork guard, not mask COM.
+                pursuit = self._pure_pursuit(color_path, dt_sec)
+                decision = (
+                    'roundabout_circle_mask_fork_pp'
+                    if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                    else 'normal_mask_fork_pp'
+                )
+            else:
+                pursuit = self._pure_pursuit(color_path, dt_sec)
+                decision = (
+                    'roundabout_circle'
+                    if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                    else 'roundabout_exit_wait_branch'
+                    if self.state is DrivingState.ROUNDABOUT_EXIT_READY
+                    else 'normal_lane_follow'
+                )
 
         if pursuit.valid and path_source is not PathSource.STOP:
             self._path_lost_frames = 0
@@ -1240,6 +1614,15 @@ class MainPlanner:
             'decision': decision,
             'path_source': path_source.value,
             'path_confidence': round(float(path_confidence), 3),
+            'normal_tracker': str(self.config.normal_tracker),
+            'mask_corridor_mode': str(self.config.mask_corridor_mode),
+            'mask_fork_force_pp': bool(self.config.mask_fork_force_pp),
+            'mask_forkish': bool(self._forkish_for_mask(lane)),
+            **{
+                k: v
+                for k, v in (self._last_mask_debug or {}).items()
+                if k.startswith('mask_')
+            },
             'path_points': pursuit.path_points,
             'target_x': round(pursuit.target_x, 3),
             'target_y': round(pursuit.target_y, 3),
@@ -1261,6 +1644,7 @@ class MainPlanner:
             'yellow_confidence': round(float(lane.yellow_confidence), 3),
             'yellow_selected': path_source is PathSource.YELLOW_CENTERLINE,
             'fork_active': bool(lane.fork_active),
+            'fork_perception': bool(enable_fork),
             'branch_count': len(lane.branches),
             'branch_event': branch_event,
             'branch_events': self.branch_counter.events,

@@ -10,13 +10,17 @@
 
 | 항목 | 기본값 | 어디서 | 이유 |
 |------|--------|--------|------|
-| Gazebo 창 | **`view:=none`** | T1 `sim-bringup` | 카메라/BEV가 fork 오버레이·표지 테스트를 가림 |
-| 인지 창 | **`viz:=lane`** | T2 `sim-auto` | `Lane / Fork Perception` **1창**만 (갈림 오버레이 SSOT) |
+| Gazebo 창 | **`view:=both`** (주행 확인) / fork만 `none` | T1 `sim-bringup` | 기본은 카메라+BEV; fork 오버레이 가릴 때만 none |
+| 인지 창 | **`viz:=lane`** | T2 `sim-auto` | `Lane / Fork Perception` **1창** (표지-armed fork만 강조) |
 | 인지 창 끔 | `viz:=off` | T2 | 헤드리스·로그만 |
-| 튜닝용 | `viz:=debug` | T2 | lane + `lane_control` (HSV/마스크 필요할 때만) |
-| 방향 강제 | **`forced_turn:=left`** (rank 0) / **`right`** (rank 1) | T2 | 카메라 표지 **무시** — 로그 `sign_ignored(forced=…)` |
+| 튜닝용 | `viz:=debug` | T2 | lane + inference `Lane drive` (`LANE_VISUALIZE=control`) |
+| HSV까지 | `viz:=all` | T2 | + `HSV masks` |
+| 방향 강제 | **`forced_turn:=left`** (rank 0) / **`right`** (rank 1) | T2 | 표지 **방향만** 고정. OUT 갈림 인지 상시 ON 아님 (`out_fork_forced_turn_arms`) |
 | route | spawn 구간과 **일치** | T2 | Out=`route_mode:=out`, In=`route_mode:=in` |
 | 텔레포트 | bringup 유지 + `./scripts/dev_container.sh teleport <pose>` | T3 | Gazebo 재기동 없이 구간 이동 |
+
+**OUT 갈림 인지:** 평소 `enable_fork=false`(흰 추종). 방향 표지 검출 후 hold 동안만 fork 발행 → `FORK_TURN` → 완료 후 다시 흰.  
+전체 랩 A/B: `scripts/drive_test/course_mode_bench.py` · 정책 스윕: `mask_policy_bench.py`.
 
 **터미널 역할**
 
@@ -42,9 +46,9 @@
 | 목적 | bringup `view` | sim-auto `viz` | 창 이름 |
 |------|----------------|----------------|---------|
 | **갈림 SSOT (권장)** | `none` | `lane` | `Lane / Fork Perception` |
+| **주행 확인** | `both` | `debug` | cam + BEV + `Lane drive` |
 | 로그만 | `none` | `off` | 없음 |
-| 마스크/HSV 튜닝 | `none` | `debug` | lane + `lane_control` |
-| 원본 카메라 확인 | `cam` | `lane` | Gazebo cam + lane (비권장·fork 테스트 시) |
+| 마스크/HSV 튜닝 | `none` | `all` | lane + `Lane drive` + `HSV masks` |
 
 ### 2.2 `Lane / Fork Perception` 키
 
@@ -76,7 +80,8 @@
 |----|------|------------|-------|-------------|-----|-----------|----------|
 | **S0** | 출발·직선 | `start` | `out` | — | `off` 또는 `lane` | fork=0 | — |
 | **S1** | In/Out 코스 선택 | `inout_fork` | `in`/`out` | — | `lane` | fork=0 | — |
-| **O1** | **Out 갈림 탐색** | `out_fork` | `out` | — | `lane` | fork=1, br=2, src=road_split | — |
+| **O1** | Out 갈림 · 강제/표지 창 | `out_fork` | `out` | `left` 또는 실표지 | `lane` | **fork_on=1**, fork=1, br=2 | — |
+| **O1b** | Out 평상 게이트 | 흰 직선·합류 전 | `out` | — | `lane` | **fork_on=0** | — |
 | **O2** | Out 갈림 LEFT | `out_fork` | `out` | `left` | `lane` | rank **0** 잠금 | `out_left` |
 | **O3** | Out 갈림 RIGHT | `out_fork` | `out` | `right` | `lane` | rank **1** 잠금 | `out_right` |
 | **O4** | Out 합류 무시 | `out_fork_merge_left` | `out` | — | `lane` | **fork=0** | (수동) |
@@ -116,10 +121,10 @@
 ```bash
 ./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork view:=none
 
-# O1 탐색 (forced_turn 없음 — 두 갈래 동시 표시)
+# O1b 평상 게이트 (forced 없음 → fork_on=0 기대)
 ./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane
 
-# O2 LEFT
+# O1/O2 LEFT (forced → fork_on=1, rank 0)
 ./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=left viz:=lane
 
 # O3 RIGHT
@@ -128,8 +133,9 @@
 
 **합격**
 
-- O1: `fork=1`, `branches=2`, `src=road_split_marks` (또는 `white_*`), **노란 갈래 채택 없음**
-- O2/O3: 로그 `*** FORCED_TURN=… ***`, `sign_ignored`, 잠금 후 `fork=0`, `active=0|1`, PP가 선택 측만
+- O1b: `fork_on=0` (실표지 없으면 갈림 패널 억제)
+- O1/O2/O3 (`forced_turn`): `fork_on=1`, 로그 `*** FORCED_TURN=… ***`, `sign_ignored`, 잠금 후 `active=0|1`, PP가 선택 측만
+- 노란 갈래 채택 없음 (`route_mode:=out`)
 
 **오프라인 (Gazebo 불필요)**
 

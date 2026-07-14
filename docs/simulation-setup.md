@@ -17,7 +17,7 @@
 | 트랙 | CW 팀 트랙, 가로 **12 m** |
 | 미션 표지판 | 좌회전 · 우회전 · ArUco 정지 마커 (**3종**, 월드에 고정) |
 | 카메라 | C920e FOV, **320×180** JPEG (16:9) |
-| 시각화 | **Gazebo** (3D). OpenCV 카메라/BEV는 **`view:=none` 기본 OFF** (`cam`/`bev`/`both`로 켬). 자율 창은 **`viz:=lane`** |
+| 시각화 | **Gazebo** (3D). OpenCV 카메라/BEV는 **`view:=both` 기본 ON** (`none`/`cam`/`bev`로 변경). 자율 창은 **`viz:=lane`** |
 | 웹 모니터 | 시뮬 기본 **OFF** |
 | **개발 방식** | **컨테이너 1개** (`2026-smh-sim`) + **터미널 2개** (bringup / sim-auto) |
 | **노드 구분** | [lane-perception-topic.md §2](./lane-perception-topic.md) ★ 시뮬 vs 실차 인벤토리 |
@@ -76,7 +76,7 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
     │
     └─ /battery_status ← sim_battery_stub (80% 고정)
 
-카메라/BEV 프리뷰: bringup 기본 **`view:=none`**. 켤 때 `view:=cam|bev|both`.  
+카메라/BEV 프리뷰: bringup 기본 **`view:=both`**. 갈림 단위 실험만 끌 때 `view:=none`.  
 자율 인지 창: **`viz:=lane`** → `Lane / Fork Perception` 1개 (`viz:=off|debug|all`).
 
 현재 구조: [main-planner.md](./main-planner.md) · [lane-perception-topic.md](./lane-perception-topic.md) ★
@@ -383,7 +383,7 @@ ros2 topic pub /control control_msgs/msg/Control "{steering: 0.0, throttle: 0.3}
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
 | `headless` | `false` | `true`면 Gazebo 3D 창 끔 (물리·카메라는 동작) |
-| `view` | `none` | OpenCV 창: `none` \| `cam` \| `bev` \| `both` (우선) |
+| `view` | `both` | OpenCV 창: `both`(기본) \| `none` \| `cam` \| `bev` (우선) |
 | `use_camera_view` | `false` | 레거시 — `view:=` 없을 때만 |
 | `use_bev_view` | `false` | 레거시 — `view:=` 없을 때만 |
 | `bev_view_scale` | `2.0` | BEV 창 배율 |

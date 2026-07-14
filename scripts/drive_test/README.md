@@ -2,6 +2,63 @@
 
 `fork_spawn_unit.py` — Out 갈림 / In 탈출 스폰 구간 단위 테스트 + 로깅.
 
+# Mask steer bench (short A/B) — see also `out_lap_bench.py` for full OUT lap.
+
+`mask_steer_bench.py` — limo_sim식 **mask COM + P + EMA** vs **PP** 짧은 구간 A/B.
+
+## Course mode full-lap IN/OUT (`course_mode_bench.py`)
+
+출발점(`start`)에서 **OUT / IN** 각각 풀랩을 반복해 강건성·속도·차선 가시성을 비교.
+
+```bash
+PYTHONUNBUFFERED=1 python3 scripts/drive_test/course_mode_bench.py \
+  --modes out,in --repeats 2 \
+  --max-lap-sec-out 180 --max-lap-sec-in 240
+```
+
+로그: `data/captures/course_mode_logs/<stamp>/` (`all_laps.csv`, `REPORT.md`).
+
+## Mask course-color / fork-guard A/B (`mask_policy_bench.py`)
+
+갈림·합류에서 **코스색 코리도 / fork 강제 PP** 조합을 텔레포트 스윕·상위 랩으로 평가.
+
+```bash
+# bringup만 (sim-auto OFF)
+PYTHONUNBUFFERED=1 python3 scripts/drive_test/mask_policy_bench.py \
+  --phase all --duration 8 --repeat 1 --top-n 3 --max-lap-sec 150
+```
+
+로그: `data/captures/mask_policy_logs/<stamp>/` (`meta.json`, `segment_ranking.json`, `REPORT.md`).
+
+> **데이터 신뢰도:** Gazebo 조향 joint `velocity=0.5` 시절 OUT 랩 로그
+> (`out_lap_logs/20260714_111751`, `…_113332`)는 **UNTRUSTED** —
+> [out_lap_logs/README.md](../../data/captures/out_lap_logs/README.md),
+> [vehicle-geometry.md §2.4](../../docs/vehicle-geometry.md).
+
+## OUT full-lap bench (continuous)
+
+`out_lap_bench.py` — **흰 차선 OUT 코스 한 바퀴** 단위 실험.
+
+1. 한 제어 패밀리(`pp` / `mask_p`)로 start부터 연속 주행
+2. 차선 유실이 `lost_hold_sec` 이상 유지되면 **최근접 OUT spawn**으로 텔레포트 후 재시도
+3. 같은 구간에서 `max_retries` 초과 시 **다음 체크포인트로 스킵**
+   (`obstacle` 다음은 **`start`** — 장애물 구간 무한 텔레포트 방지)
+4. ArUco/빨간차로 **미션 스탑은 유실로 취급하지 않음**
+5. start 복귀 시 랩 완료 → 파라미터 mutate → 다음 trial → 패밀리 전환
+
+로그: `data/captures/out_lap_logs/<stamp>/`
+
+```bash
+# bringup (기본 view:=both = 카메라+BEV)
+./scripts/dev_container.sh sim-bringup spawn_pose:=start
+
+# 컨테이너 — sim-auto OFF
+PYTHONUNBUFFERED=1 python3 scripts/drive_test/out_lap_bench.py \
+  --families mask_p,pp --max-param-trials 2 --max-lap-sec 180
+```
+
+체크포인트 (CW): `start → inout_fork → out_fork → out_fork_merge_left → out_in_merge → obstacle → (start)`
+
 **구간별 라이브·합류·viz 기본값:** [docs/fork-test-pipeline.md](../../docs/fork-test-pipeline.md)
 
 ## 계약

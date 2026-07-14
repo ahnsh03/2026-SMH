@@ -31,6 +31,7 @@ except ImportError:  # pragma: no cover
 from inference.modules import lane_detection as ld
 from inference.modules.active_lane import (
     focus_name_for_rank,
+    parse_fork_perception_from_planner_debug,
     parse_selected_rank_from_planner_debug,
 )
 
@@ -85,6 +86,7 @@ class LanePreviewNode(Node):
         self._last_process = 0.0
         self._planner_line = ''
         self._active_rank: int | None = None
+        self._enable_fork: bool = True
         self._manual_focus = False
         self._steer = 0.0
         self._throttle = 0.0
@@ -143,6 +145,9 @@ class LanePreviewNode(Node):
         self._planner_line = str(msg.data or '')[:180]
         rank = parse_selected_rank_from_planner_debug(self._planner_line)
         self._active_rank = rank
+        fork_on = parse_fork_perception_from_planner_debug(self._planner_line)
+        if fork_on is not None:
+            self._enable_fork = fork_on
         if not self._manual_focus:
             self.focus = focus_name_for_rank(rank)
 
@@ -199,19 +204,33 @@ class LanePreviewNode(Node):
                 frame,
                 active_branch_rank=self._active_rank,
                 prefer_yellow=self.prefer_yellow,
+                enable_fork=self._enable_fork,
             )
         except Exception as exc:
             self.get_logger().warning(f'detect failed: {exc}')
             return
 
-        # Same overlays as vision_tune / fork harness — perception SSOT.
-        if (
+        # One canvas: white/yellow course + road; fork rails only when armed+active.
+        if self._enable_fork and (
             dbg.fork_lane_pairs
-            or dbg.fork_active
-            or len(dbg.road_branches) >= 1
-            or getattr(dbg, 'active_branch_rank', None) is not None
+            or bool(dbg.fork_active)
+            or len(dbg.road_branches) >= 2
         ):
-            canvas = ld.make_fork_focus_preview(dbg, focus=self.focus)
+            canvas = ld.make_drive_preview(
+                dbg.bev,
+                dbg.road_clean,
+                white_left=dbg.white_left,
+                white_right=dbg.white_right,
+                yellow_left=dbg.yellow_left,
+                yellow_right=dbg.yellow_right,
+                prefer_yellow=self.prefer_yellow,
+                fork_active=bool(dbg.fork_active),
+                fork_lane_pairs=dbg.fork_lane_pairs,
+                road_branches=dbg.road_branches,
+                road_cells=dbg.road_cells,
+                fork_split_source=str(getattr(dbg, 'fork_split_source', '') or ''),
+                ego_road_color=getattr(dbg, 'ego_road_color', None),
+            )
         elif self.prefer_yellow:
             canvas = ld.render_mode_preview('yellow', dbg)
         else:
@@ -223,6 +242,7 @@ class LanePreviewNode(Node):
             f'focus={self.focus}  policy={getattr(dbg, "lane_policy", "?")}  '
             f'active={getattr(dbg, "active_branch_rank", None)}  '
             f'fork={int(bool(lane.fork_active))}  branches={n_br}  '
+            f'fork_on={int(self._enable_fork)}  '
             f'src={getattr(dbg, "fork_split_source", "?")}',
             f'white_c={float(lane.white_confidence):.2f}  '
             f'yellow_c={float(lane.yellow_confidence):.2f}',

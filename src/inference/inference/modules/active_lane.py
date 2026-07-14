@@ -305,3 +305,14 @@ def parse_selected_rank_from_planner_debug(text: str) -> int | None:
     if not match or match.group(1) == '-':
         return None
     return int(match.group(1))
+
+
+def parse_fork_perception_from_planner_debug(text: str) -> bool | None:
+    """Extract ``fork_on=0|1`` from planner debug; None if absent."""
+
+    import re
+
+    match = re.search(r'\bfork_on=([01])\b', text or '')
+    if not match:
+        return None
+    return match.group(1) == '1'

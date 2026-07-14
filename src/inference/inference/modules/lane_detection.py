@@ -59,8 +59,8 @@ VISUALIZE_ON = "on"
 # │  기본은 off. 시뮬 갈림 실험은 lane_preview_node 한 창만. │
 # │                                                          │
 # │    "off"      창 없음                                    │
-# │    "control"  주행 확인용 통합 1개 (lane_control)         │
-# │    "on"       디버그 창 전부 (튜닝 전용)                   │
+# │    "control"  주행용 1창 (Lane drive)                     │
+# │    "on"       Lane drive + HSV masks 2창                 │
 # │  환경변수: LANE_VISUALIZE=off|control|on                 │
 # └──────────────────────────────────────────────────────────┘
 VISUALIZE_MODE = "off"
@@ -95,17 +95,18 @@ VISUALIZE_MODE = resolve_visualize_mode(
 )
 VISUALIZE = VISUALIZE_MODE != VISUALIZE_OFF
 
-# CONTROL 모드: 흰/노란 경계 + 갈래를 한 창으로 통합 (창 난립 방지).
-CONTROL_WINDOWS = ("lane_control",)
+# CONTROL: 주행용 통합 1창. ON: 같은 주행 창 + HSV 마스크 1창만.
+CONTROL_WINDOWS = ("Lane drive",)
+ON_EXTRA_WINDOWS = ("HSV masks",)
 
 
 def window_enabled(name: str) -> bool:
     """현재 모드에서 이 창을 띄울지 결정한다."""
 
-    if VISUALIZE_MODE == VISUALIZE_ON:
-        return True
     if VISUALIZE_MODE == VISUALIZE_CONTROL:
         return name in CONTROL_WINDOWS
+    if VISUALIZE_MODE == VISUALIZE_ON:
+        return name in CONTROL_WINDOWS or name in ON_EXTRA_WINDOWS
     return False
 
 
@@ -573,6 +574,9 @@ FAR_COURSE_ASSOC_M = 0.28
 FAR_COURSE_MAX_MISS_ROWS = int(
     round(0.20 / METERS_PER_PIXEL)
 )  # 연속 미스 ≈0.20 m 이면 far 연장 중단
+# Tip-only skate detection: outer pinned at the absolute FOV edge (not soft).
+# Large soft margins cut good mid-curve fits on in_roundabout_exit.
+SIDE_WALL_HARD_MARGIN_PX = 1.5
 
 # 보간할 최대 점선 간격
 MAX_BOUNDARY_INTERPOLATION_GAP_M = 0.32
@@ -2613,6 +2617,12 @@ def extend_boundary_pair_far_along_marks(
                 break
             continue
 
+        # Only refuse values outside the image. Soft side-margin cuts destroy
+        # good mid-curve fits on in_roundabout_exit — tip skate is trimmed later
+        # by paint association (see finalize_fork_lane_pair_tips).
+        if next_l < 0.0 or next_r > float(BEV_WIDTH - 1):
+            break
+
         left_out[row] = float(np.clip(next_l, 0.0, float(BEV_WIDTH - 1)))
         right_out[row] = float(np.clip(next_r, 0.0, float(BEV_WIDTH - 1)))
         prev_l = float(left_out[row])
@@ -2620,6 +2630,876 @@ def extend_boundary_pair_far_along_marks(
         miss = 0
 
     return left_out, right_out
+
+
+def _column_hard_wall_skate_cut(
+    columns_u: np.ndarray,
+    *,
+    margin_px: float = SIDE_WALL_HARD_MARGIN_PX,
+    min_skate_rows: int = 4,
+) -> np.ndarray:
+    """Nan far rows only when u is pinned on the absolute FOV edge (≥N rows)."""
+
+    out = np.asarray(columns_u, dtype=np.float32).copy()
+    valid = np.flatnonzero(~np.isnan(out))
+    if valid.size < min_skate_rows + 1:
+        return out
+    lo = float(margin_px)
+    hi = float(BEV_WIDTH - 1) - float(margin_px)
+    # Walk near→far; remember first hard-wall contact, then require a run of
+    # farther rows still on the wall (true skate), else leave alone.
+    first_wall: int | None = None
+    for row in valid[::-1]:
+        u = float(out[int(row)])
+        if u <= lo or u >= hi:
+            first_wall = int(row)
+            break
+    if first_wall is None:
+        return out
+    skate = valid[valid < first_wall]
+    if skate.size < int(min_skate_rows):
+        return out
+    # Keep the first wall contact as tip; drop everything farther.
+    out[:first_wall] = np.nan
+    return out
+
+
+def _trim_column_past_paint(
+    columns_u: np.ndarray,
+    mark_mask: np.ndarray | None,
+    *,
+    assoc_m: float = 0.16,
+    max_miss: int = 5,
+) -> np.ndarray:
+    """From near→far: after consecutive paint-association misses, cut tipward."""
+
+    out = np.asarray(columns_u, dtype=np.float32).copy()
+    if mark_mask is None or mark_mask.size == 0:
+        return out
+    if mark_mask.shape[:2] != (BEV_HEIGHT, BEV_WIDTH):
+        return out
+    assoc_px = float(max(2.0, assoc_m / METERS_PER_PIXEL))
+    valid = np.flatnonzero(~np.isnan(out))
+    if valid.size == 0:
+        return out
+    miss = 0
+    miss_start: int | None = None
+    for row in valid[::-1]:  # near → far
+        cols = np.flatnonzero(mark_mask[int(row)] > 0)
+        bad = cols.size == 0
+        if not bad:
+            err = float(np.min(np.abs(cols.astype(np.float32) - float(out[row]))))
+            bad = err > assoc_px
+        if bad:
+            if miss_start is None:
+                miss_start = int(row)
+            miss += 1
+            if miss >= int(max_miss) and miss_start is not None:
+                # Drop tipward of the last paint-associated row.
+                out[: miss_start + 1] = np.nan
+                break
+        else:
+            miss = 0
+            miss_start = None
+    return out
+
+
+def _frenet_offset_column(
+    outer_u: np.ndarray,
+    *,
+    side: str,
+    width_m: float,
+) -> np.ndarray:
+    """Path-normal offset of ``outer_u`` by ``width_m`` (signed by side)."""
+
+    o = np.asarray(outer_u, dtype=np.float32)
+    xy = _boundary_u_to_vehicle_points(o)
+    out = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
+    if xy.shape[0] < 3:
+        return out
+    sign = -1.0 if side == "left" else 1.0
+    buckets: dict[int, list[float]] = {}
+    for i in range(xy.shape[0]):
+        j0 = max(0, i - 1)
+        j1 = min(xy.shape[0] - 1, i + 1)
+        d = xy[j1] - xy[j0]
+        nrm = float(np.linalg.norm(d))
+        if nrm < 1e-6:
+            t = np.array([1.0, 0.0], dtype=np.float32)
+        else:
+            t = (d / nrm).astype(np.float32)
+        n_left = np.array([-t[1], t[0]], dtype=np.float32)
+        p = xy[i] + sign * float(width_m) * n_left
+        row = int(round((X_MAX_M - float(p[0])) / METERS_PER_PIXEL))
+        if row < 0 or row >= BEV_HEIGHT:
+            continue
+        u = (BEV_WIDTH - 1) / 2.0 - float(p[1]) / METERS_PER_PIXEL
+        if u < 0.0 or u > float(BEV_WIDTH - 1):
+            continue
+        buckets.setdefault(row, []).append(float(u))
+    for row, us in buckets.items():
+        out[row] = float(np.median(us))
+    # Only keep rows that still have an observed outer (no inventing tip).
+    for row in range(BEV_HEIGHT):
+        if np.isnan(o[row]):
+            out[row] = np.nan
+    return out
+
+
+def _paint_segments_on_row(mark_mask: np.ndarray, row: int) -> list[tuple[int, int]]:
+    if mark_mask.size == 0 or row < 0 or row >= int(mark_mask.shape[0]):
+        return []
+    return find_line_segments(mark_mask[row] > 0)
+
+
+def _pick_paint_u_near(
+    segments: list[tuple[int, int]],
+    prev_u: float,
+    *,
+    assoc_px: float,
+    mode: str,
+) -> float | None:
+    """Pick a paint column near ``prev_u`` (``left_edge``/``right_edge``/``inner``)."""
+
+    if not segments:
+        return None
+    best_seg: tuple[int, int] | None = None
+    best_d = float("inf")
+    for start_u, end_u in segments:
+        for cand in (
+            float(start_u),
+            float(end_u),
+            0.5 * (float(start_u) + float(end_u)),
+        ):
+            dist = abs(cand - float(prev_u))
+            if dist < best_d:
+                best_d = dist
+                best_seg = (int(start_u), int(end_u))
+    if best_seg is None or best_d > float(assoc_px):
+        return None
+    s, e = best_seg
+    if mode == "left_edge":
+        return float(s)
+    if mode == "right_edge":
+        return float(e)
+    if mode == "inner":
+        return 0.5 * (float(s) + float(e))
+    return float(s) if abs(float(s) - prev_u) <= abs(float(e) - prev_u) else float(e)
+
+
+def _extend_column_tip_along_paint(
+    columns_u: np.ndarray,
+    mark_mask: np.ndarray | None,
+    *,
+    mode: str,
+    assoc_m: float = 0.18,
+    max_miss_rows: int = 6,
+    band_lo: np.ndarray | None = None,
+    band_hi: np.ndarray | None = None,
+) -> np.ndarray:
+    """Grow tip toward far by following paint; stop when paint is gone."""
+
+    out = np.asarray(columns_u, dtype=np.float32).copy()
+    if mark_mask is None or mark_mask.size == 0:
+        return out
+    if mark_mask.shape[:2] != (BEV_HEIGHT, BEV_WIDTH):
+        return out
+    assoc_px = float(max(2.0, assoc_m / METERS_PER_PIXEL))
+    valid = np.flatnonzero(~np.isnan(out))
+    if valid.size == 0:
+        return out
+    tip = int(valid[0])
+    prev = float(out[tip])
+    miss = 0
+    for row in range(tip - 1, -1, -1):
+        segs = _paint_segments_on_row(mark_mask, row)
+        segs = _filter_wall_noise_paint_segments(segs)
+        clipped: list[tuple[int, int]] = []
+        for s, e in segs:
+            cs, ce = int(s), int(e)
+            if band_lo is not None and not np.isnan(band_lo[row]):
+                cs = max(cs, int(np.floor(float(band_lo[row]))))
+            if band_hi is not None and not np.isnan(band_hi[row]):
+                ce = min(ce, int(np.ceil(float(band_hi[row]))))
+            if ce >= cs:
+                clipped.append((cs, ce))
+        hit = _pick_paint_u_near(clipped, prev, assoc_px=assoc_px, mode=mode)
+        if hit is None:
+            miss += 1
+            if miss > int(max_miss_rows):
+                break
+            continue
+        # Reject lateral teleport between paint blobs (zigzag tip).
+        max_step = max(float(assoc_px) * 2.0, 0.14 / METERS_PER_PIXEL)
+        if abs(float(hit) - prev) > max_step:
+            miss += 1
+            if miss > int(max_miss_rows):
+                break
+            continue
+        out[row] = float(np.clip(hit, 0.0, float(BEV_WIDTH - 1)))
+        prev = float(out[row])
+        miss = 0
+    return out
+
+
+def _smooth_rail_u_heading_curve(
+    columns_u: np.ndarray,
+    *,
+    window: int = 13,
+    tip_hold: bool = True,
+) -> np.ndarray:
+    """Smooth a BEV u(row) rail as a heading-aware curve in vehicle XY.
+
+    Fit a low-order polynomial y(x) so the rail is a soft continuous curve
+    rather than a row-jittered polyline. Tip samples are gently projected
+    onto the terminal tangent so outer FOV exits keep lateral heading.
+    """
+
+    src = np.asarray(columns_u, dtype=np.float32)
+    xy = _boundary_u_to_vehicle_points(src)
+    if xy.shape[0] < 6:
+        return _nan_moving_average(src, window=max(5, window // 2))
+
+    x = xy[:, 0].astype(np.float64)
+    y = xy[:, 1].astype(np.float64)
+    n = int(x.shape[0])
+    # Degree scales with support; keep <=3 so we don't invent wiggles.
+    deg = 3 if n >= 18 else (2 if n >= 10 else 1)
+    deg = min(deg, max(1, n // 6))
+
+    xs_s = x.copy()
+    ys_s = y.copy()
+    if float(np.ptp(x)) > 0.08:
+        try:
+            coef = np.polyfit(x, y, deg)
+            ys_s = np.polyval(coef, x).astype(np.float64)
+            if tip_hold:
+                # Soft tip heading: project last samples onto poly tangent ray.
+                tip_n = max(3, min(8, n // 5))
+                i0 = max(0, n - tip_n - 4)
+                i1 = max(i0 + 1, n - tip_n)
+                dcoef = np.polyder(coef)
+                x_ref = float(x[i1])
+                y_ref = float(np.polyval(coef, x_ref))
+                slope = float(np.polyval(dcoef, x_ref))
+                t = np.array([1.0, slope], dtype=np.float64)
+                nrm = float(np.linalg.norm(t))
+                if nrm > 1e-6:
+                    t_hat = t / nrm
+                    for i in range(i1, n):
+                        along = float(np.dot(
+                            np.array([xs_s[i] - x_ref, ys_s[i] - y_ref]),
+                            t_hat,
+                        ))
+                        along = max(0.0, along)
+                        target = np.array([x_ref, y_ref]) + t_hat * along
+                        alpha = 0.78
+                        xs_s[i] = (1.0 - alpha) * float(xs_s[i]) + alpha * float(target[0])
+                        ys_s[i] = (1.0 - alpha) * float(ys_s[i]) + alpha * float(target[1])
+        except (np.linalg.LinAlgError, ValueError):
+            w = max(5, int(window) | 1)
+            half = w // 2
+            for i in range(n):
+                a = max(0, i - half)
+                b = min(n, i + half + 1)
+                xs_s[i] = float(np.mean(x[a:b]))
+                ys_s[i] = float(np.mean(y[a:b]))
+    else:
+        w = max(5, int(window) | 1)
+        half = w // 2
+        for i in range(n):
+            a = max(0, i - half)
+            b = min(n, i + half + 1)
+            xs_s[i] = float(np.mean(x[a:b]))
+            ys_s[i] = float(np.mean(y[a:b]))
+
+    # Rasterize smoothed polyline back to u[row].
+    out = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
+    buckets: dict[int, list[float]] = {}
+    for i in range(n - 1):
+        x0, y0 = float(xs_s[i]), float(ys_s[i])
+        x1, y1 = float(xs_s[i + 1]), float(ys_s[i + 1])
+        r0 = int(round((X_MAX_M - x0) / METERS_PER_PIXEL))
+        r1 = int(round((X_MAX_M - x1) / METERS_PER_PIXEL))
+        steps = max(2, abs(r1 - r0) * 2 + 1)
+        for t in np.linspace(0.0, 1.0, steps):
+            xv = x0 + (x1 - x0) * float(t)
+            yv = y0 + (y1 - y0) * float(t)
+            row = int(round((X_MAX_M - xv) / METERS_PER_PIXEL))
+            if row < 0 or row >= BEV_HEIGHT:
+                continue
+            u = (BEV_WIDTH - 1) / 2.0 - yv / METERS_PER_PIXEL
+            if u < -1.0 or u > float(BEV_WIDTH):
+                continue
+            buckets.setdefault(row, []).append(float(np.clip(u, 0.0, float(BEV_WIDTH - 1))))
+    for row, us in buckets.items():
+        out[row] = float(np.median(us))
+
+    # Keep support only where source had samples (don't invent stem length).
+    src_valid = ~np.isnan(src)
+    if np.any(src_valid):
+        first = int(np.flatnonzero(src_valid)[0])
+        last = int(np.flatnonzero(src_valid)[-1])
+        keep = np.zeros(BEV_HEIGHT, dtype=bool)
+        keep[first : last + 1] = True
+        out[~keep] = np.nan
+        out[:first] = np.nan
+        for row in range(first, last + 1):
+            if not np.isnan(out[row]) or np.isnan(src[row]):
+                continue
+            filled = np.nan
+            for d in range(1, 6):
+                for cand in (row - d, row + d):
+                    if 0 <= cand < BEV_HEIGHT and not np.isnan(out[cand]):
+                        filled = float(out[cand])
+                        break
+                if not np.isnan(filled):
+                    break
+            if np.isnan(filled):
+                filled = float(src[row])
+            else:
+                filled = 0.70 * filled + 0.30 * float(src[row])
+            out[row] = float(np.clip(filled, 0.0, float(BEV_WIDTH - 1)))
+    return out
+
+
+def _filter_wall_noise_paint_segments(
+    segments: list[tuple[int, int]],
+    *,
+    wall_margin_px: int = 5,
+    min_wall_width: int = 3,
+) -> list[tuple[int, int]]:
+    """Drop FOV-edge paint flecks that cause outer tip wall-skating."""
+
+    out: list[tuple[int, int]] = []
+    left_lim = int(wall_margin_px)
+    right_lim = int(BEV_WIDTH - 1 - wall_margin_px)
+    for s, e in segments:
+        cs, ce = int(s), int(e)
+        width = ce - cs + 1
+        on_left = cs <= left_lim
+        on_right = ce >= right_lim
+        # Thin edge flecks OR any segment entirely inside the wall margin.
+        if on_left and ce <= left_lim:
+            continue
+        if on_right and cs >= right_lim:
+            continue
+        if (on_left or on_right) and width < int(min_wall_width):
+            continue
+        # Truncate residual wall overhang so outer edge is interior.
+        if on_left:
+            cs = left_lim + 1
+        if on_right:
+            ce = right_lim - 1
+        if ce >= cs:
+            out.append((cs, ce))
+    return out
+
+
+def _track_outer_paint_tip(
+    mark_mask: np.ndarray,
+    *,
+    side: str,
+    wall_margin_px: int = 5,
+    jump_px: float = 30.0,
+    seed_u: float | None = None,
+) -> tuple[int, float] | None:
+    """Near→far tip of continuous outer (L=leftmost / R=rightmost) paint edge.
+
+    Scopes candidates to the matching lateral half so gore/opposite paint
+    cannot steal the track (matters on out_fork white dashes).
+    """
+
+    if mark_mask is None or mark_mask.size == 0:
+        return None
+    if mark_mask.shape[:2] != (BEV_HEIGHT, BEV_WIDTH):
+        return None
+    mid_u = 0.5 * float(BEV_WIDTH - 1)
+    prev: float | None = None
+    last: tuple[int, float] | None = None
+    miss = 0
+
+    def _side_segs(segs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        if side == "right":
+            kept = [(s, e) for s, e in segs if float(e) >= mid_u - 8.0]
+        else:
+            kept = [(s, e) for s, e in segs if float(s) <= mid_u + 8.0]
+        return kept
+
+    for row in range(BEV_HEIGHT - 1, -1, -1):
+        segs = _side_segs(
+            _filter_wall_noise_paint_segments(
+                _paint_segments_on_row(mark_mask, row),
+                wall_margin_px=wall_margin_px,
+            )
+        )
+        if not segs:
+            miss += 1
+            if last is not None and miss > 5:
+                break
+            continue
+        miss = 0
+        if side == "right":
+            if prev is None:
+                if seed_u is not None:
+                    scored = sorted(
+                        segs,
+                        key=lambda se: abs(float(se[1]) - float(seed_u)),
+                    )
+                    s, e = scored[0]
+                else:
+                    s, e = max(segs, key=lambda se: se[1])
+                edge = float(e)
+            else:
+                cands = [
+                    (s, e)
+                    for s, e in segs
+                    if abs(float(e) - prev) <= float(jump_px)
+                    or abs(0.5 * (float(s) + float(e)) - prev) <= float(jump_px)
+                ]
+                if not cands:
+                    break
+                s, e = max(cands, key=lambda se: se[1])
+                edge = float(e)
+        else:
+            if prev is None:
+                if seed_u is not None:
+                    scored = sorted(
+                        segs,
+                        key=lambda se: abs(float(se[0]) - float(seed_u)),
+                    )
+                    s, e = scored[0]
+                else:
+                    s, e = min(segs, key=lambda se: se[0])
+                edge = float(s)
+            else:
+                cands = [
+                    (s, e)
+                    for s, e in segs
+                    if abs(float(s) - prev) <= float(jump_px)
+                    or abs(0.5 * (float(s) + float(e)) - prev) <= float(jump_px)
+                ]
+                if not cands:
+                    break
+                s, e = min(cands, key=lambda se: se[0])
+                edge = float(s)
+        prev = edge
+        last = (int(row), edge)
+    return last
+
+
+def _blend_tip_to_paint_edge(
+    columns_u: np.ndarray,
+    *,
+    paint_row: int,
+    paint_u: float,
+    blend_rows: int = 12,
+) -> np.ndarray:
+    """Ease the last tip samples onto the paint edge to avoid a hard kink."""
+
+    out = np.asarray(columns_u, dtype=np.float32).copy()
+    valid = np.flatnonzero(~np.isnan(out))
+    if valid.size < 3:
+        return out
+    tip = int(valid[0])
+    # Ego-ward anchor a few rows from tip.
+    anchor_idx = min(len(valid) - 1, max(2, int(blend_rows)))
+    anchor_row = int(valid[anchor_idx])
+    target_row = int(np.clip(paint_row, 0, BEV_HEIGHT - 1))
+    target_u = float(np.clip(paint_u, 0.0, float(BEV_WIDTH - 1)))
+    # Prefer keeping existing tip row support: only reshape samples tipward of
+    # (or near) the paint tip without inventing deeper tip length.
+    for k, row in enumerate(valid):
+        r = int(row)
+        if r > anchor_row:
+            continue
+        if r < tip:
+            continue
+        # Blend factor grows tipward.
+        span = max(1, anchor_row - tip)
+        t = float(anchor_row - r) / float(span)
+        t = float(np.clip(t, 0.0, 1.0))
+        # Smoothstep.
+        w = t * t * (3.0 - 2.0 * t)
+        out[r] = (1.0 - w) * float(out[r]) + w * target_u
+    # Ensure a sample exists at paint tip when rail already covers it.
+    if tip <= target_row <= int(valid[-1]):
+        out[target_row] = target_u
+    return out
+
+
+def _clip_outer_tip_past_paint(
+    columns_u: np.ndarray,
+    mark_mask: np.ndarray | None,
+    *,
+    side: str,
+    wall_px: float = 10.0,
+    slack_rows: int = 1,
+    seed_u: float | None = None,
+) -> np.ndarray:
+    """If outer tip wall-skates past tracked paint, cut back to the paint tip.
+
+    Left outers that already stop at a side exit (tip less tipward than paint)
+    are left alone — only tipward overshoot is corrected.
+    """
+
+    out = np.asarray(columns_u, dtype=np.float32).copy()
+    if mark_mask is None or mark_mask.size == 0:
+        return out
+    # Seed tracker from a near-ego outer sample so opposite-side paint loses.
+    if seed_u is None:
+        valid0 = np.flatnonzero(~np.isnan(out))
+        if valid0.size:
+            seed_u = float(out[int(valid0[min(len(valid0) - 1, valid0.size // 2)])])
+    paint = _track_outer_paint_tip(mark_mask, side=side, seed_u=seed_u)
+    if paint is None:
+        return out
+    paint_row, paint_u = paint
+    valid = np.flatnonzero(~np.isnan(out))
+    if valid.size == 0:
+        return out
+    tip_row = int(valid[0])
+    tip_u = float(out[tip_row])
+    on_wall = (
+        tip_u >= float(BEV_WIDTH - 1) - float(wall_px)
+        if side == "right"
+        else tip_u <= float(wall_px)
+    )
+    # Already at/inside paint tip: optionally ease onto paint edge.
+    if tip_row >= int(paint_row) - int(slack_rows):
+        if abs(tip_u - float(paint_u)) > 4.0 and tip_row <= int(paint_row) + 4:
+            return _blend_tip_to_paint_edge(
+                out, paint_row=int(paint_row), paint_u=float(paint_u)
+            )
+        return out
+    # Only retract tipward *wall-skate* past paint. Forward top tips without
+    # paint (out_fork) must remain — paint often fades before FOV top.
+    if not on_wall:
+        return out
+    cut = max(0, int(paint_row) - int(slack_rows))
+    out[:cut] = np.nan
+    tip_now = np.flatnonzero(~np.isnan(out))
+    if tip_now.size == 0:
+        out[cut] = float(np.clip(paint_u, 0.0, float(BEV_WIDTH - 1)))
+        return out
+    return _blend_tip_to_paint_edge(
+        out, paint_row=int(paint_row), paint_u=float(paint_u)
+    )
+
+
+def _polish_outer_wall_tip_hook(
+    columns_u: np.ndarray,
+    *,
+    wall_px: float = 10.0,
+    max_drop: int = 6,
+) -> np.ndarray:
+    """Remove a short vertical hook after an outer already hit the FOV side."""
+
+    out = np.asarray(columns_u, dtype=np.float32).copy()
+    valid = np.flatnonzero(~np.isnan(out))
+    if valid.size < 4:
+        return out
+    tip_u = float(out[int(valid[0])])
+    on_left = tip_u <= float(wall_px)
+    on_right = tip_u >= float(BEV_WIDTH - 1) - float(wall_px)
+    if not (on_left or on_right):
+        return out
+    k = 0
+    limit = min(int(max_drop), len(valid) - 2)
+    while k < limit:
+        u0 = float(out[int(valid[k])])
+        u1 = float(out[int(valid[k + 1])])
+        if abs(u0 - u1) > 1.5:
+            break
+        if on_left and min(u0, u1) > float(wall_px) + 2.0:
+            break
+        if on_right and max(u0, u1) < float(BEV_WIDTH - 1) - float(wall_px) - 2.0:
+            break
+        k += 1
+    if k >= 2:
+        cut = int(valid[k])
+        out[:cut] = np.nan
+    return out
+
+
+def _trim_outer_tip_stick_up(
+    columns_u: np.ndarray,
+    *,
+    min_run: int = 6,
+    wall_px: float = 10.0,
+    tip_row_max: int = 12,
+) -> np.ndarray:
+    """Drop *top-wall skate* only: tip near BEV top with u glued to FOV sides.
+
+    Do not trim normal side exits whose tips sit mid-far (e.g. row 20–60);
+    those are the desired L/R FOV exits on curved fork outs.
+    """
+
+    out = np.asarray(columns_u, dtype=np.float32).copy()
+    valid = np.flatnonzero(~np.isnan(out))
+    if valid.size < min_run + 1:
+        return out
+    tip_row = int(valid[0])
+    tip_u = float(out[tip_row])
+    if tip_row > int(tip_row_max):
+        return out
+    on_left = tip_u <= float(wall_px)
+    on_right = tip_u >= float(BEV_WIDTH - 1) - float(wall_px)
+    if not (on_left or on_right):
+        return out
+    k = 0
+    while k + 1 < len(valid):
+        u0 = float(out[int(valid[k])])
+        u1 = float(out[int(valid[k + 1])])
+        if abs(u0 - u1) > 1.0:
+            break
+        if on_left and min(u0, u1) > float(wall_px) + 2.0:
+            break
+        if on_right and max(u0, u1) < float(BEV_WIDTH - 1) - float(wall_px) - 2.0:
+            break
+        k += 1
+    if k >= int(min_run) - 1:
+        cut = int(valid[min(k, len(valid) - 1)])
+        out[:cut] = np.nan
+    return out
+
+
+def _fork_tip_mode_for_mark_color(mark_color: str) -> str:
+    """Map fork source color → tip finalize profile.
+
+    * ``in_curve`` — yellow In-course curved exits (side FOV outers).
+    * ``out_forward`` — white/road_split Out-course forward tips (top FOV).
+    """
+
+    color = str(mark_color or "")
+    if color.endswith("_marks"):
+        color = color[: -len("_marks")]
+    if color in ("yellow", "yellow_alt"):
+        return "in_curve"
+    return "out_forward"
+
+
+def _rebuild_fork_centers_from_rails(
+    lo: np.ndarray,
+    li: np.ndarray,
+    ro: np.ndarray,
+    ri: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    half = 0.5 * (FORK_PAIR_WIDTH_M / METERS_PER_PIXEL)
+    c0 = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
+    c1 = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
+    for row in range(BEV_HEIGHT):
+        if not np.isnan(lo[row]) and not np.isnan(li[row]):
+            c0[row] = 0.5 * (float(lo[row]) + float(li[row]))
+        elif not np.isnan(lo[row]):
+            c0[row] = float(lo[row]) + half
+        if not np.isnan(ro[row]) and not np.isnan(ri[row]):
+            c1[row] = 0.5 * (float(ro[row]) + float(ri[row]))
+        elif not np.isnan(ro[row]):
+            c1[row] = float(ro[row]) - half
+        if np.isnan(lo[row]):
+            c0[row] = np.nan
+        if np.isnan(ro[row]):
+            c1[row] = np.nan
+    return c0, c1
+
+
+def _pack_fork_pairs_from_rails(
+    by: dict[int, ForkLanePair],
+    lo: np.ndarray,
+    li: np.ndarray,
+    ro: np.ndarray,
+    ri: np.ndarray,
+    c0: np.ndarray,
+    c1: np.ndarray,
+) -> list[ForkLanePair]:
+    out: list[ForkLanePair] = []
+    for rank, outer, inner, center in (
+        (0, lo, li, c0),
+        (1, ro, ri, c1),
+    ):
+        valid = int(np.count_nonzero(~np.isnan(center)))
+        if valid == 0:
+            valid = int(np.count_nonzero(~np.isnan(outer)))
+        conf = float(np.clip(valid / float(BEV_HEIGHT), 0.0, 1.0))
+        src = by[rank]
+        out.append(
+            ForkLanePair(
+                lateral_rank=rank,
+                outer_u=outer.astype(np.float32, copy=False),
+                inner_u=inner.astype(np.float32, copy=False),
+                center_u=center.astype(np.float32, copy=False),
+                outer_missing=bool(src.outer_missing),
+                inner_missing=bool(np.any(np.isnan(inner) & ~np.isnan(outer))),
+                confidence=conf,
+            )
+        )
+    return out
+
+
+def _extend_fork_rails_on_paint(
+    lo: np.ndarray,
+    li: np.ndarray,
+    ro: np.ndarray,
+    ri: np.ndarray,
+    mark_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    mid = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
+    for row in range(BEV_HEIGHT):
+        if not np.isnan(lo[row]) and not np.isnan(ro[row]) and ro[row] > lo[row]:
+            mid[row] = 0.5 * (float(lo[row]) + float(ro[row]))
+
+    lo = _extend_column_tip_along_paint(lo, mark_mask, mode="nearest", band_hi=mid)
+    ro = _extend_column_tip_along_paint(ro, mark_mask, mode="nearest", band_lo=mid)
+    for row in range(BEV_HEIGHT):
+        if not np.isnan(lo[row]) and not np.isnan(ro[row]) and ro[row] > lo[row]:
+            mid[row] = 0.5 * (float(lo[row]) + float(ro[row]))
+        elif not np.isnan(lo[row]) and np.isnan(mid[row]):
+            mid[row] = float(lo[row]) + 0.5 * (FORK_PAIR_WIDTH_M / METERS_PER_PIXEL)
+        elif not np.isnan(ro[row]) and np.isnan(mid[row]):
+            mid[row] = float(ro[row]) - 0.5 * (FORK_PAIR_WIDTH_M / METERS_PER_PIXEL)
+
+    li = _extend_column_tip_along_paint(
+        li, mark_mask, mode="nearest", band_lo=lo, band_hi=mid
+    )
+    ri = _extend_column_tip_along_paint(
+        ri, mark_mask, mode="nearest", band_lo=mid, band_hi=ro
+    )
+    return lo, li, ro, ri
+
+
+def _finalize_fork_tips_in_curve(
+    pairs: list[ForkLanePair],
+    mark_mask: np.ndarray,
+) -> list[ForkLanePair]:
+    """In-course (yellow): side-exit outers + heading/paint tip surgery."""
+
+    by = {int(p.lateral_rank): p for p in pairs}
+    lo = np.asarray(by[0].outer_u, dtype=np.float32).copy()
+    li = np.asarray(by[0].inner_u, dtype=np.float32).copy()
+    ro = np.asarray(by[1].outer_u, dtype=np.float32).copy()
+    ri = np.asarray(by[1].inner_u, dtype=np.float32).copy()
+
+    lo, li, ro, ri = _extend_fork_rails_on_paint(lo, li, ro, ri, mark_mask)
+
+    # Heading-aware curve smooth (poly y(x) + tip tangent).
+    lo = _smooth_rail_u_heading_curve(lo, window=15)
+    ro = _smooth_rail_u_heading_curve(ro, window=15)
+    li = _smooth_rail_u_heading_curve(li, window=15)
+    ri = _smooth_rail_u_heading_curve(ri, window=15)
+    lo = _trim_outer_tip_stick_up(lo, min_run=6)
+    ro = _trim_outer_tip_stick_up(ro, min_run=6)
+    lo = _polish_outer_wall_tip_hook(lo, max_drop=6)
+    ro = _polish_outer_wall_tip_hook(ro, max_drop=6)
+    lo = _clip_outer_tip_past_paint(lo, mark_mask, side="left")
+    ro = _clip_outer_tip_past_paint(ro, mark_mask, side="right")
+    lo = _smooth_rail_u_heading_curve(lo, window=9, tip_hold=False)
+    ro = _smooth_rail_u_heading_curve(ro, window=9, tip_hold=False)
+    lo = _clip_outer_tip_past_paint(lo, mark_mask, side="left")
+    ro = _clip_outer_tip_past_paint(ro, mark_mask, side="right")
+
+    c0, c1 = _rebuild_fork_centers_from_rails(lo, li, ro, ri)
+    c0 = _smooth_rail_u_heading_curve(c0, window=11)
+    c1 = _smooth_rail_u_heading_curve(c1, window=11)
+    for row in range(BEV_HEIGHT):
+        if np.isnan(lo[row]):
+            c0[row] = np.nan
+        if np.isnan(ro[row]):
+            c1[row] = np.nan
+    return _pack_fork_pairs_from_rails(by, lo, li, ro, ri, c0, c1)
+
+
+def _finalize_fork_tips_out_forward(
+    pairs: list[ForkLanePair],
+    mark_mask: np.ndarray,
+) -> list[ForkLanePair]:
+    """Out-course (white/road_split): keep stem straight, forward top tips.
+
+    Matches the P0/H0/A0 family: light MA + soft side-wall skate cut only.
+    Preserve stitch shared-stem *centers* (do not rebuild mid(outer,inner) —
+    that re-splits the stem into an early Y / zig-zag).
+    """
+
+    del mark_mask  # reserved for future out-specific paint polish
+    by = {int(p.lateral_rank): p for p in pairs}
+    lo = np.asarray(by[0].outer_u, dtype=np.float32).copy()
+    li = np.asarray(by[0].inner_u, dtype=np.float32).copy()
+    ro = np.asarray(by[1].outer_u, dtype=np.float32).copy()
+    ri = np.asarray(by[1].inner_u, dtype=np.float32).copy()
+    c0 = np.asarray(by[0].center_u, dtype=np.float32).copy()
+    c1 = np.asarray(by[1].center_u, dtype=np.float32).copy()
+
+    lo = _nan_moving_average(lo, window=5)
+    ro = _nan_moving_average(ro, window=5)
+    li = _nan_moving_average(li, window=5)
+    ri = _nan_moving_average(ri, window=5)
+    c0 = _nan_moving_average(c0, window=5)
+    c1 = _nan_moving_average(c1, window=5)
+    lo = _column_hard_wall_skate_cut(lo)
+    ro = _column_hard_wall_skate_cut(ro)
+    for row in range(BEV_HEIGHT):
+        if np.isnan(lo[row]):
+            c0[row] = np.nan
+        if np.isnan(ro[row]):
+            c1[row] = np.nan
+    return _pack_fork_pairs_from_rails(by, lo, li, ro, ri, c0, c1)
+
+
+def finalize_fork_lane_pair_tips(
+    pairs: list[ForkLanePair],
+    mark_mask: np.ndarray | None = None,
+    *,
+    lateral_heading_deg: float = 40.0,
+    tip_mode: str = "in_curve",
+) -> list[ForkLanePair]:
+    """Finalize fork rail tips with a course-specific profile.
+
+    * ``tip_mode="in_curve"`` — yellow In exits (side FOV, heading/paint tips).
+    * ``tip_mode="out_forward"`` — white/road_split Out forks (top FOV tips).
+    Without a mark mask, return pairs unchanged.
+    """
+
+    del lateral_heading_deg
+    if not pairs:
+        return pairs
+    if mark_mask is None or getattr(mark_mask, "size", 0) == 0:
+        return pairs
+    if mark_mask.shape[:2] != (BEV_HEIGHT, BEV_WIDTH):
+        return pairs
+
+    by = {int(p.lateral_rank): p for p in pairs}
+    if 0 not in by or 1 not in by:
+        return pairs
+
+    mode = str(tip_mode or "in_curve")
+    if mode == "out_forward":
+        return _finalize_fork_tips_out_forward(pairs, mark_mask)
+    return _finalize_fork_tips_in_curve(pairs, mark_mask)
+
+
+# Backward-compatible aliases (older sweep scripts).
+def clip_boundary_u_at_side_wall(
+    columns_u: np.ndarray,
+    *,
+    margin_px: float | None = None,
+    keep_wall_tip: bool = True,
+) -> np.ndarray:
+    del keep_wall_tip
+    margin = float(
+        SIDE_WALL_HARD_MARGIN_PX if margin_px is None else margin_px
+    )
+    return _column_hard_wall_skate_cut(columns_u, margin_px=margin)
+
+
+def clip_fork_lane_pairs_at_side_wall(
+    pairs: list[ForkLanePair],
+    *,
+    margin_px: float | None = None,
+) -> list[ForkLanePair]:
+    """Deprecated alias — prefer :func:`finalize_fork_lane_pair_tips`."""
+
+    del margin_px
+    return finalize_fork_lane_pair_tips(pairs, mark_mask=None)
 
 
 def interpolate_yellow_boundary_pair(
@@ -3599,10 +4479,10 @@ def show_visualization(
     yellow_right: np.ndarray,
     yellow_side_debug: dict[str, object] | None,
 ) -> None:
-    """현재 LANE_VISUALIZE 모드에서 켜진 창만 표시한다.
+    """HSV 마스크만 추가 창으로 띄운다 (ON 모드).
 
-    CONTROL 모드에서는 안 띄우는 창의 프리뷰를 아예 만들지 않는다(프리뷰 생성이
-    프레임당 수 ms다).
+    경계·주행면·갈림은 ``Lane drive`` 한 창에서만 본다. 예전 개별 창
+    (lane_origin / boundaries / interpolation / road_branches / line_fill)은 제거.
     """
 
     def scaled(image: np.ndarray, nearest: bool = False) -> np.ndarray:
@@ -3615,138 +4495,118 @@ def show_visualization(
             interpolation=interpolation,
         )
 
-    def debug_count(name: str) -> int:
-        if yellow_side_debug is None:
-            return 0
-        return int(yellow_side_debug.get(name, 0))
+    if window_enabled("HSV masks"):
+        left = scaled(white_bev, nearest=True)
+        right = scaled(yellow_bev, nearest=True)
+        if left.ndim == 2:
+            left = cv2.cvtColor(left, cv2.COLOR_GRAY2BGR)
+        if right.ndim == 2:
+            right = cv2.cvtColor(right, cv2.COLOR_GRAY2BGR)
+        h = max(left.shape[0], right.shape[0])
 
-    yellow_debug_lines: tuple[str, ...] = ()
-    if yellow_side_debug is not None:
-        angle_value = yellow_side_debug.get("angle_deg")
-        component_angle_values = tuple(
-            float(value)
-            for value in yellow_side_debug.get("component_angles", ())
-        )
-        if angle_value is None:
-            angle_text = "OFF"
-            bias_text = "NONE"
-        else:
-            angle = float(angle_value)
-            angle_text = f"{angle:+.2f}med"
-            if component_angle_values and all(
-                value < 0.0 for value in component_angle_values
-            ):
-                bias_text = "LEFT"
-            elif component_angle_values and all(
-                value > 0.0 for value in component_angle_values
-            ):
-                bias_text = "RIGHT"
-            elif any(value != 0.0 for value in component_angle_values):
-                bias_text = "MIXED"
-            else:
-                bias_text = "NONE"
-        yellow_debug_lines = (
-            "SIDE "
-            f"ANG={angle_text} BIAS={bias_text} "
-            f"COMP={debug_count('components')}/"
-            f"{debug_count('angled_components')}",
-            "SEL "
-            f"L={debug_count('selected_left')} "
-            f"R={debug_count('selected_right')}  "
-            f"VALID L={debug_count('left_valid')} "
-            f"R={debug_count('right_valid')}",
-            "ROW "
-            f"ANGLE={debug_count('rows_angle')} "
-            f"SINGLE={debug_count('rows_single')} "
-            f"MULTI={debug_count('rows_multi')}",
-            "L REJ "
-            f"ROAD={debug_count('left_road')} "
-            f"RAW={debug_count('left_raw')} "
-            f"WHITE={debug_count('left_white')} "
-            f"WP={debug_count('left_white_penalty')} "
-            f"VIEW={debug_count('left_view')}",
-            "R REJ "
-            f"ROAD={debug_count('right_road')} "
-            f"RAW={debug_count('right_raw')} "
-            f"WHITE={debug_count('right_white')} "
-            f"WP={debug_count('right_white_penalty')} "
-            f"VIEW={debug_count('right_view')}",
-        )
+        def _fit(panel: np.ndarray) -> np.ndarray:
+            if panel.shape[0] == h:
+                return panel
+            scale = h / float(panel.shape[0])
+            return cv2.resize(
+                panel,
+                (max(1, int(round(panel.shape[1] * scale))), h),
+                interpolation=cv2.INTER_NEAREST,
+            )
 
-    if window_enabled("lane_origin"):
-        cv2.imshow("lane_origin", cropped_frame)
-    if window_enabled("white_hsv"):
-        cv2.imshow("white_hsv", scaled(white_bev, nearest=True))
-    if window_enabled("yellow_hsv"):
-        cv2.imshow("yellow_hsv", scaled(yellow_bev, nearest=True))
-    if (
-        window_enabled("yellow_dash_points")
-        and yellow_dash_points_bev is not None
-    ):
-        cv2.imshow(
-            "yellow_dash_points",
-            scaled(yellow_dash_points_bev, nearest=True),
+        canvas = np.hstack([_fit(left), _fit(right)])
+        cv2.putText(
+            canvas,
+            "WHITE HSV | YELLOW HSV",
+            (4, 16),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
         )
-    if window_enabled("yellow_dash_connected"):
-        cv2.imshow(
-            "yellow_dash_connected",
-            scaled(yellow_connected_bev, nearest=True),
-        )
-    if window_enabled("white_boundaries"):
-        cv2.imshow(
-            "white_boundaries",
-            scaled(
-                make_boundary_preview(
-                    bev,
-                    road_clean,
-                    white_left,
-                    white_right,
-                    "WHITE",
-                )
-            ),
-        )
-    if window_enabled("yellow_boundaries"):
-        cv2.imshow(
-            "yellow_boundaries",
-            scaled(
-                make_boundary_preview(
-                    bev,
-                    road_clean,
-                    yellow_left,
-                    yellow_right,
-                    "YELLOW",
-                    yellow_debug_lines,
-                )
-            ),
-        )
-    if window_enabled("white_interpolation"):
-        cv2.imshow(
-            "white_interpolation",
-            scaled(
-                make_interpolation_preview(
-                    white_bev,
-                    white_left,
-                    white_right,
-                    "WHITE",
-                )
-            ),
-        )
-    if window_enabled("yellow_interpolation"):
-        cv2.imshow(
-            "yellow_interpolation",
-            scaled(
-                make_interpolation_preview(
-                    yellow_connected_bev,
-                    yellow_left,
-                    yellow_right,
-                    "YELLOW",
-                )
-            ),
-        )
-    if window_enabled("drivable_area"):
-        cv2.imshow("drivable_area", scaled(road_clean, nearest=True))
-    # lane_control은 detect_with_debug에서 갈래까지 합쳐 띄운다.
+        cv2.imshow("HSV masks", canvas)
     cv2.waitKey(1)
+
+
+def make_drive_preview(
+    bev: np.ndarray,
+    road_clean: np.ndarray,
+    *,
+    white_left: np.ndarray,
+    white_right: np.ndarray,
+    yellow_left: np.ndarray | None = None,
+    yellow_right: np.ndarray | None = None,
+    prefer_yellow: bool | None = False,
+    fork_active: bool = False,
+    fork_lane_pairs: tuple | list = (),
+    road_branches: tuple | list = (),
+    road_cells: np.ndarray | None = None,
+    fork_split_source: str = "",
+    ego_road_color: str | None = None,
+) -> np.ndarray:
+    """Single driving canvas: course centerline + road + fork only when active.
+
+    OUT (prefer_yellow=False): white rails. IN: yellow when present else white.
+    Fork rails overlay only while ``fork_active`` — not a permanent branch panel.
+    """
+
+    use_yellow = bool(prefer_yellow) and yellow_left is not None and yellow_right is not None
+    if use_yellow:
+        y_obs = np.isfinite(np.asarray(yellow_left, dtype=np.float32)).sum()
+        if y_obs < 5:
+            use_yellow = False
+    if use_yellow:
+        preview = make_boundary_preview(
+            bev, road_clean, yellow_left, yellow_right, "YELLOW (IN)"
+        )
+    else:
+        preview = make_boundary_preview(
+            bev, road_clean, white_left, white_right, "WHITE (OUT)"
+        )
+
+    if fork_active and (fork_lane_pairs or len(list(road_branches or ())) >= 2):
+        # Compact overlay — not a third full panel.
+        if fork_lane_pairs:
+            dbg = LaneDebugFrame(
+                bev=bev,
+                road_clean=road_clean,
+                fork_lane_pairs=tuple(fork_lane_pairs),
+                fork_split_source=fork_split_source,
+                road_branches=tuple(road_branches or ()),
+                ego_road_color=ego_road_color,
+                fork_active=True,
+            )
+            fork_overlay = make_fork_lane_pair_preview(dbg, focus="all")
+        else:
+            fork_overlay = make_course_cell_preview(
+                bev,
+                road_cells if road_cells is not None else np.zeros_like(road_clean),
+                list(road_branches or ()),
+                ego_road_color,
+            )
+        # Blend fork cues on the right third so rails stay readable.
+        w = preview.shape[1]
+        x0 = int(w * 0.55)
+        blend = preview.copy()
+        fo = fork_overlay
+        if fo.shape[:2] != preview.shape[:2]:
+            fo = cv2.resize(fo, (preview.shape[1], preview.shape[0]))
+        blend[:, x0:] = cv2.addWeighted(
+            preview[:, x0:], 0.35, fo[:, x0:], 0.65, 0.0
+        )
+        preview = blend
+        cv2.putText(
+            preview,
+            f"FORK ON  src={fork_split_source or '?'}",
+            (4, preview.shape[0] - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40,
+            (0, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    return preview
 
 
 def detect(
@@ -3754,17 +4614,20 @@ def detect(
     *,
     active_branch_rank: int | None = None,
     prefer_yellow: bool | None = None,
+    enable_fork: bool = True,
 ) -> LaneDetections:
     """색상별 좌우 경계, 노란선 플래그와 road_clean을 반환한다.
 
     ``prefer_yellow`` — 코스 계약. False=Out(흰 갈래·흰 추종), True=In(노란 우선).
     None이면 레거시(ego 색·양쪽 후보). ``active_branch_rank``는 선택 갈래 잠금.
+    ``enable_fork`` — False면 marking/cell 갈림을 발행하지 않음 (Out 표지 게이트).
     """
 
     detections, _debug = detect_with_debug(
         frame,
         active_branch_rank=active_branch_rank,
         prefer_yellow=prefer_yellow,
+        enable_fork=enable_fork,
     )
     return detections
 
@@ -3774,6 +4637,7 @@ def detect_with_debug(
     *,
     active_branch_rank: int | None = None,
     prefer_yellow: bool | None = None,
+    enable_fork: bool = True,
 ) -> tuple[LaneDetections, LaneDebugFrame]:
     """Runtime detections plus intermediate masks for mode tuners."""
 
@@ -4021,45 +4885,58 @@ def detect_with_debug(
     fork_active = len(road_branches) >= 2
     fork_split_source = "cells" if road_branches else ""
 
-    # Marking / dual-course → 갈래(branches).
-    # Out(prefer_yellow=False): 흰·road_split만 — 노란 갈래로 덮지 않음.
-    # In(prefer_yellow=True): 노란 우선 → road_split/흰 폴백.
-    fork_lane_pairs, fork_mark_tracks, marking_branches, fork_mark_color = (
-        select_course_fork_pairs(
-            prefer_yellow=prefer_yellow,
-            yellow_left=yellow_left,
-            yellow_right=yellow_right,
-            yellow_alt_left=yellow_alt_left,
-            yellow_alt_right=yellow_alt_right,
-            yellow_boundary_bev=yellow_boundary_bev,
-            white_left=white_left,
-            white_right=white_right,
-            white_alt_left=white_alt_left,
-            white_alt_right=white_alt_right,
-            white_dash_connected_bev=white_dash_connected_bev,
-            road_clean=road_clean,
+    fork_lane_pairs: list = []
+    fork_mark_tracks: list = []
+    marking_branches: list = []
+    fork_mark_color = ""
+    if enable_fork:
+        # Marking / dual-course → 갈래(branches).
+        # Out(prefer_yellow=False): 흰·road_split만 — 노란 갈래로 덮지 않음.
+        # In(prefer_yellow=True): 노란 우선 → road_split/흰 폴백.
+        fork_lane_pairs, fork_mark_tracks, marking_branches, fork_mark_color = (
+            select_course_fork_pairs(
+                prefer_yellow=prefer_yellow,
+                yellow_left=yellow_left,
+                yellow_right=yellow_right,
+                yellow_alt_left=yellow_alt_left,
+                yellow_alt_right=yellow_alt_right,
+                yellow_boundary_bev=yellow_boundary_bev,
+                white_left=white_left,
+                white_right=white_right,
+                white_alt_left=white_alt_left,
+                white_alt_right=white_alt_right,
+                white_dash_connected_bev=white_dash_connected_bev,
+                road_clean=road_clean,
+            )
         )
-    )
 
-    if len(marking_branches) >= 2 and fork_source_allowed_for_course(
-        fork_mark_color,
-        prefer_yellow=prefer_yellow,
-        yellow_is_detected=yellow_is_detected,
-        ego_road_color=ego_road_color,
-    ):
-        road_branches = marking_branches
-        fork_active = True
-        fork_split_source = f"{fork_mark_color}_marks"
+        if len(marking_branches) >= 2 and fork_source_allowed_for_course(
+            fork_mark_color,
+            prefer_yellow=prefer_yellow,
+            yellow_is_detected=yellow_is_detected,
+            ego_road_color=ego_road_color,
+        ):
+            road_branches = marking_branches
+            fork_active = True
+            fork_split_source = f"{fork_mark_color}_marks"
 
-    # Out: yellow-ego cell forks must not publish without a white mark source.
-    if (
-        prefer_yellow is False
-        and fork_split_source == "cells"
-        and ego_road_color == "yellow"
-    ):
-        road_branches = []
+        # Out: yellow-ego cell forks must not publish without a white mark source.
+        if (
+            prefer_yellow is False
+            and fork_split_source == "cells"
+            and ego_road_color == "yellow"
+        ):
+            road_branches = []
+            fork_active = False
+            fork_split_source = ""
+    else:
+        # Planner-disabled fork (OUT without recent turn sign): single-course only.
+        if len(road_branches) >= 2:
+            road_branches = road_branches[:1]
         fork_active = False
         fork_split_source = ""
+        fork_lane_pairs = []
+        fork_mark_tracks = []
 
     # 흰/노란 차선 센터라인(좌우 경계 중점) → base_link 점열
     white_centerline_points = boundary_to_vehicle_points(
@@ -4089,81 +4966,26 @@ def detect_with_debug(
 
     if VISUALIZE:
         bev = bev_color
-        if window_enabled("lane_control"):
-            white_panel = make_boundary_preview(
-                bev, road_clean, white_left, white_right, "WHITE"
-            )
-            yellow_panel = make_boundary_preview(
+        if window_enabled("Lane drive"):
+            drive = make_drive_preview(
                 bev,
                 road_clean,
-                yellow_left,
-                yellow_right,
-                "YELLOW",
-            )
-            if fork_lane_pairs:
-                pair_debug = LaneDebugFrame(
-                    bev=bev,
-                    road_clean=road_clean,
-                    fork_lane_pairs=tuple(fork_lane_pairs),
-                    fork_split_source=fork_split_source,
-                    road_branches=tuple(road_branches),
-                    ego_road_color=ego_road_color,
-                    fork_active=fork_active,
-                )
-                fork_panel = make_fork_lane_pair_preview(pair_debug, focus="all")
-            else:
-                fork_panel = make_course_cell_preview(
-                    bev, road_cells, road_branches, ego_road_color
-                )
-            target_h = max(
-                white_panel.shape[0], yellow_panel.shape[0], fork_panel.shape[0]
-            )
-
-            def _fit(panel: np.ndarray) -> np.ndarray:
-                if panel.shape[0] == target_h:
-                    return panel
-                scale = target_h / float(panel.shape[0])
-                return cv2.resize(
-                    panel,
-                    (max(1, int(round(panel.shape[1] * scale))), target_h),
-                    interpolation=cv2.INTER_NEAREST,
-                )
-
-            combined = np.hstack(
-                [_fit(white_panel), _fit(yellow_panel), _fit(fork_panel)]
+                white_left=white_left,
+                white_right=white_right,
+                yellow_left=yellow_left,
+                yellow_right=yellow_right,
+                prefer_yellow=prefer_yellow,
+                fork_active=fork_active,
+                fork_lane_pairs=fork_lane_pairs,
+                road_branches=road_branches,
+                road_cells=road_cells,
+                fork_split_source=fork_split_source,
+                ego_road_color=ego_road_color,
             )
             cv2.imshow(
-                "lane_control",
+                "Lane drive",
                 cv2.resize(
-                    combined,
-                    None,
-                    fx=VISUALIZATION_SCALE,
-                    fy=VISUALIZATION_SCALE,
-                    interpolation=cv2.INTER_NEAREST,
-                ),
-            )
-        if window_enabled("road_branches"):
-            branch_preview = make_course_cell_preview(
-                bev, road_cells, road_branches, ego_road_color
-            )
-            cv2.imshow(
-                "road_branches",
-                cv2.resize(
-                    branch_preview,
-                    None,
-                    fx=VISUALIZATION_SCALE,
-                    fy=VISUALIZATION_SCALE,
-                    interpolation=cv2.INTER_NEAREST,
-                ),
-            )
-        if window_enabled("line_fill"):
-            # (가로선 시각화) 행별 가로 커버리지로 찾은 가로 실선을 빨강으로.
-            fill_view = cv2.cvtColor(road_raw, cv2.COLOR_GRAY2BGR)
-            fill_view[crossing_mask > 0] = (0, 0, 255)
-            cv2.imshow(
-                "line_fill",
-                cv2.resize(
-                    fill_view,
+                    drive,
                     None,
                     fx=VISUALIZATION_SCALE,
                     fy=VISUALIZATION_SCALE,
@@ -4182,7 +5004,7 @@ def detect_with_debug(
             white_right=white_right,
             yellow_left=yellow_left,
             yellow_right=yellow_right,
-            yellow_side_debug=yellow_side_debug,
+            yellow_side_debug=None,
         )
 
     boundary_candidates = (
@@ -4522,6 +5344,8 @@ def _tracks_diverge_ahead(tracks: list[np.ndarray]) -> bool:
 def build_fork_lane_pairs_from_tracks(
     tracks: list[np.ndarray],
     mark_mask: np.ndarray | None = None,
+    *,
+    tip_mode: str = "in_curve",
 ) -> list[ForkLanePair]:
     """Group sorted mark tracks into left/right (outer, inner) pairs (P3)."""
 
@@ -4580,13 +5404,14 @@ def build_fork_lane_pairs_from_tracks(
                 left_outer[row] = lo
                 right_outer[row] = ro
                 sep = ro - lo
-                mid = 0.5 * (lo + ro)
                 if sep <= full_w_px * 1.2:
                     left_inner[row] = ro
                     right_inner[row] = lo
                 else:
-                    left_inner[row] = min(lo + full_w_px, mid)
-                    right_inner[row] = max(ro - full_w_px, mid)
+                    # Parallel ±w; allow temporary X if parallel would cross.
+                    # Mid-clamp used to hang a flat shelf across the gore apex.
+                    left_inner[row] = lo + full_w_px
+                    right_inner[row] = ro - full_w_px
         else:
             # Tight pair: observed strands are inners; synthesize outers at full width.
             for row in range(BEV_HEIGHT):
@@ -4633,7 +5458,12 @@ def build_fork_lane_pairs_from_tracks(
     if len(pairs) < 2:
         return []
 
-    pairs = stitch_fork_stem_continuity(pairs, mark_mask=mark_mask)
+    pairs = stitch_fork_stem_continuity(
+        pairs, mark_mask=mark_mask, tip_mode=tip_mode
+    )
+    pairs = finalize_fork_lane_pair_tips(
+        pairs, mark_mask=mark_mask, tip_mode=tip_mode
+    )
 
     # Reject if centers never separate. Stem shares one mid — do NOT use the
     # all-row median (that falsely rejects). Use peak |c0-c1| (and far if any).
@@ -4758,15 +5588,18 @@ def _paint_in_band(
 def stitch_fork_stem_continuity(
     pairs: list[ForkLanePair],
     mark_mask: np.ndarray | None = None,
+    *,
+    tip_mode: str = "in_curve",
 ) -> list[ForkLanePair]:
-    """Parallel-rail (11자) corridors: outer observed, inner = outer±width.
+    """Stem share + fork corridors; fork prefers observed inners over ±w.
 
-    Stem (``sep ≈ lane_width``): both paths share the same mid center and the
-    opposite outer as inner — centers coincide until the fork opens.
-    Fork: each path is an independent 11-rail from its outer. Blend ``t(sep)``
-    is wide so the gore vertex does not pop.
+    Stem (``sep ≈ lane_width``): shared mid / opposite-outer inners.
+    Fork: use observed course/mark inners when present so tips can exit
+    left/right/top with paint (finalize_fork_lane_pair_tips extends further).
 
-    Observed dash inners are only a soft far hint near the parallel rail.
+    ``tip_mode="out_forward"``: stem X → parallel fork with a continuous blend;
+    never snap to apex mid-collapsed paint inners (gore shelf). In-course keeps
+    classic share/X plus observed fork inners after ``fork_t``.
     """
 
     del mark_mask
@@ -4791,6 +5624,8 @@ def stitch_fork_stem_continuity(
     full_w = FORK_PAIR_WIDTH_M / METERS_PER_PIXEL
     half_w = 0.5 * full_w
     far_end = max(1, int(round(BEV_HEIGHT * FORK_FAR_ZONE_RATIO)))
+    out_forward = str(tip_mode or "") == "out_forward"
+    fork_t = 0.55
 
     li = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
     ri = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
@@ -4858,28 +5693,69 @@ def stitch_fork_stem_continuity(
                 np.clip((sep - full_w * 1.05) / max(1.0, 1.15 * full_w), 0.0, 1.0)
             )
 
-        # Inners: stem uses opposite outer; fork uses parallel rail.
+        # Inners / centers. Stem = opposite-outer X (A0); fork = parallel ±w.
         parallel_li = float(o_l) + full_w
         parallel_ri = float(o_r) - full_w
         stem_li = float(o_r)
         stem_ri = float(o_l)
-        li[row] = (1.0 - t) * stem_li + t * parallel_li
-        ri[row] = (1.0 - t) * stem_ri + t * parallel_ri
-
-        # Centers: stem share mid; fork = outer ± half_w. Same t → coincide then split.
         fork_c0 = float(o_l) + half_w
         fork_c1 = float(o_r) - half_w
-        c0[row] = (1.0 - t) * mid + t * fork_c0
-        c1[row] = (1.0 - t) * mid + t * fork_c1
 
-        # Soft far dash hint — only if already near the parallel rail.
-        if row < far_end and t >= 0.45:
+        if out_forward:
+            # Smooth X→parallel only. Apex paint often collapses both inners
+            # onto mid (sep≈0) — snapping to that creates the gore "shelf".
+            li[row] = (1.0 - t) * stem_li + t * parallel_li
+            ri[row] = (1.0 - t) * stem_ri + t * parallel_ri
+            c0[row] = (1.0 - t) * mid + t * fork_c0
+            c1[row] = (1.0 - t) * mid + t * fork_c1
             raw_l = obs_li[row]
             raw_r = obs_ri[row]
-            if not np.isnan(raw_l) and abs(float(raw_l) - parallel_li) <= 0.30 * full_w:
-                li[row] = 0.70 * float(li[row]) + 0.30 * float(raw_l)
-            if not np.isnan(raw_r) and abs(float(raw_r) - parallel_ri) <= 0.30 * full_w:
-                ri[row] = 0.70 * float(ri[row]) + 0.30 * float(raw_r)
+            if (
+                t >= 0.55
+                and not np.isnan(raw_l)
+                and not np.isnan(raw_r)
+                and float(raw_l) < float(raw_r)
+                and (float(raw_r) - float(raw_l)) >= 0.20 * full_w
+            ):
+                li[row] = 0.65 * float(li[row]) + 0.35 * float(raw_l)
+                ri[row] = 0.65 * float(ri[row]) + 0.35 * float(raw_r)
+                c0[row] = (1.0 - t) * mid + t * (
+                    0.5 * (float(o_l) + float(li[row]))
+                )
+                c1[row] = (1.0 - t) * mid + t * (
+                    0.5 * (float(o_r) + float(ri[row]))
+                )
+        elif t >= fork_t:
+            if not np.isnan(obs_li[row]):
+                li[row] = float(obs_li[row])
+            else:
+                li[row] = parallel_li
+            if not np.isnan(obs_ri[row]):
+                ri[row] = float(obs_ri[row])
+            else:
+                ri[row] = parallel_ri
+            c0[row] = 0.5 * (float(o_l) + float(li[row]))
+            c1[row] = 0.5 * (float(o_r) + float(ri[row]))
+        else:
+            li[row] = (1.0 - t) * stem_li + t * parallel_li
+            ri[row] = (1.0 - t) * stem_ri + t * parallel_ri
+            c0[row] = (1.0 - t) * mid + t * fork_c0
+            c1[row] = (1.0 - t) * mid + t * fork_c1
+            if row < far_end and t >= 0.45:
+                raw_l = obs_li[row]
+                raw_r = obs_ri[row]
+                if (
+                    not np.isnan(raw_l)
+                    and abs(float(raw_l) - parallel_li) <= 0.30 * full_w
+                ):
+                    li[row] = 0.70 * float(li[row]) + 0.30 * float(raw_l)
+                if (
+                    not np.isnan(raw_r)
+                    and abs(float(raw_r) - parallel_ri) <= 0.30 * full_w
+                ):
+                    ri[row] = 0.70 * float(ri[row]) + 0.30 * float(raw_r)
+                c0[row] = 0.5 * (float(o_l) + float(li[row]))
+                c1[row] = 0.5 * (float(o_r) + float(ri[row]))
     li = _nan_moving_average(li, window=5)
     ri = _nan_moving_average(ri, window=5)
     c0 = _nan_moving_average(c0, window=5)
@@ -5045,12 +5921,14 @@ def fork_lane_pairs_to_road_branches(
 
 def extract_marking_fork_lane_pairs(
     mark_connected_bev: np.ndarray,
+    *,
+    tip_mode: str = "in_curve",
 ) -> tuple[list[ForkLanePair], list[np.ndarray]]:
     """Track marking polylines and split into left/right fork lane pairs."""
 
     tracks = track_marking_polylines(mark_connected_bev)
     pairs = build_fork_lane_pairs_from_tracks(
-        tracks, mark_mask=mark_connected_bev
+        tracks, mark_mask=mark_connected_bev, tip_mode=tip_mode
     )
     return pairs, tracks
 
@@ -5086,7 +5964,6 @@ def extract_road_split_fork_lane_pairs(
     right_outer = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
 
     snap_px = max(4.0, 0.10 / METERS_PER_PIXEL)
-    full_w = FORK_PAIR_WIDTH_M / METERS_PER_PIXEL
 
     def _snap_edges(row: int, lo: float, li: float, ri: float, ro: float):
         if mark_mask is None or mark_mask.shape != road_clean.shape:
@@ -5148,16 +6025,19 @@ def extract_road_split_fork_lane_pairs(
         seg = min(segs, key=lambda s: abs(segment_center(s) - ref))
         lo, ro = float(seg[0]), float(seg[1])
         lo, _, _, ro = _snap_edges(row, lo, 0.5 * (lo + ro), 0.5 * (lo + ro), ro)
-        # Stem: left path right-edge = stem right; right path left-edge = stem left.
         left_outer[row] = lo
         right_outer[row] = ro
+        # Stem inners: opposite-outer share (classic 11자 X / A0). Stitch
+        # out_forward then blends X→parallel so the gore does not flatten.
         left_inner[row] = ro
         right_inner[row] = lo
         stem_lo, stem_ro = lo, ro
 
     # Width-parallel cleanup on all filled rows (also uncrosses bad inners).
     tracks = [left_outer, left_inner, right_inner, right_outer]
-    pairs = build_fork_lane_pairs_from_tracks(tracks, mark_mask=mark_mask)
+    pairs = build_fork_lane_pairs_from_tracks(
+        tracks, mark_mask=mark_mask, tip_mode="out_forward"
+    )
     if len(pairs) < 2:
         pairs = []
         for rank, side, outer, inner in (
@@ -5183,7 +6063,12 @@ def extract_road_split_fork_lane_pairs(
             )
         if len(pairs) < 2:
             return [], tracks
-        pairs = stitch_fork_stem_continuity(pairs, mark_mask=mark_mask)
+        pairs = stitch_fork_stem_continuity(
+            pairs, mark_mask=mark_mask, tip_mode="out_forward"
+        )
+        pairs = finalize_fork_lane_pair_tips(
+            pairs, mark_mask=mark_mask, tip_mode="out_forward"
+        )
         pairs = refine_fork_lane_pairs(pairs, mark_mask=mark_mask)
         c0, c1 = pairs[0].center_u, pairs[1].center_u
         far_end_i = max(1, int(round(BEV_HEIGHT * FORK_FAR_ZONE_RATIO)))
@@ -5267,7 +6152,9 @@ def select_course_fork_pairs(
 
     def try_white_then_split() -> None:
         nonlocal pairs, tracks, branches, mark_color
-        wp, wt = extract_marking_fork_lane_pairs(white_dash_connected_bev)
+        wp, wt = extract_marking_fork_lane_pairs(
+            white_dash_connected_bev, tip_mode="out_forward"
+        )
         take(wp, wt, "white")
         if mark_color == "white" and len(tracks) <= 2 and len(branches) >= 2:
             rp, rt = extract_road_split_fork_lane_pairs(
@@ -5286,7 +6173,12 @@ def select_course_fork_pairs(
         if len(branches) < 2:
             take(
                 fork_lane_pairs_from_dual_courses(
-                    white_left, white_right, white_alt_left, white_alt_right
+                    white_left,
+                    white_right,
+                    white_alt_left,
+                    white_alt_right,
+                    mark_mask=white_dash_connected_bev,
+                    tip_mode="out_forward",
                 ),
                 [],
                 "white_alt",
@@ -5295,12 +6187,19 @@ def select_course_fork_pairs(
     if prefer_yellow is True:
         if not take(
             fork_lane_pairs_from_dual_courses(
-                yellow_left, yellow_right, yellow_alt_left, yellow_alt_right
+                yellow_left,
+                yellow_right,
+                yellow_alt_left,
+                yellow_alt_right,
+                mark_mask=yellow_boundary_bev,
+                tip_mode="in_curve",
             ),
             [],
             "yellow_alt",
         ):
-            yp, yt = extract_marking_fork_lane_pairs(yellow_boundary_bev)
+            yp, yt = extract_marking_fork_lane_pairs(
+                yellow_boundary_bev, tip_mode="in_curve"
+            )
             take(yp, yt, "yellow")
         if len(branches) < 2:
             try_white_then_split()
@@ -5315,12 +6214,19 @@ def select_course_fork_pairs(
     # Legacy None: try yellow then white; ego gate decides in caller.
     if not take(
         fork_lane_pairs_from_dual_courses(
-            yellow_left, yellow_right, yellow_alt_left, yellow_alt_right
+            yellow_left,
+            yellow_right,
+            yellow_alt_left,
+            yellow_alt_right,
+            mark_mask=yellow_boundary_bev,
+            tip_mode="in_curve",
         ),
         [],
         "yellow_alt",
     ):
-        yp, yt = extract_marking_fork_lane_pairs(yellow_boundary_bev)
+        yp, yt = extract_marking_fork_lane_pairs(
+            yellow_boundary_bev, tip_mode="in_curve"
+        )
         take(yp, yt, "yellow")
     if len(branches) < 2:
         try_white_then_split()
@@ -5342,6 +6248,8 @@ def fork_lane_pairs_from_dual_courses(
     alt_right: np.ndarray,
     *,
     min_valid_rows: int | None = None,
+    mark_mask: np.ndarray | None = None,
+    tip_mode: str = "in_curve",
 ) -> list[ForkLanePair]:
     """주+보조 경계 코스 → 좌/우 ``ForkLanePair`` (갈래 2개).
 
@@ -5421,10 +6329,14 @@ def fork_lane_pairs_from_dual_courses(
                 confidence=float(np.clip(valid / float(BEV_HEIGHT), 0.0, 1.0)),
             )
         )
-    pairs = stitch_fork_stem_continuity(pairs, mark_mask=None)
-    pairs = refine_fork_lane_pairs(pairs, mark_mask=None)
+    pairs = stitch_fork_stem_continuity(
+        pairs, mark_mask=mark_mask, tip_mode=tip_mode
+    )
+    pairs = finalize_fork_lane_pair_tips(
+        pairs, mark_mask=mark_mask, tip_mode=tip_mode
+    )
+    pairs = refine_fork_lane_pairs(pairs, mark_mask=mark_mask)
     return pairs if len(pairs) >= 2 else []
-
 
 def find_drivable_segments(row: np.ndarray) -> list[tuple[int, int]]:
     """한 BEV 행에서 최소 폭을 만족하는 주행 가능 구간을 찾는다."""
@@ -6572,14 +7484,15 @@ def make_fork_lane_pair_preview(
     elif focus == "right":
         pairs = [p for p in pairs if int(p.lateral_rank) == 1]
 
-    # BGR: left outer/inner/center, right outer/inner/center
+    # BGR palette — must match the legend string below exactly.
+    # L: red / orange / cyan    R: blue / sky / yellow
     palette = {
-        (0, "outer"): (0, 0, 255),
-        (0, "inner"): (0, 128, 255),
-        (0, "center"): (0, 255, 255),
-        (1, "outer"): (255, 0, 0),
-        (1, "inner"): (255, 128, 0),
-        (1, "center"): (255, 255, 0),
+        (0, "outer"): (0, 0, 255),        # red
+        (0, "inner"): (0, 140, 255),      # orange
+        (0, "center"): (255, 255, 0),     # cyan (was wrongly yellow)
+        (1, "outer"): (255, 64, 0),       # blue
+        (1, "inner"): (255, 200, 80),     # sky (brighter light-blue)
+        (1, "center"): (0, 255, 255),     # yellow (was wrongly cyan)
     }
 
     for pair in pairs:
@@ -6596,7 +7509,7 @@ def make_fork_lane_pair_preview(
         # Label near the nearest valid center sample.
         pts = _boundary_u_to_vehicle_points(pair.center_u)
         if len(pts) >= 1:
-            tag = f"L{rank}"
+            tag = f"L{rank}" if rank == 0 else f"R{rank}"
             miss = []
             if pair.outer_missing:
                 miss.append("out?")
@@ -6608,13 +7521,15 @@ def make_fork_lane_pair_preview(
                 preview, pts[:2] if len(pts) >= 2 else pts, palette[(rank, "center")], tag
             )
 
-    # Also draw planner branches (thin) when source differs.
+    # Planner branches: use mute magenta/white so they are not confused with
+    # pair center cyan/yellow (BRANCH_COLORS reused cyan before).
+    branch_mute = ((180, 0, 180), (200, 200, 200), (160, 80, 160), (170, 170, 170))
     for branch in debug.road_branches:
         if focus == "left" and int(branch.lateral_rank) != 0:
             continue
         if focus == "right" and int(branch.lateral_rank) != 1:
             continue
-        color = BRANCH_COLORS[int(branch.lateral_rank) % len(BRANCH_COLORS)]
+        color = branch_mute[int(branch.lateral_rank) % len(branch_mute)]
         draw_vehicle_polyline(
             preview,
             branch.points[:, :2],
@@ -6640,7 +7555,7 @@ def make_fork_lane_pair_preview(
     )
     cv2.putText(
         preview,
-        "L: red/orange/cyan=out/in/ctr   R: blue/sky/yellow=out/in/ctr",
+        "L out/in/ctr: red / orange / cyan    R out/in/ctr: blue / sky / yellow",
         (4, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.33,

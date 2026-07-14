@@ -48,6 +48,7 @@ class PathSource(str, Enum):
     YELLOW_CENTERLINE = 'yellow_centerline'
     LEFT_BRANCH = 'left_branch'
     RIGHT_BRANCH = 'right_branch'
+    MASK_DRIVABLE = 'mask_drivable'
     HOLD_PREVIOUS = 'hold_previous'
     STOP = 'stop'
 

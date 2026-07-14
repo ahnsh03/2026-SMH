@@ -19,8 +19,9 @@
 |------|------|
 | 인지/제어 | `inference_node` → `MainPlanner` → `/control`; `/perception/lane`은 검증용 |
 | BEV 런타임 | **Metric IPM** (`lane_vision.yaml`) — 사다리꼴은 참고 툴만 |
-| `VISUALIZE` | 기본 **off** (`LANE_VISUALIZE=control\|on`) |
-| 주행 조향 | `MainPlanner` PP + heading + CTE |
+| `VISUALIZE` | 기본 **off** · `LANE_VISUALIZE=control`→`Lane drive` 1창 · `on`→+`HSV masks` |
+| 주행 조향 | `MainPlanner` PP **또는** `mask_p`(코리도+갈림 가드) — [main-planner.md](./main-planner.md) |
+| OUT 갈림 인지 | **표지 시에만** `enable_fork` — 평소 흰 추종 |
 | 차선 인지 담당 | **안승현(임시)** / 장원태 — 갈림길·곡선·한쪽선 L/R |
 | 레거시 | `lane_control_node` · `lane_planner.py` — **실행 금지** |
 

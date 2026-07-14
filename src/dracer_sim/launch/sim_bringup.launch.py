@@ -347,19 +347,19 @@ def generate_launch_description():
     ),
     DeclareLaunchArgument(
       'view',
-      default_value='none',
+      default_value='both',
       choices=['none', 'cam', 'bev', 'both'],
       description=(
-        'OpenCV windows: none (기본, 갈림 실험 권장) | '
-        'cam=카메라 | bev=BEV | both. use_camera_view/use_bev_view보다 우선.'
+        'OpenCV windows: both=카메라+BEV (기본) | '
+        'none | cam | bev. use_camera_view/use_bev_view보다 우선.'
       ),
     ),
     DeclareLaunchArgument(
-      'use_camera_view', default_value='false',
+      'use_camera_view', default_value='true',
       description='OpenCV 카메라 프리뷰 (view:= 없을 때만; 보통 view:= 사용)',
     ),
     DeclareLaunchArgument(
-      'use_bev_view', default_value='false',
+      'use_bev_view', default_value='true',
       description='Metric IPM BEV 프리뷰 (view:= 없을 때만)',
     ),
     DeclareLaunchArgument(

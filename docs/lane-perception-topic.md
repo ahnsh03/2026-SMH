@@ -322,12 +322,14 @@ LANE_VISUALIZE=on ros2 launch dracer_sim sim_auto_driving.launch.py
 | 값 | 의미 |
 |----|------|
 | `off` / 미설정 | 창 없음 (기본) |
-| `control` | 주행 확인 **통합 1창** `lane_control` (흰|노란|갈래) |
-| `on` / `all` | HSV·보간 등 디버그 창 전부 (비권장) |
+| `control` | 주행 확인 **1창** `Lane drive` (흰/노란 코스 + road; 갈림은 fork 활성 때만 우측 오버레이) |
+| `on` / `all` | `Lane drive` + `HSV masks` 2창 (구 개별 HSV/보간/`road_branches` 창은 제거) |
 
-시뮬 권장: bringup `view:=none` + sim-auto `viz:=lane` ([dev-environment.md](./dev-environment.md)).
+**용어:** 면적 코리도 중심선 = `build_road_branches_cells` → `RoadBranch`(폴백).  
+갈림 SSOT = 마킹 `ForkLanePair` → `RoadBranch`. 상시 “lane branch” 패널은 두지 않는다.
+
+시뮬 권장: bringup `view:=both`(카메라+BEV) 또는 fork만 `view:=none` + sim-auto `viz:=lane`.  
 `LANE_VISUALIZE=control|on`은 `viz:=debug|all`과 동급 (inference 자체 창).
-| `on` / `1` | 전체 창 |
 
 보드/SSH에서는 **켜지 마세요** (OpenCV 창·성능). 순차 검증은 **§6.2**.
 
