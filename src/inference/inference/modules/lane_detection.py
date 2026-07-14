@@ -553,6 +553,38 @@ MIN_COURSE_RUN_ROWS = int(
     )
 )
 
+# 시각화용 ALT 경로 검증 (WonTae salvage). 직선·잡음에서 두 번째 경로가
+# 뜨지 않게 관측 길이와 주 경로 대비 횡분리 비율을 요구한다.
+ALT_DUPLICATE_CENTER_TOLERANCE_M = 0.08
+ALT_DUPLICATE_MARKING_TOLERANCE_M = 0.04
+ALT_MIN_OBSERVED_LENGTH_M = 0.12
+ALT_MIN_ROW_SPAN_M = 0.15
+ALT_MIN_CENTER_SEPARATION_M = 0.12
+ALT_MIN_SEPARATED_LENGTH_M = 0.08
+ALT_MIN_SEPARATED_RATIO = 0.25
+
+ALT_DUPLICATE_CENTER_TOLERANCE_PX = (
+    ALT_DUPLICATE_CENTER_TOLERANCE_M / METERS_PER_PIXEL
+)
+ALT_DUPLICATE_MARKING_TOLERANCE_PX = (
+    ALT_DUPLICATE_MARKING_TOLERANCE_M / METERS_PER_PIXEL
+)
+ALT_MIN_OBSERVED_ROWS = max(
+    MIN_COURSE_RUN_ROWS,
+    int(round(ALT_MIN_OBSERVED_LENGTH_M / METERS_PER_PIXEL)),
+)
+ALT_MIN_ROW_SPAN_ROWS = max(
+    ALT_MIN_OBSERVED_ROWS,
+    int(round(ALT_MIN_ROW_SPAN_M / METERS_PER_PIXEL)),
+)
+ALT_MIN_CENTER_SEPARATION_PX = (
+    ALT_MIN_CENTER_SEPARATION_M / METERS_PER_PIXEL
+)
+ALT_MIN_SEPARATED_ROWS = max(
+    2,
+    int(round(ALT_MIN_SEPARATED_LENGTH_M / METERS_PER_PIXEL)),
+)
+
 # 노란색 인코스 후보는 흰색 경로보다 오른쪽이어야 함
 INNER_REFERENCE_MARGIN_M = 0.01
 
@@ -1826,6 +1858,50 @@ def _track_boundary_path_once(
     if opposite_by_row is None and opposite_line_mask is not None:
         opposite_by_row = find_line_segments_by_row(opposite_line_mask)
 
+    primary_center = None
+    primary_left_marking = None
+    primary_right_marking = None
+    if excluded_left is not None and excluded_right is not None:
+        primary_center = _dense_boundary_reference(
+            (excluded_left + excluded_right) / 2.0
+        )
+        primary_left_marking = _dense_boundary_reference(excluded_left)
+        primary_right_marking = _dense_boundary_reference(excluded_right)
+
+    def is_duplicate_of_primary(
+        v: int,
+        left_u: float,
+        right_u: float,
+        source: int,
+    ) -> bool:
+        if primary_center is None:
+            return False
+        center = (left_u + right_u) / 2.0
+        if (
+            not np.isnan(primary_center[v])
+            and abs(center - primary_center[v])
+            <= ALT_DUPLICATE_CENTER_TOLERANCE_PX
+        ):
+            return True
+
+        # 같은 물리적 선을 LEFT/RIGHT로 다르게 해석한 후보도 중복으로 본다.
+        observed_markings: list[float] = []
+        if source in (BOUNDARY_SOURCE_PAIR, BOUNDARY_SOURCE_LEFT):
+            observed_markings.append(left_u)
+        if source in (BOUNDARY_SOURCE_PAIR, BOUNDARY_SOURCE_RIGHT):
+            observed_markings.append(right_u)
+        primary_markings = (
+            primary_left_marking[v],
+            primary_right_marking[v],
+        )
+        return any(
+            not np.isnan(primary_marking)
+            and abs(marking - primary_marking)
+            <= ALT_DUPLICATE_MARKING_TOLERANCE_PX
+            for marking in observed_markings
+            for primary_marking in primary_markings
+        )
+
     for v in range(height - 1, -1, -1):
         segments = segments_by_row[v]
         if not segments:
@@ -1857,20 +1933,15 @@ def _track_boundary_path_once(
             side_debug,
             None if road_segments_by_row is None else road_segments_by_row[v],
         )
-        if (
-            excluded_left is not None
-            and excluded_right is not None
-            and not np.isnan(excluded_left[v])
-            and not np.isnan(excluded_right[v])
-        ):
+        if primary_center is not None:
             row_candidates = [
                 candidate
                 for candidate in row_candidates
-                if not (
-                    abs(candidate[0] - excluded_left[v])
-                    <= ROAD_WIDTH_TOLERANCE_PX
-                    and abs(candidate[1] - excluded_right[v])
-                    <= ROAD_WIDTH_TOLERANCE_PX
+                if not is_duplicate_of_primary(
+                    v,
+                    candidate[0],
+                    candidate[1],
+                    candidate[3],
                 )
             ]
         if row_candidates:
@@ -2535,6 +2606,68 @@ def interpolate_yellow_boundary_pair(
     return left, right
 
 
+
+def _dense_boundary_reference(
+    values: np.ndarray,
+    observed: np.ndarray | None = None,
+) -> np.ndarray:
+    """관측 범위 안의 빈 행을 선형 보간해 경로 비교용 기준을 만든다."""
+
+    valid = ~np.isnan(values)
+    if observed is not None:
+        valid &= observed
+    rows = np.flatnonzero(valid)
+    dense = np.full_like(values, np.nan, dtype=np.float32)
+    if rows.size == 0:
+        return dense
+    if rows.size == 1:
+        dense[rows[0]] = values[rows[0]]
+        return dense
+
+    span = np.arange(int(rows[0]), int(rows[-1]) + 1)
+    dense[span] = np.interp(span, rows, values[rows]).astype(np.float32)
+    return dense
+
+
+def alternate_boundary_path_is_valid(
+    primary_left: np.ndarray,
+    primary_right: np.ndarray,
+    alt_left: np.ndarray,
+    alt_right: np.ndarray,
+    alt_left_observed: np.ndarray,
+    alt_right_observed: np.ndarray,
+) -> bool:
+    """ALT가 충분히 길고 주 경로에서 실제로 갈라지는지 확인한다."""
+
+    alt_observed = (
+        ~np.isnan(alt_left)
+        & ~np.isnan(alt_right)
+        & (alt_left_observed | alt_right_observed)
+    )
+    alt_rows = np.flatnonzero(alt_observed)
+    if alt_rows.size < ALT_MIN_OBSERVED_ROWS:
+        return False
+    if int(alt_rows[-1] - alt_rows[0] + 1) < ALT_MIN_ROW_SPAN_ROWS:
+        return False
+
+    primary_center = _dense_boundary_reference(
+        (primary_left + primary_right) / 2.0
+    )
+    alt_center = (alt_left + alt_right) / 2.0
+    comparable = alt_observed & ~np.isnan(primary_center)
+    comparable_count = int(np.count_nonzero(comparable))
+    if comparable_count < ALT_MIN_SEPARATED_ROWS:
+        return False
+
+    separated = comparable & (
+        np.abs(alt_center - primary_center) >= ALT_MIN_CENTER_SEPARATION_PX
+    )
+    separated_count = int(np.count_nonzero(separated))
+    if separated_count < ALT_MIN_SEPARATED_ROWS:
+        return False
+    return separated_count / comparable_count >= ALT_MIN_SEPARATED_RATIO
+
+
 def build_global_boundary_course(
     boundary_mask: np.ndarray,
     raw_road_mask: np.ndarray,
@@ -2572,8 +2705,8 @@ def build_global_boundary_course(
         right_observed,
         alt_raw_left,
         alt_raw_right,
-        _alt_left_observed,
-        _alt_right_observed,
+        alt_left_observed,
+        alt_right_observed,
     ) = track_boundary_path(
         boundary_mask,
         raw_road_mask,
@@ -2618,7 +2751,14 @@ def build_global_boundary_course(
 
     alt_interpolated_left = np.full_like(raw_left, np.nan)
     alt_interpolated_right = np.full_like(raw_right, np.nan)
-    if find_alternate:
+    if find_alternate and alternate_boundary_path_is_valid(
+        raw_left,
+        raw_right,
+        alt_raw_left,
+        alt_raw_right,
+        alt_left_observed,
+        alt_right_observed,
+    ):
         if use_yellow_gap_limit:
             alt_interpolated_left, alt_interpolated_right = (
                 interpolate_yellow_boundary_pair(alt_raw_left, alt_raw_right)
@@ -3731,7 +3871,24 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
     # 직전 프레임에서 확정한 ego 코스 색. 그 코스의 차로만 차량을 품어야 한다.
     # (흰 도로를 달리는 중이면 노란 코스는 '옆 도로'이므로 품을 이유가 없다.)
     ego_course = last_ego_course_color
-    find_alternate = VISUALIZE_MODE in (VISUALIZE_CONTROL, VISUALIZE_ON)
+
+    # 갈림길 분기 경로(판단제어 출력용): 차선을 도로에서 빼내 코스별 셀로
+    # 자른 뒤, 차량이 있는 셀을 행 간 겹침으로 연결 추적한다. 현재 코스와
+    # 같은 색 경계로 갈라질 때만 분기로 본다(흰 도로 주행 중 노란 인코스는
+    # 분기가 아니다). 갈림길이 아니면 단일 경로 1개다.
+    # 노란선은 점선이므로 연결 처리한 yellow_boundary_bev를 커터로 쓴다.
+    # 흰/노란 가로 마킹은 둘 다 제거한 마스크를 쓴다(도로를 끊으면 안 된다).
+    # ALT 시각화는 실제 fork가 확인된 프레임에서만 켠다.
+    road_branches, road_cells, ego_road_color = build_road_branches_cells(
+        road_clean,
+        white_cut_bev,
+        yellow_boundary_bev,
+    )
+    fork_active = len(road_branches) >= 2
+    find_alternate = (
+        fork_active
+        and VISUALIZE_MODE in (VISUALIZE_CONTROL, VISUALIZE_ON)
+    )
 
     (
         white_left_observed,
@@ -3849,19 +4006,6 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
     )
 
     yellow_is_detected = update_yellow_flag(yellow_observed_rows)
-
-    # 갈림길 분기 경로(판단제어 출력용): 차선을 도로에서 빼내 코스별 셀로
-    # 자른 뒤, 차량이 있는 셀을 행 간 겹침으로 연결 추적한다. 현재 코스와
-    # 같은 색 경계로 갈라질 때만 분기로 본다(흰 도로 주행 중 노란 인코스는
-    # 분기가 아니다). 갈림길이 아니면 단일 경로 1개다.
-    # 노란선은 점선이므로 연결 처리한 yellow_boundary_bev를 커터로 쓴다.
-    # 흰/노란 가로 마킹은 둘 다 제거한 마스크를 쓴다(도로를 끊으면 안 된다).
-    road_branches, road_cells, ego_road_color = build_road_branches_cells(
-        road_clean,
-        white_cut_bev,
-        yellow_boundary_bev,
-    )
-    fork_active = len(road_branches) >= 2
 
     # 흰/노란 차선 센터라인(좌우 경계 중점) → base_link 점열
     white_centerline_points = boundary_to_vehicle_points(
