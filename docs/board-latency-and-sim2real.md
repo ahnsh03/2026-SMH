@@ -1,5 +1,9 @@
 # 보드 지연 · 연산 과부하 · 시뮬↔실차 괴리 (2026-07-11 실측)
 
+> **현재 main (2026-07-15):** 제어는 `MainPlanner` 인프로세스 (`tracker.normal: mask_p`,
+> 시뮬 `cruise_throttle: 0.33`, 실차 `planner_profile: real`).  
+> 아래 Hz·ms 수치는 **07-11 보드 실측**이며 병목 진단용이다. YAML 숫자는 그 이후 갱신됐을 수 있다.
+
 D3-G 보드(aarch64 4코어 / 7GB / ROS 2 Humble)에서 노드 수신 지연을 계측하고,
 연산 과부하 지점과 시뮬레이션 전제가 실차에서 깨지는 지점을 정리한다.
 **측정값은 전부 이 보드에서 실제로 잰 것이고, 추정치는 추정이라고 표시했다.**
@@ -90,8 +94,12 @@ yellow_dash_points_bev = (
 
 ### 3.2 구독자 0인 토픽에 매 프레임 대용량 메시지를 만든다
 
-`/perception/lane`의 유일한 소비자 `lane_control_node`는 **어떤 런치 파일에도 없다** (구독자 0).
-그럼에도 `inference_node.publish_lane_detections`가 매 프레임:
+`/perception/lane`는 **검증·기록용**이다. 런타임 제어는 `inference_node` 안의 **MainPlanner**가
+인프로세스로 인지 결과를 받으며, 이 토픽을 구독해 조향하지 않는다.
+레거시 `lane_control_node`는 **어떤 auto 런치에도 없고** (구독자 0이 정상),
+`/control`을 MainPlanner와 나누면 충돌한다.
+
+그럼에도 `inference_node.publish_lane_detections`가 매 프레임 (2026-07-11 측정 시점):
 
 - `_to_point32_list`(`inference_node.py:38`)로 rclpy `Point32` 객체를 **1,000~2,500개** 생성
   (경계당 최대 `BEV_HEIGHT`=321점 × 최대 4개 + 중심선 + 갈래). rosidl 생성 메시지의
@@ -372,7 +380,8 @@ fy = fx
 
 시뮬(`control_mapping.py:35`)은 `linear = clip(throttle) * max_linear_speed`이고
 Gazebo ackermann 플러그인이 이를 **완벽한 제어기가 붙은 속도 지령**으로 처리한다.
-`cruise_throttle: 0.17` → 정확히 **0.204 m/s**, 즉시, 모터 데드밴드도 관성도 슬립도 배터리 새그도 없이.
+당시 YAML의 `cruise_throttle: 0.17` → 정확히 **0.204 m/s**, 즉시, 모터 데드밴드도 관성도 슬립도 배터리 새그도 없이.
+**(2026-07-15 시뮬 잠정 베이스는 `cruise_throttle: 0.33` — 동일 비율로 스케일.)**
 
 실차(`d3racer.py:61-73`, `EscCalib(neutral_us=1500, fwd_us=2000)`)는
 throttle 0.17 → **1585 µs**, 중립보다 **겨우 85 µs 위**다. **대부분의 ESC 데드밴드 안이다.**
@@ -500,7 +509,7 @@ DDS가 무선을 아예 타지 않아 전파 상태와 무관해진다.
 5. **`_step_dt` 클립 0.25 → 0.6+** (5.2)
 6. **노출·WB 고정 후 실차 영상으로 HSV 재튜닝**, `yellow.h_min` 0 → 15. (5.5)
 7. **카메라 소스 캡스 1920×1080 고정** — 4:3 찌그러짐 재발 방지. (5.6)
-8. **ESC 데드밴드 측정** — `cruise_throttle: 0.17`로 차가 실제로 움직이는지. (5.7)
+8. **ESC 데드밴드 측정** — 실차에서 `cruise_throttle`을 올려 가며 차가 실제로 움직이는지. (진단 예시 0.17 → 현재 시뮬 베이스 0.33) (5.7)
 9. **BEV 해상도 확정** — 새 bag 녹화 후 `bench_bev_resolution.py`로 결정. (4)
 
 1·3·5는 동작 변화가 거의 없는 값싼 수정이고, 2·4는 실차 주행 품질을 좌우한다.

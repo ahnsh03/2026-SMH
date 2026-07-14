@@ -2,7 +2,7 @@
 
 > **PC(WSL) 전체 프로젝트** (`…/2026-seame-hackathon/2026-SMH` 형태)를 쓰는 경우에만: 동일 내용이 [`../../docs/competition/대회정보.md`](../../docs/competition/대회정보.md)에 있습니다. 수정 시 두 파일을 동기화하세요. **D3-G 보드 단독 clone**에서는 이 파일이 SSOT입니다.
 
-> 마지막 업데이트: 2026-07-10  
+> 마지막 업데이트: 2026-07-15  
 > Notion: [2026 SEA:ME 해커톤](https://app.notion.com/p/55e1b0cdce9b8292a19d81c5b1605983)
 
 ---

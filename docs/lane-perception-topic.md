@@ -140,7 +140,7 @@ Launch: `sim_bringup.launch.py` (또는 `sim_auto_driving`이 이를 include).
 | `sim_control_bridge` | 필수 | `/control` → `/cmd_vel` (실차 `control_node` 대용) |
 | `sim_camera_republish` | 필수 | 시뮬 카메라 → D-Racer와 같은 `/camera/image/compressed` |
 | `sim_battery_stub` | 권장 | 배터리 토픽 스텁 |
-| `sim_camera_preview` | 선택 | OpenCV 창 — bringup **`view:=none` 기본 OFF** (`view:=cam`으로 켬) |
+| `sim_camera_preview` | 선택 | OpenCV 창 — bringup **`view:=both` 기본 ON** (fork만 `view:=none`) |
 | `monitor_node` | **불필요(기본 OFF)** | 아래 §2.5 |
 
 실차 하드웨어 노드(`camera_node`, `control_node`, `battery_node`)를  

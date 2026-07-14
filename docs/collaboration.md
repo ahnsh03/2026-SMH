@@ -13,7 +13,7 @@
 |------|------|
 | **`main` 직접 push 금지** | 안정 브랜치는 **Pull Request merge로만** 반영 |
 | **브랜치에서만 개발** | `main`에서 바로 코딩하지 않음 — 반드시 feature 브랜치 생성 |
-| **작은 PR** | 한 PR = 한 기능 또는 한 버그 수정 (담당 모듈 단위) |
+| **작은 PR** | 한 PR = 한 기능 또는 한 버그 수정 (담당 영역 단위). 통합·문서 SSOT는 팀장 협의 예외 |
 | **merge 후 정리** | merge 완료 후 로컬 feature 브랜치 삭제, `main` pull |
 | **보드는 `main`만** | D3-G 배포·주행 테스트는 merge된 `main`만 사용 |
 
@@ -93,7 +93,7 @@ PR은 GitHub 웹에서 생성해도 됩니다. merge 권한은 **팀장**이 수
 | 장원정 | `feature/wonjung-traffic` |
 | 안승현 | `feature/seunghyun-aruco-detect` |
 | 박성준 | `feature/sungjun-aruco-stop` |
-| 양서준 | `feature/seojun-roundabout` |
+| 양서준 | `feature/seojun-planner` (MainPlanner·게인) |
 
 **비권장**
 

@@ -43,17 +43,15 @@ sudo apt install ros-humble-gazebo-ros-pkgs ros-humble-robot-state-publisher
 # 컨테이너 생성 (호스트)
 docker compose run -d --name 2026-smh-sim sim sleep infinity
 
-# 터미널 1 — 시뮬 (컨테이너 안)
+# 팀 표준 (호스트)
+./scripts/dev_container.sh sim-bringup          # 기본 view:=both
+./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane
+
+# 직접 명령 (컨테이너 안) — 상세: simulation-setup.md §4.8
 docker exec -it 2026-smh-sim bash
 source /opt/ros/humble/setup.bash && source install/setup.bash
 ros2 launch dracer_sim sim_bringup.launch.py
-
-# 터미널 2 — inference (컨테이너 안, 별도 셸)
-docker exec -it 2026-smh-sim bash
-source /opt/ros/humble/setup.bash && source install/setup.bash
-ros2 run inference inference_node --ros-args -p use_sim_time:=true
-
-# 또는 스크립트: ./scripts/dev_container.sh sim-bringup
+# 다른 셸: ros2 launch dracer_sim sim_auto_stack.launch.py route_mode:=out viz:=lane
 ```
 
 `init_workspace.sh` + colcon은 Docker 없이 22.04 네이티브에서도 가능하지만, **팀 표준은 dev_container.sh** 입니다.
@@ -63,9 +61,10 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 - 텍스처: `models/track_plane/materials/textures/track_cw_real.png` (팀 CW 트랙)
 - **실제 크기**: 이미지 가로 전체 **12.0 m**, 세로 **8.9975 m** (1211×908 px 비율)
 - 스폰 기본값: `spawn_pose:=start` — 미션 프리셋은 `config/spawn_poses.yaml`
-- OpenCV 창: bringup 기본 **`view:=none`** (카메라/BEV OFF). `view:=cam|bev|both`로 켬
+- OpenCV 창: bringup 기본 **`view:=both`** (카메라+BEV). fork 실험만 `view:=none`
 - 자율 인지 창: `sim-auto` 기본 **`viz:=lane`** — [docs/dev-environment.md](../../docs/dev-environment.md)
 - 코스 색: Out=흰만 · In=노란 우선 — [docs/lane-occlusion-fork-strategy.md](../../docs/lane-occlusion-fork-strategy.md) §0
+- 제어: MainPlanner (`planner_profile:=sim`) · [docs/main-planner.md](../../docs/main-planner.md)
 
 ### 미션 표지판 (갈림길 · ArUco)
 

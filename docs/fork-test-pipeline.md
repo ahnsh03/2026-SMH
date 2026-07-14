@@ -80,10 +80,10 @@
 |----|------|------------|-------|-------------|-----|-----------|----------|
 | **S0** | 출발·직선 | `start` | `out` | — | `off` 또는 `lane` | fork=0 | — |
 | **S1** | In/Out 코스 선택 | `inout_fork` | `in`/`out` | — | `lane` | fork=0 | — |
-| **O1** | Out 갈림 · 강제/표지 창 | `out_fork` | `out` | `left` 또는 실표지 | `lane` | **fork_on=1**, fork=1, br=2 | — |
-| **O1b** | Out 평상 게이트 | 흰 직선·합류 전 | `out` | — | `lane` | **fork_on=0** | — |
-| **O2** | Out 갈림 LEFT | `out_fork` | `out` | `left` | `lane` | rank **0** 잠금 | `out_left` |
-| **O3** | Out 갈림 RIGHT | `out_fork` | `out` | `right` | `lane` | rank **1** 잠금 | `out_right` |
+| **O1** | Out 갈림 · 표지 hold 또는 YAML arms | `out_fork` | `out` | 실표지 또는 `left`+YAML | `lane` | **fork_on=1**, fork=1, br=2 | — |
+| **O1b** | Out 평상 게이트 | 흰 직선·합류 전 | `out` | — 또는 `left`(기본 YAML) | `lane` | **fork_on=0** | — |
+| **O2** | Out 갈림 LEFT | `out_fork` | `out` | `left` + 표지/YAML arms | `lane` | rank **0** 잠금 | `out_left` |
+| **O3** | Out 갈림 RIGHT | `out_fork` | `out` | `right` + 표지/YAML arms | `lane` | rank **1** 잠금 | `out_right` |
 | **O4** | Out 합류 무시 | `out_fork_merge_left` | `out` | — | `lane` | **fork=0** | (수동) |
 | **O5** | Out 합류 무시 | `out_fork_merge_right` | `out` | — | `lane` | **fork=0** | (수동) |
 | **I1** | In 진입(흰) | `in_roundabout_entry` | `in` | — | `lane` | fork=0, white path | — |
@@ -121,20 +121,22 @@
 ```bash
 ./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork view:=none
 
-# O1b 평상 게이트 (forced 없음 → fork_on=0 기대)
+# O1b 평상 게이트 (forced 유무와 무관 — 기본 YAML → fork_on=0)
 ./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane
-
-# O1/O2 LEFT (forced → fork_on=1, rank 0)
 ./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=left viz:=lane
+# ↑ forced_turn은 rank만 고정. fork_on은 여전히 0 (out_fork_forced_turn_arms: false)
 
-# O3 RIGHT
-./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=right viz:=lane
+# O1/O2/O3 — 표지 없이 fork 켜려면 YAML 임시 변경 후 sim-auto 재시작:
+#   config/main_planner.yaml → route.out_fork_forced_turn_arms: true
+./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=left viz:=lane   # rank 0
+./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=right viz:=lane  # rank 1
+# 또는 실표지 코스: forced 없이 표지 관측 → hold 동안 fork_on=1
 ```
 
 **합격**
 
-- O1b: `fork_on=0` (실표지 없으면 갈림 패널 억제)
-- O1/O2/O3 (`forced_turn`): `fork_on=1`, 로그 `*** FORCED_TURN=… ***`, `sign_ignored`, 잠금 후 `active=0|1`, PP가 선택 측만
+- O1b: `fork_on=0` (실표지 hold / YAML arms 없으면 갈림 패널 억제). `forced_turn`만으로는 켜지지 않음
+- O1/O2/O3 (arms 또는 실표지): `fork_on=1`, 잠금 후 `active=0|1`, PP가 선택 측만. forced 시 로그 `*** FORCED_TURN=… ***` / `sign_ignored`
 - 노란 갈래 채택 없음 (`route_mode:=out`)
 
 **오프라인 (Gazebo 불필요)**

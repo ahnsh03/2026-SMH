@@ -14,13 +14,15 @@
 | D3-G 보드 | ✅ | |
 
 ```bash
-./scripts/dev_container.sh sim-bringup view:=none   # 터미널1 — Gazebo (카메라/BEV OFF)
-docker exec -it 2026-smh-sim bash          # 터미널2
+./scripts/dev_container.sh sim-bringup view:=none   # fork 튜닝용 (기본은 both)
+# 또는 일상: ./scripts/dev_container.sh sim-bringup
+docker exec -it 2026-smh-sim bash          # 터미널2 (튜너·수동 셸)
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ```
 
 **인지 검증은 Gazebo를 다시 띄우지 마세요.** `sim_auto_driving` / `LANE_VISUALIZE=…` 올인원 launch는 bringup이 이미 있으면 Gazebo가 하나 더 뜹니다.  
+자율 주행 검증은 **`sim-auto`** (MainPlanner). `tune_lane_control.py`는 **레거시 `lane_control.yaml`** 전용이며 auto와 `/control` 충돌.  
 튜너는 카메라 토픽만·`prefer_yellow`는 장면별 (Out=`--label out_fork` → False, In=`exit` → True). 계약: [lane-occlusion-fork-strategy.md §0](../../docs/lane-occlusion-fork-strategy.md).
 
 ---

@@ -84,18 +84,18 @@ chmod +x scripts/*.sh
 | 터미널 | 명령 | 역할 |
 |--------|------|------|
 | — | `./scripts/dev_container.sh sim-up` | `2026-smh-sim` 생성 (없을 때만) |
-| **1** | `./scripts/dev_container.sh sim-bringup` | Gazebo + 브리지 + 카메라 프리뷰 |
-| **2** | `docker exec -it 2026-smh-sim bash` | inference 빌드·실행 |
+| **1** | `./scripts/dev_container.sh sim-bringup` | Gazebo + 브리지 (기본 `view:=both`) |
+| **2** | `./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane` | MainPlanner 자율 + 인지 창 |
 | — | `./scripts/dev_container.sh sim-down` | 하루 작업 끝 |
 
 ```bash
 # 터미널 1
 ./scripts/dev_container.sh sim-bringup
+# fork만: spawn_pose:=out_fork view:=none
 
 # 터미널 2
-docker exec -it 2026-smh-sim bash
-source /opt/ros/humble/setup.bash && source install/setup.bash
-ros2 run inference inference_node --ros-args -p use_sim_time:=true
+./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane
+# In: route_mode:=in · 방향 실험: forced_turn:=left|right
 
 # 검증 (호스트, bringup 실행 중)
 ./scripts/dev_container.sh verify-sim
@@ -105,13 +105,15 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 |------|------|
 | `sim-up` | 시뮬 컨테이너 `2026-smh-sim` 생성·시작 |
 | `sim-bringup` | 터미널1: build-sim + Gazebo launch (Ctrl+C → launch만 종료) |
+| `sim-auto` | 터미널2: `inference_node`(MainPlanner) + `viz:=lane` |
 | `sim-down` | 시뮬 컨테이너 삭제 |
 | `build-sim` | **ROS 워크스페이스** colcon (`src/` 코드 변경 후) |
 | `build` | Docker **이미지** (`Dockerfile`, 최초·드묾) |
 | `sim` | bringup + inference 자율주행 (한 터미널 통합 테스트) |
 | `verify-sim` | 토픽·카메라 검증 (bringup 실행 중) |
 
-시뮬 기본: 카메라 **320×180** (16:9). 터미널2는 **`docker exec`만** 쓰면 됩니다.  
+시뮬 기본: 카메라 **320×180** (16:9), bringup `view:=both`, NORMAL tracker **`mask_p`**.  
+**갈림·미션:** [docs/main-planner.md](docs/main-planner.md) · [docs/fork-test-pipeline.md](docs/fork-test-pipeline.md)  
 **직접 docker/ros2 명령**: [simulation-setup.md §4.8](docs/simulation-setup.md#48-직접-명령어-치트시트-스크립트-없이)
 
 ---
@@ -163,11 +165,11 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 
 | 담당 | 모듈 | 파일 |
 |------|------|------|
-| **장원태** | 차선 인지 | `modules/lane_detection.py` |
+| **안승현** (임시) / **장원태** | 차선 인지 | `modules/lane_detection.py` |
 | **장원정** | 신호등·표지판 | `modules/traffic_sign.py` |
-| **안승현** | ArUco 검출 | `modules/aruco/detector.py` |
+| **안승현** | ArUco 검출 · 시뮬·문서 | `modules/aruco/detector.py` |
 | **박성준** | ArUco 정지 | `modules/aruco/stop_logic.py` |
-| **양서준** | 통합 판단·Pure Pursuit·회전교차로 | `pipeline.py` |
+| **양서준** | MainPlanner · PP/mask · In/Out | `pipeline.py` + `config/main_planner.yaml` |
 
 상세: [docs/roles.md](docs/roles.md)
 
@@ -182,21 +184,24 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
   inference_node → pipeline.MainPlanner.step()
         │            (lane / traffic / aruco 직접 결과 전달)
         ▼
-  Pure Pursuit + mission state  →  /control  →  control_node
-        └──────── 검증용 /perception/lane, /debug/*
+  mask_p / PP + mission state  →  /control  →  control_node
+        └──────── 검증용 /perception/lane, /debug/planner, /debug/aruco
 ```
 
-코스 선택: `ros2 launch inference auto_driving.launch.py route_mode:=in` (기본 `out`).
-주행·미션 파라미터는 `config/main_planner.yaml`에서 한 번에 조정합니다.
+코스: `route_mode:=in|out` (launch) · 게인: `config/main_planner.yaml`  
+시뮬 프로파일 `planner_profile:=sim` / 실차 `:=real` (각 launch가 설정).
 
 ---
 
 ## 실행 (Docker 권장)
 
-PC에서 시뮬로 inference를 검증할 때:
-
 ```bash
-./scripts/dev_container.sh sim          # Gazebo + inference
+# 호스트 — 팀 표준
+./scripts/dev_container.sh sim-bringup
+./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane
+
+# 또는 한 터미널
+./scripts/dev_container.sh sim
 ```
 
 실기(D3-G)에서:
@@ -207,12 +212,13 @@ source install/setup.bash
 # 수동 주행 (camera + monitor)
 ros2 launch inference manual_driving.launch.py
 
-# 자율주행 (camera + monitor + inference)
+# 자율주행 (camera + monitor + inference · planner_profile=real)
 ros2 launch inference auto_driving.launch.py
+# 코스: route_mode:=in|out
 ```
 
 웹 모니터: `http://<WEB_HOST>:5000` (`src/config/vehicle_config.yaml`)  
-ArUco 보드 확인: `ros2 topic echo /debug/aruco` — 상세는 [docs/board-workflow.md](docs/board-workflow.md) §3.3
+플래너: `ros2 topic echo /debug/planner` · ArUco: `/debug/aruco` — [docs/board-workflow.md](docs/board-workflow.md)
 
 > `~/D-Racer-Kit`에서 camera/monitor를 따로 실행하지 마세요. 장치 충돌로 영상이 멈춥니다.
 
@@ -238,7 +244,9 @@ main → feature/wontae-lane → PR → merge → board_sync.sh
 - [문서 목차](docs/README.md)
 - [협업 가이드](docs/collaboration.md) ★
 - [역할 분담](docs/roles.md) · [회의록 2026-07-10](docs/meetings/2026-07-10.md)
+- [MainPlanner](docs/main-planner.md) ★ · [갈림 파이프라인](docs/fork-test-pipeline.md)
 - [보드 개발·주행 가이드](docs/board-workflow.md) ★
+- [보드 지연·sim2real](docs/board-latency-and-sim2real.md)
 - [셋업 가이드](docs/setup.md)
 - [개발 환경 규약 · Docker](docs/dev-environment.md) ★
 - [시뮬레이터 재현 가이드](docs/simulation-setup.md) ★

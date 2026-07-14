@@ -58,7 +58,10 @@ ros2 launch inference auto_driving.launch.py
 | `~/2026-SMH/src/dracer_sim/` | Gazebo 시뮬 (D-Racer 토픽 호환) |
 | `~/2026-SMH/install/` | 빌드 결과 |
 
-**PC에서 모듈 검증** (보드 전): [simulation-setup.md](./simulation-setup.md) §4 — 터미널1 `sim-bringup`, 터미널2 `docker exec -it 2026-smh-sim bash`
+**PC에서 모듈 검증** (보드 전): [simulation-setup.md](./simulation-setup.md) §4 — 터미널1 `sim-bringup`, 터미널2 `sim-auto route_mode:=out viz:=lane`
+
+실차 자율: `ros2 launch inference auto_driving.launch.py` (`planner_profile: real`).  
+코스: `route_mode:=in|out`. 디버그: `/debug/planner`, `/debug/aruco`.
 
 ---
 

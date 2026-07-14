@@ -182,8 +182,8 @@ docker exec -it 2026-smh-sim bash
 
 | 어디에 | 인자 | 창 |
 |--------|------|-----|
-| bringup | `view:=none` (기본) | 없음 |
-| bringup | `view:=cam` / `bev` / `both` | 카메라 / BEV / 둘 다 |
+| bringup | `view:=both` (기본) | cam + BEV |
+| bringup | `view:=none` / `cam` / `bev` | 끔 / 카메라만 / BEV만 |
 | sim-auto | `viz:=lane` (기본) | `Lane / Fork Perception`만 |
 | sim-auto | `viz:=off` | 없음 |
 | sim-auto | `viz:=debug` | lane + `lane_control` 통합 1창 |
@@ -238,7 +238,7 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true -p route_mode
 **시뮬 기본 설정**
 
 - 카메라 토픽: **320×180** JPEG (`config/vehicle_config.yaml`) — bringup이 항상 republish
-- OpenCV 창: bringup 기본 **`view:=none`** (카메라/BEV OFF). 켤 때 `view:=cam|bev|both`
+- OpenCV 창: bringup 기본 **`view:=both`**. fork만 끌 때 `view:=none` / `cam` / `bev`
 - 자율 인지 창: sim-auto 기본 **`viz:=lane`** (`Lane / Fork Perception` 1개)
 - 웹 모니터: **OFF** (`use_monitor:=true`로 선택)
 

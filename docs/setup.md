@@ -77,7 +77,7 @@ chmod +x scripts/*.sh
 
 # Gazebo 시뮬 — simulation-setup.md §4
 ./scripts/dev_container.sh sim-bringup      # 터미널1
-docker exec -it 2026-smh-sim bash           # 터미널2
+./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane   # 터미널2
 
 # 시뮬 직접 명령 전체: simulation-setup.md §4.8
 ```
@@ -162,7 +162,9 @@ ros2 launch inference auto_driving.launch.py
 | 토픽 | 타입 | 설명 |
 |------|------|------|
 | `/camera/image/compressed` | `sensor_msgs/CompressedImage` | 카메라 영상 |
-| `/control` | `control_msgs/Control` | steering / throttle |
+| `/control` | `control_msgs/Control` | steering / throttle (MainPlanner) |
+| `/perception/lane` | `lane_msgs/LaneDetections` | 검증용 차선 (구독자 0이 정상) |
+| `/debug/planner` | `std_msgs/String` | 상태·fork_on·tracker |
 | `/debug/aruco` | `std_msgs/String` | ArUco 디버그 (`detected` / `should_stop` / `marker_id`) |
 | `/joystick` | `joystick_msgs/Joystick` | 조이스틱 (E-Stop) |
 | `/battery_status` | `battery_msgs/Battery` | 배터리 |

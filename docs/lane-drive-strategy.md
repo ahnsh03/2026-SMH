@@ -312,109 +312,82 @@ wego DL 보류. D-Racer-Kit은 I/O만. F1TENTH/Stanley 관행은 Phase 2–4.
 
 ---
 
-## 11.5 Gazebo 차선 추종 테스트 (흰 기본 / 노란 단독)
+## 11.5 Gazebo 차선 추종 테스트 (MainPlanner · Out 흰 / In 노란우선)
 
-**전제:** 흰↔노란 **자동 전환 없음**. 한 번에 한 색만 (`lane_follow_color`).
+**런타임 SSOT:** `inference_node` + `MainPlanner` (`config/main_planner.yaml`).  
+레거시 `lane_control_node` / `lane_follow_color` / ROS `-p cruise_throttle:=` 는 **auto 경로에서 사용하지 않음**.
+
+색은 **`route_mode`**: Out=`out`(흰만) · In=`in`(노란 우선). 속도는 YAML `speed.cruise_throttle`(시뮬 잠정 **0.33**).
 
 ### 준비
 
 ```bash
-# 터미널1 — 시뮬
+# 터미널1 — 시뮬 (기본 view:=both · fork만 끌 때 view:=none)
 ./scripts/dev_container.sh sim-bringup
 
-# 터미널2 — 워크스페이스
-docker exec -it 2026-smh-sim bash
-source /opt/ros/humble/setup.bash
-source /workspace/install/setup.bash   # 없으면 colcon build 후
-colcon build --symlink-install --packages-select inference dracer_sim
-source install/setup.bash
+# HSV가 비어 있으면 (컨테이너 셸)
+docker exec -it 2026-smh-sim bash -lc \
+  'source /opt/ros/humble/setup.bash && source install/setup.bash && \
+   python3 scripts/vision_tune/tune_hsv.py --channel white'
 ```
 
-HSV가 비어 있으면 먼저:
+### Out 흰 차로 (기본)
 
 ```bash
-python3 scripts/vision_tune/tune_hsv.py --channel white   # 또는 yellow
-# s 저장 → config/lane_vision.yaml
+./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane
 ```
 
-게인 튜닝(주행 중 트랙바, `inference_node` 끄고):
+### In 노란 우선 (회전교차로)
 
 ```bash
-source /opt/ros/humble/setup.bash
-python3 scripts/vision_tune/tune_lane_control.py --drive
-# cruise_% = 속도 · lookahead/wheelbase/δ_max/rate · s=저장 · space=pause · q=정지
+./scripts/dev_container.sh sim-bringup spawn_pose:=in_roundabout_entry
+./scripts/dev_container.sh sim-auto route_mode:=in viz:=lane
 ```
 
-### 흰 차선 추종 (기본)
+게인·cruise 변경: `config/main_planner.yaml` 편집 후 **sim-auto만** 재시작.  
+벤치: `scripts/drive_test/` (`mask_policy_bench.py`, `out_lap_bench.py` — **sim-auto OFF**).
 
-```bash
-ros2 run inference inference_node --ros-args \
-  -p use_sim_time:=true \
-  -p cruise_throttle:=0.30 \
-  -p lane_follow_color:=white
-```
+### 레거시 (실행 금지 · 참고만)
 
-또는 한 방:
-
-```bash
-ros2 launch dracer_sim sim_auto_driving.launch.py \
-  cruise_throttle:=0.30 lane_follow_color:=white
-```
-
-### 노란 차선만 단독 테스트
-
-```bash
-ros2 run inference inference_node --ros-args \
-  -p use_sim_time:=true \
-  -p cruise_throttle:=0.25 \
-  -p lane_follow_color:=yellow
-```
+`tune_lane_control.py` / `lane_control.yaml` / `lane_control_node` 는 예전 PP 실험용.  
+MainPlanner와 `/control`이 **충돌**하므로 auto와 동시 실행하지 말 것.
 
 ### 정지
 
-- **Ctrl+C** → `/control` throttle **0**을 여러 번 발행 후 종료 (즉시 감속).
-- 조이스틱 E-Stop도 유효 (`sim_auto_driving`에 joystick 포함 시).
+- **Ctrl+C** (sim-auto) → `/control` throttle 0 발행 후 종료.
+- 조이스틱 E-Stop.
 
 ### 확인
 
 ```bash
 ros2 topic echo /control --once
-# steering ∈ [-1,1], throttle > 0 이면 추종 중
+ros2 topic echo /debug/planner   # state · fork_on · tracker
 ```
-
-로그에 `lane_follow_color=white|yellow`가 보여야 함.
 
 ---
 
-## 11.6 시뮬 주행 메모 · 핸드오프 (2026-07-12, 안승현)
+## 11.6 시뮬 주행 메모 · 핸드오프 (개정 2026-07-15)
 
-### 이번 브랜치에서 한 것
+### 현재 main (요약)
 
-- 단일색 추종: `lane_follow_color` = `white`(기본) | `yellow`(단독 테스트). **자동 전환 없음**
-- Ctrl+C / 튜너 `q` 시 `/control` throttle=0 즉시 정지
-- `tune_lane_control.py --drive`: 주행 중 cruise·lookahead·wheelbase·δ_max·EMA·rate 트랙바 (PP)
-- 스무딩 체인 확인용 UI (raw → EMA → rate-limit)
+- **NORMAL tracker:** `mask_p` + `mask_pursuit` 코리도 (`corridor_mode: hard`)
+- **Out 갈림:** 표지 게이트 (`out_fork_require_sign`) · `forced_turn`은 rank만
+- **In 탈출:** `yellow_alt` / tip_mode 분리 — [lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md)
+- 제어·미션: [main-planner.md](./main-planner.md)
 
-### 알려진 이슈 (조향보다 **인지 L/R 할당**)
+### 알려진 이슈 (역사 · Phase 2 시절)
 
-우회전 코너에서 **오른쪽 차선이 시야에서 사라지면**, 스텁 `_extract_lr_polylines`가 이미지 중심(`cx`) 기준으로  
-남은 **왼쪽 차선을 오른쪽 차선으로 잘못 분류**하는 현상이 관측됨.  
-→ planner가 중심선을 잘못 잡아 코너 이탈. 게인(lookahead/rate)만으로는 근본 해결 안 됨.
-
-**원인 후보:** BEV에서 “차량 중심보다 왼쪽 픽셀 = L, 오른쪽 = R” 단순 분할.  
-한쪽만 남거나 곡선으로 차선이 중심을 넘으면 L/R이 뒤집힘.
+우회전 코너에서 편측 L/R 오할당이 관측됐음 → parallel-rail / active_lane / mask 코리도로 완화 중.  
+완전 해결 여부는 spawn 단위·랩 벤치로 재확인.
 
 ### 다음에 할 일 (팀)
 
-| 우선 | 담당 후보 | 내용 |
-|------|-----------|------|
-| **P0** | 인지(원태) / 승현 보조 | **편측·코너 L/R 안정화**: 이전 프레임 추적, 차로 폭 제약, 중심선 대비 부호 유지, 또는 원태 `detect_markings` merge 후 동일 증상 재현·수정 |
-| P1 | 승현 | 편측만 보일 때 planner 폴백 강화 (이미 half-width 추정 있음 — 잘못된 side_hint면 무효) |
-| P1 | 누구든 | `tune_lane_control --drive`로 게인 잠금 → `lane_control.yaml` 커밋 |
-| P2 | 원태 | 풀 인지 merge · 노란 구간 단독 검증 |
-| P2 | 승현 | Phase 3 분기 이중 경로 |
-
-재현: Gazebo CW 트랙 **우회전** · 흰 추종 · BEV에서 R 폴리라인이 사라질 때 L이 우측으로 그려지는지 확인.
+| 우선 | 담당 | 내용 |
+|------|------|------|
+| **P0** | 승현 / 원태 | Out 표지 hold·In tip 안정화 · [fork-test-pipeline.md](./fork-test-pipeline.md) |
+| P1 | 서준 | `main_planner.yaml` 게인 · 실차 `planner_profile: real` |
+| P1 | 원정 | 표지·신호 입력과 Out fork 게이트 정합 |
+| P2 | 전원 | 실차 latency — [board-latency-and-sim2real.md](./board-latency-and-sim2real.md) |
 
 ---
 

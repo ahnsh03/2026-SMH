@@ -1,7 +1,7 @@
 # Gazebo 시뮬레이터 (D-Racer)
 
 > **팀원 재현 가이드**: [simulation-setup.md](./simulation-setup.md) ★  
-> 마지막 업데이트: 2026-07-11  
+> 마지막 업데이트: 2026-07-15  
 > 패키지 상세: [`../src/dracer_sim/README.md`](../src/dracer_sim/README.md)  
 > PC 개발 환경: [dev-environment.md](./dev-environment.md) ★  
 > 카메라 스펙: [hardware-camera.md](./hardware-camera.md)
@@ -17,8 +17,8 @@
 | 트랙 크기 | 이미지 가로 **12.0 m** × 세로 **8.9975 m** (plane UV, 왜곡 없음) |
 | 미션 표지판 | 좌/우회전 + ArUco **3종** (`track_cw.world` 고정 배치) |
 | 실행 환경 | **Docker** — 컨테이너 `2026-smh-sim` 1개 + 터미널 2개 |
-| 명령 (터미널1) | `./scripts/dev_container.sh sim-bringup` |
-| 셸 (터미널2) | `docker exec -it 2026-smh-sim bash` |
+| 명령 (터미널1) | `./scripts/dev_container.sh sim-bringup` (기본 `view:=both`) |
+| 명령 (터미널2) | `./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane` |
 
 ---
 
@@ -27,8 +27,8 @@
 상세: [simulation-setup.md §4](./simulation-setup.md#4-일상-개발-워크플로-컨테이너-1개--터미널-2개)
 
 ```
-터미널1  sim-bringup     →  Gazebo + /camera/* + /control 브리지
-터미널2  docker exec     →  inference 빌드·실행 (use_sim_time:=true)
+터미널1  sim-bringup     →  Gazebo + /camera/* + /control 브리지 (view:=both)
+터미널2  sim-auto        →  MainPlanner + viz:=lane (`planner_profile:=sim`)
 ```
 
 - 터미널1 **Ctrl+C**: launch만 종료, 컨테이너 유지
@@ -69,7 +69,7 @@ chmod +x scripts/*.sh
 # 3) 시뮬 개발 (터미널 2개)
 ./scripts/dev_container.sh sim-up
 ./scripts/dev_container.sh sim-bringup      # 터미널1
-docker exec -it 2026-smh-sim bash           # 터미널2 → inference
+./scripts/dev_container.sh sim-auto route_mode:=out viz:=lane   # 터미널2
 
 # 통합 테스트 한 번에: ./scripts/dev_container.sh sim
 ```
@@ -77,8 +77,8 @@ docker exec -it 2026-smh-sim bash           # 터미널2 → inference
 | 명령 | 설명 |
 |------|------|
 | `sim-up` / `sim-down` | `2026-smh-sim` 생성·삭제 |
-| `sim-bringup` | **터미널1**: Gazebo + 브리지 + 카메라 프리뷰 |
-| `docker exec -it 2026-smh-sim bash` | **터미널2**: inference 개발 셸 |
+| `sim-bringup` | **터미널1**: Gazebo + 브리지 (기본 `view:=both`) |
+| `sim-auto` | **터미널2**: MainPlanner + `viz:=lane` |
 | `sim` | bringup + inference (한 터미널) |
 | `sim-manual` | bringup + 조이스틱 수동 |
 
