@@ -62,7 +62,7 @@ VISUALIZE_ON = "on"
 # │    "control"  주행 확인용 3개만 (아래 CONTROL_WINDOWS)    │
 # │    "on"       디버그 창 전부                              │
 # └──────────────────────────────────────────────────────────┘
-VISUALIZE_MODE = "off"
+VISUALIZE_MODE = "on"
 
 # 보드/SSH/headless에서는 창을 띄우면 죽는다. 코드를 안 고치고 끄려면
 # 환경변수로 덮어쓴다(있을 때만 우선).
@@ -278,7 +278,6 @@ BEV_HEIGHT = METRIC_IPM_PARAMS.bev_height
 METERS_PER_PIXEL = float(METRIC_IPM_PARAMS.meters_per_pixel)
 X_MAX_M = float(METRIC_IPM_PARAMS.x_max_m)
 X_MIN_M = float(METRIC_IPM_PARAMS.x_min_m)
-Y_HALF_WIDTH_M = float(METRIC_IPM_PARAMS.y_half_width_m)
 
 # remap 캐시 (입력 해상도별). map_*는 crop된 프레임 좌표.
 _ipm_map_x: np.ndarray | None = None
@@ -623,6 +622,22 @@ PATH_PAIR_BONUS = 1.0
 MAX_PATH_CANDIDATES_PER_ROW = 10
 MAX_PATH_PREVIOUS_ROWS = 3
 
+# 노란 연결선이 하나뿐이면 끝점 방향을 좌/우 후보의 보조 점수로 쓴다.
+# BEV 화면에서 '/'는 음의 각도이며 LEFT 후보, '\\'는 양의 각도이며
+# RIGHT 후보에 보너스를 준다. 수직(0도)에 가까우면 빠르게 0으로 수렴한다.
+SINGLE_LINE_SIDE_BIAS_MAX_SCORE = 100.0
+SINGLE_LINE_SIDE_BIAS_FULL_ANGLE_DEG = 1.2
+SINGLE_LINE_SIDE_BIAS_POWER = 2.0
+SINGLE_LINE_ENDPOINT_BAND_RATIO = 0.10
+SINGLE_LINE_MIN_ROW_SPAN_M = 0.08
+SINGLE_LINE_MIN_ROW_SPAN_PX = max(
+    2, int(round(SINGLE_LINE_MIN_ROW_SPAN_M / METERS_PER_PIXEL))
+)
+# 단일선 각도가 지지하는 후보 안에 반대색 선이 있어도 즉시 탈락시키지 않고
+# 이 점수만 감점한다. 합류 구간에서는 실제 노란 LEFT 경계 오른쪽에 흰선이
+# 함께 보일 수 있다. 각도 지지가 없는 후보에는 기존 hard reject를 유지한다.
+SINGLE_LINE_OPPOSITE_LINE_PENALTY = 0.0
+
 # 화면 가장자리에서는 추정한 반대 경계가 BEV 밖에 있어도 관측선을
 # 버리지 않는다. 단, 도로 방향을 확인할 수 있는 최소 폭은 필요하다.
 MIN_VISIBLE_CANDIDATE_WIDTH_M = 0.05
@@ -662,7 +677,10 @@ UNOBSERVED_LANE_PENALTY = 6.0
 # 도로가 기운 만큼 넓게 잘리므로, 관측선의 국소 기울기로 폭을 보정한다.
 SLOPE_ROW_DELTA = max(1, int(round(0.05 / METERS_PER_PIXEL)))  # 위/아래 50 mm
 SLOPE_MATCH_TOLERANCE_PX = 2.0 * SLOPE_ROW_DELTA               # |기울기| <= 2
-MAX_WIDTH_SCALE = 2.5                                          # 약 66도에서 포화
+# 상한이 너무 크면(2.5) 선이 BEV에서 거의 수평일 때 지어낸 차로가 0.87 m까지
+# 부풀어 도로 밖으로 나가고, 그 후보가 통째로 탈락해 검출이 끊긴다. 1.6이면
+# 45도에서 -6 mm, 55도에서 -31 mm로 우회전 차선 폭 보정은 살리면서 폭발은 막는다.
+MAX_WIDTH_SCALE = 1.6                                          # 약 58도에서 포화
 
 # 점수 정규화 분모. 후보마다 max()를 다시 부르면 프레임당 수십만 번이 된다.
 ROAD_WIDTH_NORM = float(max(1, ROAD_WIDTH_PX))
@@ -921,6 +939,34 @@ def find_line_segments(
     return list(zip(starts.tolist(), ends.tolist()))
 
 
+def find_line_segments_by_row(
+    mask: np.ndarray,
+) -> list[list[tuple[int, int]]]:
+    """이진 마스크 모든 행의 연속 구간을 전체 배열 연산으로 한 번에 구한다."""
+
+    binary = mask != 0
+    padded = np.pad(binary, ((0, 0), (1, 1)), constant_values=False)
+    transitions = np.diff(padded.astype(np.int8), axis=1)
+    start_rows, starts = np.nonzero(transitions == 1)
+    end_rows, ends_after = np.nonzero(transitions == -1)
+
+    segments_by_row: list[list[tuple[int, int]]] = [
+        [] for _ in range(mask.shape[0])
+    ]
+    for start_row, start, end_row, end_after in zip(
+        start_rows,
+        starts,
+        end_rows,
+        ends_after,
+    ):
+        if start_row != end_row:
+            continue
+        segments_by_row[int(start_row)].append(
+            (int(start), int(end_after) - 1)
+        )
+    return segments_by_row
+
+
 def calculate_overlap_ratio(
     mask_row: np.ndarray,
     left_u: int,
@@ -1014,10 +1060,19 @@ def boundary_candidate_is_continuous(
 def road_supports_inner_course(
     clean_road_row: np.ndarray,
     reference_center: float,
+    road_segments: list[tuple[int, int]] | None = None,
 ) -> bool:
     """이 행의 주행영역이 아웃코스와 인코스를 나란히 담을 만큼 넓은가."""
 
-    segments = find_drivable_segments(clean_road_row)
+    segments = (
+        find_drivable_segments(clean_road_row)
+        if road_segments is None
+        else [
+            segment
+            for segment in road_segments
+            if segment[1] - segment[0] + 1 >= MIN_BRANCH_WIDTH_PX
+        ]
+    )
     if not segments:
         return False
     segment = min(
@@ -1137,6 +1192,91 @@ def scores_tied(score: float, best: float) -> bool:
     if math.isinf(score) or math.isinf(best) or math.isnan(score) or math.isnan(best):
         return score == best
     return abs(score - best) <= 1e-8 + 1e-5 * abs(best)
+
+
+def single_line_component_angles_deg(
+    boundary_mask: np.ndarray,
+    side_debug: dict[str, object] | None = None,
+) -> tuple[np.ndarray, dict[int, float]]:
+    """각 연결조각의 가까운 끝→먼 끝 수직 기준 각도를 반환한다.
+
+    음수는 BEV 화면의 '/', 양수는 '\\', 0은 수직이다. 끝 한 픽셀의 잡음에
+    흔들리지 않도록 위·아래 10% 구간의 열 좌표 중앙값으로 두 끝을 잡는다.
+    연결이 완벽하지 않아 조각이 2~3개여도 각 조각의 방향 점수를 살린다.
+    """
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        boundary_mask,
+        connectivity=8,
+    )
+    valid_labels = [
+        label
+        for label in range(1, count)
+        if int(stats[label, cv2.CC_STAT_AREA]) >= DASH_MIN_COMPONENT_AREA_PX
+    ]
+    if side_debug is not None:
+        side_debug["components"] = len(valid_labels)
+    component_angles: dict[int, float] = {}
+    component_spans: dict[int, int] = {}
+    for label in valid_labels:
+        rows, columns = np.nonzero(labels == label)
+        if rows.size == 0:
+            continue
+        far_v = int(np.min(rows))
+        near_v = int(np.max(rows))
+        row_span = near_v - far_v
+        if row_span < SINGLE_LINE_MIN_ROW_SPAN_PX:
+            continue
+
+        band_rows = max(
+            2,
+            int(round(row_span * SINGLE_LINE_ENDPOINT_BAND_RATIO)),
+        )
+        far_columns = columns[rows <= far_v + band_rows]
+        near_columns = columns[rows >= near_v - band_rows]
+        if far_columns.size == 0 or near_columns.size == 0:
+            continue
+
+        far_u = float(np.median(far_columns))
+        near_u = float(np.median(near_columns))
+        delta_u = near_u - far_u
+        component_angles[label] = float(
+            np.degrees(np.arctan2(delta_u, float(row_span)))
+        )
+        component_spans[label] = row_span
+
+    if side_debug is not None:
+        angles = tuple(component_angles.values())
+        side_debug["component_angles"] = angles
+        side_debug["angled_components"] = len(angles)
+        side_debug["angle_deg"] = (
+            float(np.median(np.asarray(angles, dtype=np.float64)))
+            if angles
+            else None
+        )
+        side_debug["row_span"] = max(component_spans.values(), default=0)
+    return labels, component_angles
+
+
+def single_line_side_bonus(
+    endpoint_angle_deg: float | None,
+    source: int,
+) -> float:
+    """한 줄의 기울기가 가리키는 LEFT/RIGHT 후보에 부드러운 보너스를 준다."""
+
+    if endpoint_angle_deg is None:
+        return 0.0
+    favors_left = endpoint_angle_deg < 0.0 and source == BOUNDARY_SOURCE_LEFT
+    favors_right = endpoint_angle_deg > 0.0 and source == BOUNDARY_SOURCE_RIGHT
+    if not (favors_left or favors_right):
+        return 0.0
+    normalized = min(
+        1.0,
+        abs(endpoint_angle_deg) / SINGLE_LINE_SIDE_BIAS_FULL_ANGLE_DEG,
+    )
+    return SINGLE_LINE_SIDE_BIAS_MAX_SCORE * (
+        normalized ** SINGLE_LINE_SIDE_BIAS_POWER
+    )
 
 
 def _row_cumsum(mask: np.ndarray) -> np.ndarray:
@@ -1264,6 +1404,11 @@ def enumerate_boundary_candidates(
         np.ndarray, np.ndarray, np.ndarray, np.ndarray | None
     ] | None = None,
     segment_slopes: list[float] | None = None,
+    is_ego_course: bool = False,
+    opposite_segments: list[tuple[int, int]] | None = None,
+    single_line_angle_deg: float | None = None,
+    side_debug: dict[str, object] | None = None,
+    road_segments: list[tuple[int, int]] | None = None,
 ) -> list[tuple[float, float, float, int]]:
     """한 행의 가능한 모든 (왼쪽, 오른쪽, 지역 점수) 후보를 반환한다.
 
@@ -1285,10 +1430,19 @@ def enumerate_boundary_candidates(
 
     # 인코스가 존재할 수 있는 행에서만 '인코스 우선'을 건다.
     prefer_inner_course = required_side is not None and road_supports_inner_course(
-        clean_road_row, reference_center
+        clean_road_row,
+        reference_center,
+        road_segments,
     )
 
     candidates: list[tuple[float, float, float, int]] = []
+
+    if side_debug is not None:
+        side_debug["rows_seen"] = int(side_debug.get("rows_seen", 0)) + 1
+        row_kind = "rows_single" if len(segments) == 1 else "rows_multi"
+        side_debug[row_kind] = int(side_debug.get(row_kind, 0)) + 1
+        if single_line_angle_deg is not None:
+            side_debug["rows_angle"] = int(side_debug.get("rows_angle", 0)) + 1
 
     temporal_center_v = (
         float(temporal_centerline[row_v])
@@ -1341,13 +1495,30 @@ def enumerate_boundary_candidates(
         pair_bonus: float,
         source: int,
     ) -> None:
+        side_name = (
+            "left"
+            if source == BOUNDARY_SOURCE_LEFT
+            else "right"
+            if source == BOUNDARY_SOURCE_RIGHT
+            else None
+        )
+
+        def bump(reason: str) -> None:
+            if side_debug is None or side_name is None:
+                return
+            key = f"{side_name}_{reason}"
+            side_debug[key] = int(side_debug.get(key, 0)) + 1
+
+        bump("attempt")
         if right_u <= left_u:
+            bump("geometry")
             return
 
         visible_left = max(0.0, left_u)
         visible_right = min(float(BEV_WIDTH - 1), right_u)
         visible_width = visible_right - visible_left
         if visible_width < MIN_VISIBLE_CANDIDATE_WIDTH_PX:
+            bump("view")
             return
 
         # 트랙의 모든 도로는 같은 색 선으로만 둘러싸인다(외곽 서킷=흰선,
@@ -1357,7 +1528,7 @@ def enumerate_boundary_candidates(
         # 감점만 하면, 정답 가설이 화각 밖이라 약할 때 반박된 오답이 그대로
         # 유일 후보로 남아 채택된다.
         opposite_cum = None if row_sums is None else row_sums[3]
-        if (
+        opposite_line_conflict = (
             opposite_cum is not None
             and source in (BOUNDARY_SOURCE_LEFT, BOUNDARY_SOURCE_RIGHT)
             and opposite_line_inside_lane(
@@ -1366,8 +1537,15 @@ def enumerate_boundary_candidates(
                 right_u,
                 source,
             )
-        ):
+        )
+        angle_supports_source = (
+            len(segments) == 1
+            and single_line_side_bonus(single_line_angle_deg, source) > 0.0
+        )
+        if opposite_line_conflict and not angle_supports_source:
+            bump("white")
             return
+
 
         full_width = right_u - left_u
         visible_ratio = min(1.0, visible_width / max(1.0, full_width))
@@ -1434,8 +1612,10 @@ def enumerate_boundary_candidates(
             clean_overlap < MIN_CLEAN_ROAD_OVERLAP_RATIO
             and not identity_matched
         ):
+            bump("road")
             return
         if raw_overlap < MIN_RAW_ROAD_OVERLAP_RATIO and not identity_matched:
+            bump("raw")
             return
 
         score = score_boundary_candidate(
@@ -1483,8 +1663,12 @@ def enumerate_boundary_candidates(
         # 도로가 아니다(흰 도로=흰선, 노란 도로=노란선으로만 둘러싸인다).
         if unobserved:
             score -= UNOBSERVED_LANE_PENALTY
+        if opposite_line_conflict:
+            score -= SINGLE_LINE_OPPOSITE_LINE_PENALTY
+            bump("white_penalty")
         score += pair_bonus
         candidates.append((left_u, right_u, score, source))
+        bump("valid")
 
     # 기울기에 따른 수평 폭 배율. 도로가 기울면 같은 행에서 자른 폭이 넓어진다.
     if segment_slopes is None or len(segment_slopes) != len(segments):
@@ -1514,7 +1698,44 @@ def enumerate_boundary_candidates(
                 BOUNDARY_SOURCE_PAIR,
             )
 
+    if opposite_segments is None or not is_ego_course:
+        # 옆 도로(내가 안 달리는 코스)까지 혼색으로 짝지으면, 나란히 달리는
+        # 흰 도로와 노란 도로 사이에 있지도 않은 차로가 생긴다. 내가 실제로
+        # 달리는 코스에서만 쓴다.
+        opposite_segments = []
+
+    # 좌우 색이 다른 차로. 연결로가 직선 도로에 합류하는 구간이 그렇다:
+    # 왼쪽은 연결로에서 이어진 노란 점선, 오른쪽은 직선 도로의 흰 실선이다.
+    # 같은 색끼리만 짝지으면 이 차로는 절대 못 만든다. 그래서 코드는 노란선
+    # 오른쪽 350 mm에 노란 경계를 '지어내는데', 그게 카메라 사각(검은 쐐기)에
+    # 떨어져 점수를 못 받고 결국 뒤쪽 아스팔트에 차로를 얹는 오답에 진다.
+    # 두 선을 실제로 관측한 짝이므로 지어낸 후보보다 근거가 강하다.
+    for index, (own_start, own_end) in enumerate(segments):
+        for other_start, other_end in opposite_segments:
+            pair_width = ROAD_WIDTH_PX * scales[index]
+            for left_u, right_u in (
+                (float(own_end), float(other_start)),
+                (float(other_end), float(own_start)),
+            ):
+                measured_width = right_u - left_u
+                width_error = abs(measured_width - pair_width)
+                if (
+                    measured_width <= 0.0
+                    or width_error > ROAD_WIDTH_TOLERANCE_PX
+                ):
+                    continue
+                append_if_valid(
+                    left_u,
+                    right_u,
+                    width_error,
+                    PATH_PAIR_BONUS,
+                    BOUNDARY_SOURCE_PAIR,
+                )
+
     # 한쪽 노란선만 보이는 경우 350 mm 도로 폭(수직)을 수평으로 환산해 추정
+    row_single_line_angle = (
+        single_line_angle_deg if len(segments) == 1 else None
+    )
     for index, (segment_start, segment_end) in enumerate(segments):
         lane_width_px = ROAD_WIDTH_PX * scales[index]
 
@@ -1523,16 +1744,22 @@ def enumerate_boundary_candidates(
             detected_as_left,
             detected_as_left + lane_width_px,
             0.0,
-            0.0,
+            single_line_side_bonus(
+                row_single_line_angle,
+                BOUNDARY_SOURCE_LEFT,
+            ),
             BOUNDARY_SOURCE_LEFT,
         )
 
         detected_as_right = float(segment_start)
         append_if_valid(
-            detected_as_right - ROAD_WIDTH_PX,
+            detected_as_right - lane_width_px,
             detected_as_right,
             0.0,
-            0.0,
+            single_line_side_bonus(
+                row_single_line_angle,
+                BOUNDARY_SOURCE_RIGHT,
+            ),
             BOUNDARY_SOURCE_RIGHT,
         )
 
@@ -1564,6 +1791,12 @@ def track_boundary_path(
     required_side: str | None,
     opposite_line_mask: np.ndarray | None = None,
     observable_mask: np.ndarray | None = None,
+    is_ego_course: bool = False,
+    use_single_line_angle_bias: bool = False,
+    side_debug: dict[str, object] | None = None,
+    boundary_segments_by_row: list[list[tuple[int, int]]] | None = None,
+    opposite_segments_by_row: list[list[tuple[int, int]]] | None = None,
+    road_segments_by_row: list[list[tuple[int, int]]] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """모든 행의 후보를 연결해 위치/방향/곡률이 연속인 경로를 찾는다."""
 
@@ -1581,13 +1814,54 @@ def track_boundary_path(
 
     # 도로 폭 보정에는 관측선의 국소 기울기가 필요하므로 세그먼트를 먼저
     # 전부 모아 위/아래 행과 이어 본다.
-    segments_by_row = [find_line_segments(boundary_mask[v]) for v in range(height)]
+    segments_by_row = (
+        boundary_segments_by_row
+        if boundary_segments_by_row is not None
+        else find_line_segments_by_row(boundary_mask)
+    )
     slopes_by_row = estimate_segment_slopes(segments_by_row, height)
+    if use_single_line_angle_bias:
+        component_labels, component_angles = single_line_component_angles_deg(
+            boundary_mask,
+            side_debug,
+        )
+    else:
+        component_labels = np.zeros_like(boundary_mask, dtype=np.int32)
+        component_angles = {}
+    if side_debug is not None:
+        side_debug.setdefault("components", 0)
+        side_debug.setdefault("angle_deg", None)
+
+    def row_single_line_angle_deg(
+        row_v: int,
+        segments: list[tuple[int, int]],
+    ) -> float | None:
+        """이 행에 선이 하나일 때 그 선이 속한 연결조각의 각도를 찾는다."""
+
+        if len(segments) != 1 or not component_angles:
+            return None
+        start_u, end_u = segments[0]
+        row_labels = component_labels[row_v, start_u:end_u + 1]
+        angle_labels = np.array(
+            [label for label in row_labels if int(label) in component_angles],
+            dtype=np.int32,
+        )
+        if angle_labels.size == 0:
+            return None
+        labels_found, counts = np.unique(angle_labels, return_counts=True)
+        dominant_label = int(labels_found[int(np.argmax(counts))])
+        return component_angles.get(dominant_label)
+
+    # 좌우 색이 다른 차로(합류부)를 만들려면 반대색 선의 세그먼트도 필요하다.
+    opposite_by_row = opposite_segments_by_row
+    if opposite_by_row is None and opposite_line_mask is not None:
+        opposite_by_row = find_line_segments_by_row(opposite_line_mask)
 
     for v in range(height - 1, -1, -1):
         segments = segments_by_row[v]
         if not segments:
             continue
+        row_angle_deg = row_single_line_angle_deg(v, segments)
 
         row_candidates = enumerate_boundary_candidates(
             segments,
@@ -1608,6 +1882,11 @@ def track_boundary_path(
                 None if all_sums[3] is None else all_sums[3][v],
             ),
             slopes_by_row[v],
+            is_ego_course,
+            None if opposite_by_row is None else opposite_by_row[v],
+            row_angle_deg,
+            side_debug,
+            None if road_segments_by_row is None else road_segments_by_row[v],
         )
         if row_candidates:
             candidates_by_row[v] = row_candidates
@@ -1617,6 +1896,9 @@ def track_boundary_path(
     left_observed = np.zeros(height, dtype=bool)
     right_observed = np.zeros(height, dtype=bool)
     if not candidates_by_row:
+        if side_debug is not None:
+            side_debug["selected_left"] = 0
+            side_debug["selected_right"] = 0
         return raw_left, raw_right, left_observed, right_observed
 
     # key -> (누적 점수, 이전 key, 직전 중심선 기울기, 연결 노드 수)
@@ -1749,6 +2031,10 @@ def track_boundary_path(
             BOUNDARY_SOURCE_RIGHT,
         )
         cursor = states[cursor][1]
+
+    if side_debug is not None:
+        side_debug["selected_left"] = int(np.count_nonzero(left_observed))
+        side_debug["selected_right"] = int(np.count_nonzero(right_observed))
 
     return raw_left, raw_right, left_observed, right_observed
 
@@ -1948,78 +2234,6 @@ def keep_nearest_continuous_run(
         kept_left,
         kept_right,
     )
-
-
-def build_drivable_from_boundaries(
-    left_boundary: np.ndarray,
-    right_boundary: np.ndarray,
-    road_mask: np.ndarray,
-) -> np.ndarray:
-    """
-    좌우 경계 사이만 직접 채운다.
-
-    중심선 기준 ±0.175 m 확장을 하지 않으므로
-    선택된 경계 바깥에 영역을 새로 만들지 않는다.
-    """
-
-    height, width = (
-        road_mask.shape
-    )
-
-    drivable = np.zeros_like(
-        road_mask
-    )
-
-    for v in range(height):
-        left_u = (
-            left_boundary[v]
-        )
-
-        right_u = (
-            right_boundary[v]
-        )
-
-        if (
-            np.isnan(left_u)
-            or np.isnan(right_u)
-        ):
-            continue
-
-        left_index = max(
-            0,
-            min(
-                width - 1,
-                int(
-                    np.ceil(left_u)
-                ),
-            ),
-        )
-
-        right_index = max(
-            0,
-            min(
-                width - 1,
-                int(
-                    np.floor(right_u)
-                ),
-            ),
-        )
-
-        if (
-            right_index
-            <= left_index
-        ):
-            continue
-
-        drivable[
-            v,
-            left_index:right_index + 1,
-        ] = road_mask[
-            v,
-            left_index:right_index + 1,
-        ]
-
-    return drivable
 
 
 def centerline_from_boundaries(
@@ -2253,17 +2467,13 @@ def build_global_boundary_course(
     smooth_course: bool = False,
     opposite_line_mask: np.ndarray | None = None,
     observable_mask: np.ndarray | None = None,
-) -> tuple[
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-]:
+    is_ego_course: bool = False,
+    use_single_line_angle_bias: bool = False,
+    side_debug: dict[str, object] | None = None,
+    boundary_segments_by_row: list[list[tuple[int, int]]] | None = None,
+    opposite_segments_by_row: list[list[tuple[int, int]]] | None = None,
+    road_segments_by_row: list[list[tuple[int, int]]] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """행별 후보를 전체 경로로 연결해 교차로에서도 연속적인 경계를 만든다."""
 
     raw_left, raw_right, left_observed, right_observed = track_boundary_path(
@@ -2277,6 +2487,12 @@ def build_global_boundary_course(
         required_side,
         opposite_line_mask,
         observable_mask,
+        is_ego_course,
+        use_single_line_angle_bias,
+        side_debug,
+        boundary_segments_by_row,
+        opposite_segments_by_row,
+        road_segments_by_row,
     )
     if use_yellow_gap_limit:
         interpolated_left, interpolated_right = interpolate_yellow_boundary_pair(
@@ -2300,27 +2516,11 @@ def build_global_boundary_course(
             interpolated_left,
             interpolated_right,
         )
-    raw_centerline = centerline_from_boundaries(raw_left, raw_right)
-    interpolated_centerline = centerline_from_boundaries(
-        interpolated_left,
-        interpolated_right,
-    )
-    drivable = build_drivable_from_boundaries(
-        interpolated_left,
-        interpolated_right,
-        clean_road_mask,
-    )
-
     return (
-        drivable,
-        raw_left,
-        raw_right,
         left_observed,
         right_observed,
         interpolated_left,
         interpolated_right,
-        raw_centerline,
-        interpolated_centerline,
     )
 
 
@@ -2578,8 +2778,20 @@ FORK_NEAR_ZONE_RATIO = 0.28
 # Score bonus for near-zone boundary pairs centered on the ego axis (P1).
 EGO_NEAR_CENTER_BONUS = 1.8
 
+# 끝점 링크로 안전성이 확인된 한 체인 안에서만 중심점을 2차 곡선으로 잇는다.
+# 튜너의 Residual 25 px는 2배 확대 미리보기 기준이므로 Metric BEV에서는
+# 약 12.5 px = 0.05 m다.
+DASH_CHAIN_CURVE_DEGREE = 2
+DASH_CHAIN_CURVE_MAX_RESIDUAL_M = 0.05
+DASH_CHAIN_CURVE_FIT_ITERATIONS = 3
+DASH_CHAIN_CURVE_MIN_COMPONENTS = 3
 
-def find_crossing_lines(color_bev: np.ndarray, road_mask: np.ndarray) -> np.ndarray:
+
+def find_crossing_lines(
+    color_bev: np.ndarray,
+    road_mask: np.ndarray,
+    road_segments_by_row: list[list[tuple[int, int]]] | None = None,
+) -> np.ndarray:
     """도로를 가로지르는 실선을 '행별 가로 커버리지'로 찾는다.
 
     가로 실선은 어느 행에서 도로 폭 대부분을 색으로 덮는다(가로지르니까).
@@ -2596,7 +2808,12 @@ def find_crossing_lines(color_bev: np.ndarray, road_mask: np.ndarray) -> np.ndar
     top_cut = int(BEV_HEIGHT * CROSSING_TOP_EXCLUDE_RATIO)
     min_span_px = int(round(CROSSING_MIN_SPAN_M / METERS_PER_PIXEL))
     for row in range(top_cut, BEV_HEIGHT):
-        for left, right in find_line_segments(road_mask[row]):
+        road_segments = (
+            road_segments_by_row[row]
+            if road_segments_by_row is not None
+            else find_line_segments(road_mask[row])
+        )
+        for left, right in road_segments:
             span = right - left + 1
             if span < min_span_px:
                 continue
@@ -2778,6 +2995,43 @@ def connect_dashed_components(
         axis = eigenvectors[:, -1]
         return axis / max(float(np.linalg.norm(axis)), 1e-6)
 
+    def fit_chain_curve(
+        component_indices: list[int],
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        """연결이 확정된 성분 중심들을 튜너와 같은 방식으로 robust fit한다."""
+
+        if len(component_indices) < DASH_CHAIN_CURVE_MIN_COMPONENTS:
+            return None
+
+        ys = np.array(
+            [components[index].centroid_y for index in component_indices],
+            dtype=np.float64,
+        )
+        xs = np.array(
+            [components[index].centroid_x for index in component_indices],
+            dtype=np.float64,
+        )
+        degree = min(DASH_CHAIN_CURVE_DEGREE, len(component_indices) - 1)
+        kept = np.ones(len(component_indices), dtype=bool)
+        max_residual_px = DASH_CHAIN_CURVE_MAX_RESIDUAL_M / METERS_PER_PIXEL
+
+        for _ in range(DASH_CHAIN_CURVE_FIT_ITERATIONS):
+            if np.count_nonzero(kept) < degree + 1:
+                return None
+            coefficients = np.polyfit(ys[kept], xs[kept], degree)
+            residuals = np.abs(xs - np.polyval(coefficients, ys))
+            next_kept = kept & (residuals <= max_residual_px)
+            if np.count_nonzero(next_kept) < degree + 1:
+                break
+            if np.array_equal(next_kept, kept):
+                kept = next_kept
+                break
+            kept = next_kept
+
+        if np.count_nonzero(kept) < degree + 1:
+            return None
+        return np.polyfit(ys[kept], xs[kept], degree), kept
+
     # score, lower index, upper index, lower endpoint, upper endpoint
     links: list[tuple[float, int, int, np.ndarray, np.ndarray]] = []
     for lower_index, lower in enumerate(components):
@@ -2907,6 +3161,7 @@ def connect_dashed_components(
     # 한 블록이 서로 다른 두 차선으로 연결되지 않도록 1:1 링크만 선택한다.
     used_lower: set[int] = set()
     used_upper: set[int] = set()
+    selected_links: list[tuple[int, int, np.ndarray, np.ndarray]] = []
     connected = np.zeros_like(boundary_mask)
     for component in components:
         connected[labels == component.label] = 255
@@ -2929,6 +3184,66 @@ def connect_dashed_components(
         )
         used_lower.add(lower_index)
         used_upper.add(upper_index)
+        selected_links.append(
+            (lower_index, upper_index, lower_endpoint, upper_endpoint)
+        )
+
+    # 선택 링크는 성분당 전방/후방 하나이고 항상 화면 위쪽으로 향하므로
+    # 분기나 순환이 없는 체인이다. 체인별 중심에 2차 곡선을 fit해 원시 성분과
+    # 기존 끝점 직선 위에 덧그린다.
+    outgoing = {
+        lower_index: upper_index
+        for lower_index, upper_index, _, _ in selected_links
+    }
+    incoming = {
+        upper_index
+        for _, upper_index, _, _ in selected_links
+    }
+    chain_starts = sorted(set(outgoing) - incoming)
+    for start_index in chain_starts:
+        chain = [start_index]
+        while chain[-1] in outgoing:
+            chain.append(outgoing[chain[-1]])
+
+        fitted = fit_chain_curve(chain)
+        if fitted is None:
+            continue
+        coefficients, kept = fitted
+        inlier_indices = [
+            index
+            for index, accepted in zip(chain, kept)
+            if accepted
+        ]
+        y_min = max(
+            0,
+            int(np.floor(min(components[index].centroid_y for index in inlier_indices))),
+        )
+        y_max = min(
+            boundary_mask.shape[0] - 1,
+            int(np.ceil(max(components[index].centroid_y for index in inlier_indices))),
+        )
+        sample_y = np.arange(y_min, y_max + 1, dtype=np.float64)
+        sample_x = np.polyval(coefficients, sample_y)
+        valid = (sample_x >= 0.0) & (sample_x < boundary_mask.shape[1])
+        curve = np.column_stack(
+            (
+                np.rint(sample_x[valid]).astype(np.int32),
+                sample_y[valid].astype(np.int32),
+            )
+        )
+        if curve.shape[0] < 2:
+            continue
+        curve_thickness = int(
+            round(np.median([components[index].thickness for index in inlier_indices]))
+        )
+        cv2.polylines(
+            connected,
+            [curve],
+            False,
+            255,
+            thickness=max(2, curve_thickness),
+            lineType=cv2.LINE_8,
+        )
 
     return connected
 
@@ -2939,6 +3254,7 @@ def make_boundary_preview(
     left_boundary: np.ndarray,
     right_boundary: np.ndarray,
     label: str,
+    debug_lines: tuple[str, ...] = (),
 ) -> np.ndarray:
     """road_clean과 좌우 경계 ID를 한 화면에 겹친다."""
 
@@ -2964,6 +3280,17 @@ def make_boundary_preview(
         1,
         cv2.LINE_AA,
     )
+    for index, debug_line in enumerate(debug_lines):
+        cv2.putText(
+            preview,
+            debug_line,
+            (4, 32 + 14 * index),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.30,
+            (0, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
     return preview
 
 
@@ -2973,7 +3300,7 @@ def make_interpolation_preview(
     interpolated_right: np.ndarray,
     label: str,
 ) -> np.ndarray:
-    """HSV 원본 마스크 위에 보간 결과만 표시한다."""
+    """추적에 실제 사용한 경계 마스크 위에 보간 결과를 표시한다."""
 
     preview = cv2.cvtColor(boundary_mask, cv2.COLOR_GRAY2BGR)
     draw_boundary(preview, interpolated_left, INTERPOLATED_LINE_COLOR)
@@ -2981,7 +3308,7 @@ def make_interpolation_preview(
 
     cv2.putText(
         preview,
-        f"{label}  HSV + YELLOW INTERPOLATION",
+        f"{label}  BOUNDARY MASK + INTERPOLATED BOUNDARIES",
         (4, 16),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.34,
@@ -2997,13 +3324,14 @@ def show_visualization(
     bev: np.ndarray,
     white_bev: np.ndarray,
     yellow_bev: np.ndarray,
-    yellow_dash_points_bev: np.ndarray,
+    yellow_dash_points_bev: np.ndarray | None,
     yellow_connected_bev: np.ndarray,
     road_clean: np.ndarray,
     white_left: np.ndarray,
     white_right: np.ndarray,
     yellow_left: np.ndarray,
     yellow_right: np.ndarray,
+    yellow_side_debug: dict[str, object] | None,
 ) -> None:
     """현재 LANE_VISUALIZE 모드에서 켜진 창만 표시한다.
 
@@ -3021,13 +3349,74 @@ def show_visualization(
             interpolation=interpolation,
         )
 
+    def debug_count(name: str) -> int:
+        if yellow_side_debug is None:
+            return 0
+        return int(yellow_side_debug.get(name, 0))
+
+    yellow_debug_lines: tuple[str, ...] = ()
+    if yellow_side_debug is not None:
+        angle_value = yellow_side_debug.get("angle_deg")
+        component_angle_values = tuple(
+            float(value)
+            for value in yellow_side_debug.get("component_angles", ())
+        )
+        if angle_value is None:
+            angle_text = "OFF"
+            bias_text = "NONE"
+        else:
+            angle = float(angle_value)
+            angle_text = f"{angle:+.2f}med"
+            if component_angle_values and all(
+                value < 0.0 for value in component_angle_values
+            ):
+                bias_text = "LEFT"
+            elif component_angle_values and all(
+                value > 0.0 for value in component_angle_values
+            ):
+                bias_text = "RIGHT"
+            elif any(value != 0.0 for value in component_angle_values):
+                bias_text = "MIXED"
+            else:
+                bias_text = "NONE"
+        yellow_debug_lines = (
+            "SIDE "
+            f"ANG={angle_text} BIAS={bias_text} "
+            f"COMP={debug_count('components')}/"
+            f"{debug_count('angled_components')}",
+            "SEL "
+            f"L={debug_count('selected_left')} "
+            f"R={debug_count('selected_right')}  "
+            f"VALID L={debug_count('left_valid')} "
+            f"R={debug_count('right_valid')}",
+            "ROW "
+            f"ANGLE={debug_count('rows_angle')} "
+            f"SINGLE={debug_count('rows_single')} "
+            f"MULTI={debug_count('rows_multi')}",
+            "L REJ "
+            f"ROAD={debug_count('left_road')} "
+            f"RAW={debug_count('left_raw')} "
+            f"WHITE={debug_count('left_white')} "
+            f"WP={debug_count('left_white_penalty')} "
+            f"VIEW={debug_count('left_view')}",
+            "R REJ "
+            f"ROAD={debug_count('right_road')} "
+            f"RAW={debug_count('right_raw')} "
+            f"WHITE={debug_count('right_white')} "
+            f"WP={debug_count('right_white_penalty')} "
+            f"VIEW={debug_count('right_view')}",
+        )
+
     if window_enabled("lane_origin"):
         cv2.imshow("lane_origin", cropped_frame)
     if window_enabled("white_hsv"):
         cv2.imshow("white_hsv", scaled(white_bev, nearest=True))
     if window_enabled("yellow_hsv"):
         cv2.imshow("yellow_hsv", scaled(yellow_bev, nearest=True))
-    if window_enabled("yellow_dash_points"):
+    if (
+        window_enabled("yellow_dash_points")
+        and yellow_dash_points_bev is not None
+    ):
         cv2.imshow(
             "yellow_dash_points",
             scaled(yellow_dash_points_bev, nearest=True),
@@ -3060,6 +3449,7 @@ def show_visualization(
                     yellow_left,
                     yellow_right,
                     "YELLOW",
+                    yellow_debug_lines,
                 )
             ),
         )
@@ -3080,7 +3470,7 @@ def show_visualization(
             "yellow_interpolation",
             scaled(
                 make_interpolation_preview(
-                    yellow_bev,
+                    yellow_connected_bev,
                     yellow_left,
                     yellow_right,
                     "YELLOW",
@@ -3147,8 +3537,17 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
 
     # 가로 정지선/진입선은 이벤트 검출에는 남기되 세로 노란 경계
     # 추적에서는 제거해 경계 끝이 ㄴ자로 꺾이는 것을 막는다.
-    crossing_mask = find_crossing_lines(yellow_bev, road_clean)
-    white_crossing_mask = find_crossing_lines(white_bev, road_clean)
+    crossing_road_segments_by_row = find_line_segments_by_row(road_clean)
+    crossing_mask = find_crossing_lines(
+        yellow_bev,
+        road_clean,
+        crossing_road_segments_by_row,
+    )
+    white_crossing_mask = find_crossing_lines(
+        white_bev,
+        road_clean,
+        crossing_road_segments_by_row,
+    )
 
     # 가로 마킹은 '도로 위에 그려진' 것이다. 그 자리도 당연히 주행가능 영역인데,
     # 마킹 픽셀은 흑색 도로로 안 잡히고 가장자리 안티에일리어싱은 어느 색으로도
@@ -3167,8 +3566,10 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         yellow_bev,
         crossing_mask,
     )
-    yellow_dash_points_bev = extract_dash_point_mask(
-        yellow_boundary_raw_bev,
+    yellow_dash_points_bev = (
+        extract_dash_point_mask(yellow_boundary_raw_bev)
+        if window_enabled("yellow_dash_points")
+        else None
     )
     yellow_boundary_bev = connect_dashed_components(
         yellow_boundary_raw_bev,
@@ -3188,22 +3589,27 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         road_clean,
     )
 
+    # 같은 마스크를 흰/노란 추적, 반대색 검사와 도로 기준선 계산에서
+    # 반복 분리하지 않도록 프레임당 한 번만 행 구간 목록을 만든다.
+    white_segments_by_row = find_line_segments_by_row(white_bev)
+    yellow_segments_by_row = find_line_segments_by_row(yellow_boundary_bev)
+    road_segments_by_row = find_line_segments_by_row(road_clean)
+
     previous_white_center = None
     if last_white_left is not None and last_white_right is not None:
         previous_white_center = centerline_from_boundaries(
             last_white_left, last_white_right
         )
 
+    # 직전 프레임에서 확정한 ego 코스 색. 그 코스의 차로만 차량을 품어야 한다.
+    # (흰 도로를 달리는 중이면 노란 코스는 '옆 도로'이므로 품을 이유가 없다.)
+    ego_course = last_ego_course_color
+
     (
-        _,
-        white_raw_left,
-        white_raw_right,
         white_left_observed,
         white_right_observed,
         white_left,
         white_right,
-        _,
-        white_centerline,
     ) = build_global_boundary_course(
         boundary_mask=white_bev,
         raw_road_mask=road_raw,
@@ -3217,7 +3623,12 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         # 가로선(정지선/진입선)은 코스 경계가 아니므로 제거한 마스크를 쓴다.
         opposite_line_mask=yellow_boundary_bev,
         observable_mask=observable_bev,
+        is_ego_course=ego_course == "white",
+        boundary_segments_by_row=white_segments_by_row,
+        opposite_segments_by_row=yellow_segments_by_row,
+        road_segments_by_row=road_segments_by_row,
     )
+    white_centerline = centerline_from_boundaries(white_left, white_right)
 
     previous_yellow_center = None
     if last_yellow_left is not None and last_yellow_right is not None:
@@ -3229,24 +3640,37 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
     # 회전교차로 등) 주행가능영역 중심선으로 폴백한다. 기준이 NaN이면
     # required_side 판정이 통째로 무효화되어 인코스 우선이 안 걸린다.
     inner_course_reference = resolve_inner_course_reference(
-        white_centerline, road_clean
+        white_centerline,
+        road_clean,
+        road_segments_by_row,
     )
 
+    # 흰 경계 둘 다 관측된 행 = 흰 차로 확정. 노란 코스는 그 위에 못 얹는다.
+    # inner_course_reference(=흰 중심선)가 center_error/PATH_REFERENCE_PENALTY로
+    # 노란 후보를 흰 차로 쪽으로 당기기 때문에, 이 금지 구간이 없으면 오른쪽에
+    # 노란선 하나만 보일 때 그 선을 '오른쪽 경계'로 읽어 노란 차로를 흰 차로
+    # 위에 통째로 올려놓는다(= 왼쪽선을 오른쪽선으로 인식).
+    yellow_side_debug: dict[str, object] | None = (
+        {} if window_enabled("yellow_boundaries") else None
+    )
     (
-        _,
-        yellow_raw_left,
-        yellow_raw_right,
         yellow_left_observed,
         yellow_right_observed,
         yellow_left,
         yellow_right,
-        _,
-        _,
     ) = build_global_boundary_course(
         boundary_mask=yellow_boundary_bev,
         raw_road_mask=road_raw,
         clean_road_mask=road_clean,
-        reference_centerline=inner_course_reference,
+        # 이미 노란 코스 위를 달리고 있다면 '흰 도로 중심선'은 기준이 아니다.
+        # 그걸 기준으로 두면 center_error가 노란 차로를 흰 도로 쪽으로 끌어당겨,
+        # 노란선 하나만 보일 때 그 선을 반대쪽 경계로 읽게 만든다.
+        # 기준을 None으로 두면 BEV 중앙(=차량)이 기준이 되고, 이건 참이다.
+        # 인코스 우선(required_side)도 '진입 전에 어느 노란 코스냐'를 고르는
+        # 규칙이지, 이미 그 위에 있을 때 쓰는 규칙이 아니다.
+        reference_centerline=(
+            None if ego_course == "yellow" else inner_course_reference
+        ),
         temporal_centerline=previous_yellow_center,
         temporal_left=last_yellow_left,
         temporal_right=last_yellow_right,
@@ -3258,6 +3682,12 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         # (흰 도로 주행 중 옆 노란선 하나만 보일 때 좌/우 모호성을 푼다)
         opposite_line_mask=white_bev,
         observable_mask=observable_bev,
+        is_ego_course=ego_course == "yellow",
+        use_single_line_angle_bias=True,
+        side_debug=yellow_side_debug,
+        boundary_segments_by_row=yellow_segments_by_row,
+        opposite_segments_by_row=white_segments_by_row,
+        road_segments_by_row=road_segments_by_row,
     )
 
     yellow_left = temporally_smooth_boundary(
@@ -3439,6 +3869,7 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
             white_right=white_right,
             yellow_left=yellow_left,
             yellow_right=yellow_right,
+            yellow_side_debug=yellow_side_debug,
         )
 
     boundary_candidates = (
@@ -4473,7 +4904,10 @@ def segment_center(segment: tuple[int, int]) -> float:
     return (segment[0] + segment[1]) / 2.0
 
 
-def drivable_reference_centerline(road_clean: np.ndarray) -> np.ndarray:
+def drivable_reference_centerline(
+    road_clean: np.ndarray,
+    road_segments_by_row: list[list[tuple[int, int]]] | None = None,
+) -> np.ndarray:
     """차량이 달리는 도로의 행별 중심 열(없으면 NaN).
 
     인코스/아웃코스 판정의 기준축이다. 흰 중심선이 없는 구간(노란선만 있는
@@ -4485,7 +4919,15 @@ def drivable_reference_centerline(road_clean: np.ndarray) -> np.ndarray:
     reference = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
     running = (BEV_WIDTH - 1) / 2.0
     for row in range(BEV_HEIGHT - 1, -1, -1):
-        segments = find_drivable_segments(road_clean[row])
+        segments = (
+            find_drivable_segments(road_clean[row])
+            if road_segments_by_row is None
+            else [
+                segment
+                for segment in road_segments_by_row[row]
+                if segment[1] - segment[0] + 1 >= MIN_BRANCH_WIDTH_PX
+            ]
+        )
         if not segments:
             continue
         segment = min(
@@ -4500,10 +4942,14 @@ def drivable_reference_centerline(road_clean: np.ndarray) -> np.ndarray:
 def resolve_inner_course_reference(
     white_centerline: np.ndarray,
     road_clean: np.ndarray,
+    road_segments_by_row: list[list[tuple[int, int]]] | None = None,
 ) -> np.ndarray:
     """인코스 판정 기준선: 흰 중심선이 있으면 그것, 없으면 도로 중심선으로 폴백."""
 
-    drivable = drivable_reference_centerline(road_clean)
+    drivable = drivable_reference_centerline(
+        road_clean,
+        road_segments_by_row,
+    )
     return np.where(np.isnan(white_centerline), drivable, white_centerline)
 
 
@@ -4837,16 +5283,6 @@ def build_course_cells(
         )
     closed = cv2.dilate(closed, LANE_CUT_KERNEL)
     return cv2.bitwise_and(road_clean, cv2.bitwise_not(closed))
-
-
-def find_course_cells(row: np.ndarray) -> list[tuple[int, int]]:
-    """한 행의 셀 구간. 분기 시작점의 뾰족한 셀도 놓치지 않게 폭 기준이 낮다."""
-
-    return [
-        (left, right)
-        for left, right in find_line_segments(row)
-        if right - left + 1 >= MIN_CELL_WIDTH_PX
-    ]
 
 
 def is_branch_like(path: list[tuple[int, tuple[int, int]]]) -> bool:
@@ -5202,7 +5638,12 @@ def build_road_branches_cells(
 
     cells_mask = build_course_cells(road_clean, white_line, yellow_line)
     cells_by_row = [
-        find_course_cells(cells_mask[row]) for row in range(BEV_HEIGHT)
+        [
+            (left, right)
+            for left, right in segments
+            if right - left + 1 >= MIN_CELL_WIDTH_PX
+        ]
+        for segments in find_line_segments_by_row(cells_mask)
     ]
     rows = [row for row in range(BEV_HEIGHT - 1, -1, -1) if cells_by_row[row]]
     if not rows:
