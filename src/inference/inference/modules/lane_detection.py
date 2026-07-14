@@ -548,8 +548,10 @@ MAX_BOUNDARY_TRACK_GAP_PX = int(
     )
 )
 
-# 점선 사이에서 허용할 최대 좌우 이동량
-MAX_BOUNDARY_SHIFT_M = 0.12
+# 점선 사이에서 허용할 최대 좌우 이동량.
+# In 탈출·Out 갈림에서 갈래가 벌어질 때 행당 ~8 px(≈3 cm) 개방이 필요해
+# 0.12 m / 0.45 px·row 이면 DP가 x≈1.0 m에서 끊김 → BEV X_MAX(1.5 m)까지 못 감.
+MAX_BOUNDARY_SHIFT_M = 0.20
 
 MAX_BOUNDARY_SHIFT_PX = (
     MAX_BOUNDARY_SHIFT_M
@@ -564,7 +566,13 @@ BOUNDARY_BASE_SHIFT_PX = (
     / METERS_PER_PIXEL
 )
 
-BOUNDARY_SHIFT_PER_ROW_PX = 0.45
+BOUNDARY_SHIFT_PER_ROW_PX = 2.5
+
+# DP tip 너머 far 마킹으로 코스를 이어 붙일 때 허용 횡오차 (Metric IPM X_MAX까지).
+FAR_COURSE_ASSOC_M = 0.28
+FAR_COURSE_MAX_MISS_ROWS = int(
+    round(0.20 / METERS_PER_PIXEL)
+)  # 연속 미스 ≈0.20 m 이면 far 연장 중단
 
 # 보간할 최대 점선 간격
 MAX_BOUNDARY_INTERPOLATION_GAP_M = 0.32
@@ -2495,6 +2503,125 @@ def smooth_boundary_pair(
     return smoothed_left, smoothed_right
 
 
+def extend_boundary_pair_far_along_marks(
+    left: np.ndarray,
+    right: np.ndarray,
+    boundary_mask: np.ndarray,
+    *,
+    assoc_m: float = FAR_COURSE_ASSOC_M,
+    max_miss_rows: int = FAR_COURSE_MAX_MISS_ROWS,
+) -> tuple[np.ndarray, np.ndarray]:
+    """DP tip보다 먼 BEV 행을 마킹에 스냅해 X_MAX(~1.5 m) 쪽으로 연장한다.
+
+    갈림 far에서는 바깥/안쪽 중 한 페인트만 남는 경우가 많다. 관측된 쪽에
+    붙이고 반대쪽은 직전 차로폭(또는 track_width) prior로 합성한다.
+    """
+
+    left_out = np.asarray(left, dtype=np.float32).copy()
+    right_out = np.asarray(right, dtype=np.float32).copy()
+    if boundary_mask.size == 0 or left_out.shape[0] != boundary_mask.shape[0]:
+        return left_out, right_out
+
+    both = np.flatnonzero(~np.isnan(left_out) & ~np.isnan(right_out))
+    if both.size == 0:
+        return left_out, right_out
+
+    tip = int(both[0])  # smallest row = farthest valid
+    if tip <= 0:
+        return left_out, right_out
+
+    assoc_px = float(max(2.0, assoc_m / METERS_PER_PIXEL))
+    rail_w_px = float(ROAD_WIDTH_M / METERS_PER_PIXEL)
+    min_w_px = float(0.45 * rail_w_px)
+    max_w_px = float(2.2 * rail_w_px)
+    segments_by_row = find_line_segments_by_row(boundary_mask)
+
+    prev_l = float(left_out[tip])
+    prev_r = float(right_out[tip])
+    miss = 0
+
+    def nearest_edge(prev_u: float, segments: list[tuple[int, int]]) -> tuple[float, float] | None:
+        best_u: float | None = None
+        best_d = float("inf")
+        for start_u, end_u in segments:
+            for cand in (float(start_u), float(end_u)):
+                dist = abs(cand - prev_u)
+                if dist < best_d:
+                    best_d = dist
+                    best_u = cand
+        if best_u is None or best_d > assoc_px:
+            return None
+        return best_u, best_d
+
+    for row in range(tip - 1, -1, -1):
+        if not np.isnan(left_out[row]) and not np.isnan(right_out[row]):
+            prev_l = float(left_out[row])
+            prev_r = float(right_out[row])
+            miss = 0
+            continue
+
+        segments = segments_by_row[row]
+        if not segments:
+            miss += 1
+            if miss > int(max_miss_rows):
+                break
+            continue
+
+        width = float(np.clip(prev_r - prev_l, min_w_px, max_w_px))
+        hit_l = nearest_edge(prev_l, segments)
+        hit_r = nearest_edge(prev_r, segments)
+
+        next_l: float | None = None
+        next_r: float | None = None
+        if hit_l is not None and hit_r is not None:
+            next_l, next_r = float(hit_l[0]), float(hit_r[0])
+            if next_r <= next_l:
+                # Same paint blob claimed both → keep rail from better hit.
+                if hit_l[1] <= hit_r[1]:
+                    next_r = next_l + width
+                else:
+                    next_l = next_r - width
+        elif hit_l is not None:
+            next_l = float(hit_l[0])
+            next_r = next_l + width
+        elif hit_r is not None:
+            next_r = float(hit_r[0])
+            next_l = next_r - width
+        else:
+            # Corridor mid between two marks (stem → open fork recovery).
+            mid = 0.5 * (prev_l + prev_r)
+            centers = sorted(
+                (0.5 * (float(s) + float(e)), float(s), float(e))
+                for s, e in segments
+            )
+            leftish = [c for c in centers if c[0] <= mid + assoc_px]
+            rightish = [c for c in centers if c[0] >= mid - assoc_px]
+            if leftish and rightish and leftish[-1][2] < rightish[0][1]:
+                next_l = leftish[-1][2]  # right edge of left mark
+                next_r = rightish[0][1]  # left edge of right mark
+                if next_r <= next_l:
+                    next_l = next_r = None
+
+        if (
+            next_l is None
+            or next_r is None
+            or next_r <= next_l
+            or not (min_w_px <= (next_r - next_l) <= max_w_px)
+        ):
+            miss += 1
+            if miss > int(max_miss_rows):
+                break
+            continue
+
+        left_out[row] = float(np.clip(next_l, 0.0, float(BEV_WIDTH - 1)))
+        right_out[row] = float(np.clip(next_r, 0.0, float(BEV_WIDTH - 1)))
+        prev_l = float(left_out[row])
+        prev_r = float(right_out[row])
+        miss = 0
+
+    return left_out, right_out
+
+
 def interpolate_yellow_boundary_pair(
     raw_left: np.ndarray,
     raw_right: np.ndarray,
@@ -2619,6 +2746,11 @@ def build_global_boundary_course(
     ) -> tuple[np.ndarray, np.ndarray]:
         if keep_nearest:
             left, right = keep_nearest_continuous_run(left, right)
+        # Metric BEV goes to X_MAX(~1.5 m); DP tip often dies earlier when the
+        # fork opens — snap the remaining far rows onto the same mark mask.
+        left, right = extend_boundary_pair_far_along_marks(
+            left, right, boundary_mask
+        )
         if smooth_course:
             left, right = smooth_boundary_pair(left, right)
         return left, right
