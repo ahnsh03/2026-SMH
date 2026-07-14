@@ -285,6 +285,184 @@ def apply_frenet_normal_width(
     return out
 
 
+def _smooth_xy(xy: np.ndarray, window: int = 7) -> np.ndarray:
+    if xy.shape[0] < 3:
+        return xy.astype(np.float32, copy=True)
+    w = max(3, int(window) | 1)
+    pad = w // 2
+    out = xy.astype(np.float64).copy()
+    for axis in (0, 1):
+        s = np.pad(out[:, axis], (pad, pad), mode="edge")
+        ker = np.ones(w, dtype=np.float64) / float(w)
+        out[:, axis] = np.convolve(s, ker, mode="valid")
+    return out.astype(np.float32)
+
+
+def _resample_arclength(xy: np.ndarray, step_m: float = 0.02) -> np.ndarray:
+    if xy.shape[0] < 2:
+        return xy.astype(np.float32, copy=True)
+    d = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(d)])
+    total = float(s[-1])
+    if total < step_m * 2:
+        return xy.astype(np.float32, copy=True)
+    s_new = np.arange(0.0, total + 1e-9, step_m, dtype=np.float64)
+    x = np.interp(s_new, s, xy[:, 0])
+    y = np.interp(s_new, s, xy[:, 1])
+    return np.column_stack((x, y)).astype(np.float32)
+
+
+def _fit_circle_window(xy: np.ndarray) -> tuple[float, float, float] | None:
+    """Algebraic circle fit. Returns (cx, cy, r) or None."""
+
+    if xy.shape[0] < 3:
+        return None
+    x = xy[:, 0].astype(np.float64)
+    y = xy[:, 1].astype(np.float64)
+    A = np.column_stack((2.0 * x, 2.0 * y, np.ones_like(x)))
+    try:
+        sol, *_ = np.linalg.lstsq(A, x * x + y * y, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    cx, cy, c = float(sol[0]), float(sol[1]), float(sol[2])
+    r2 = c + cx * cx + cy * cy
+    if r2 <= 1e-6:
+        return None
+    r = float(np.sqrt(r2))
+    if not np.isfinite(r) or r < 0.15 or r > 20.0:
+        return None
+    return cx, cy, r
+
+
+def _rasterize_curve_to_rows(points_xy: np.ndarray) -> np.ndarray:
+    """Horizontal slices: for each BEV row x, interpolate curve y → u."""
+
+    cols = np.full(ld.BEV_HEIGHT, np.nan, dtype=np.float32)
+    if points_xy.shape[0] < 2:
+        return cols
+    # Sort by x for interp; drop non-monotonic folds by keeping increasing-x runs.
+    order = np.argsort(points_xy[:, 0])
+    xs = points_xy[order, 0].astype(np.float64)
+    ys = points_xy[order, 1].astype(np.float64)
+    # Dedup x
+    uniq_x, idx = np.unique(xs, return_index=True)
+    uniq_y = ys[idx]
+    if uniq_x.size < 2:
+        return cols
+    for row in range(ld.BEV_HEIGHT):
+        x = float(ld.X_MAX_M - row * ld.METERS_PER_PIXEL)
+        if x < float(uniq_x[0]) - 1e-6 or x > float(uniq_x[-1]) + 1e-6:
+            continue
+        y = float(np.interp(x, uniq_x, uniq_y))
+        u = (ld.BEV_WIDTH - 1) / 2.0 - y / ld.METERS_PER_PIXEL
+        if 0.0 <= u < float(ld.BEV_WIDTH):
+            cols[row] = float(u)
+    return cols
+
+
+def apply_curvature_radius_rails(
+    pairs: list[ld.ForkLanePair],
+    *,
+    width_m: float | None = None,
+    circle_window: int = 21,
+) -> list[ld.ForkLanePair]:
+    """Rebuild inner/center as concentric offsets using local curvature radius.
+
+    1) Smooth + arclength-resample outer in vehicle (x,y)
+    2) Sliding circle fit → center C, radius R (곡률 반경)
+    3) Radial unit û = (p-C)/R ; parallel curves at R±w along û
+    4) Rasterize by horizontal slice (x=const) so BEV rows stay stable
+
+    Falls back to smoothed Frenet normal when circle fit fails.
+    """
+
+    w_m = float(width_m if width_m is not None else ld.FORK_PAIR_WIDTH_M)
+    half = 0.5 * w_m
+    out: list[ld.ForkLanePair] = []
+    for p in _pair_as_mutable(pairs):
+        side = "left" if int(p.lateral_rank) == 0 else "right"
+        o = p.outer_u
+        xy = ld._boundary_u_to_vehicle_points(o)
+        if xy.shape[0] < 5:
+            out.append(p)
+            continue
+        xy_s = _resample_arclength(_smooth_xy(xy, window=7), step_m=0.015)
+        n = xy_s.shape[0]
+        half_w = max(3, circle_window // 2)
+
+        inner_xy = np.zeros_like(xy_s)
+        center_xy = np.zeros_like(xy_s)
+        for i in range(n):
+            i0 = max(0, i - half_w)
+            i1 = min(n, i + half_w + 1)
+            circ = _fit_circle_window(xy_s[i0:i1])
+            p_i = xy_s[i]
+            j0 = max(0, i - 2)
+            j1 = min(n - 1, i + 2)
+            d = xy_s[j1] - xy_s[j0]
+            nrm = float(np.linalg.norm(d))
+            t = (
+                (d / nrm).astype(np.float32)
+                if nrm > 1e-6
+                else np.array([1.0, 0.0], dtype=np.float32)
+            )
+            n_left = np.array([-t[1], t[0]], dtype=np.float32)
+            inward = (-n_left) if side == "left" else n_left
+
+            if circ is not None:
+                cx, cy, _r = circ
+                radial = p_i - np.array([cx, cy], dtype=np.float32)
+                rn = float(np.linalg.norm(radial))
+                û = (
+                    (radial / rn).astype(np.float32)
+                    if rn > 1e-6
+                    else inward.astype(np.float32)
+                )
+                # Pick radial direction that points into the lane (align with Frenet inward).
+                if float(np.dot(û, inward)) < 0.0:
+                    û = -û
+                inner_xy[i] = p_i + û * w_m
+                center_xy[i] = p_i + û * half
+            else:
+                sign = -1.0 if side == "left" else 1.0
+                inner_xy[i] = p_i + sign * w_m * n_left
+                center_xy[i] = p_i + sign * half * n_left
+
+        inner = _rasterize_curve_to_rows(inner_xy)
+        center = _rasterize_curve_to_rows(center_xy)
+        outer_out = o.copy()
+        for row in range(ld.BEV_HEIGHT):
+            if np.isnan(outer_out[row]):
+                inner[row] = np.nan
+                center[row] = np.nan
+            elif np.isnan(inner[row]) or np.isnan(center[row]):
+                half_w_px = half / ld.METERS_PER_PIXEL
+                full_w_px = w_m / ld.METERS_PER_PIXEL
+                if side == "left":
+                    if np.isnan(inner[row]):
+                        inner[row] = float(outer_out[row]) + full_w_px
+                    if np.isnan(center[row]):
+                        center[row] = float(outer_out[row]) + half_w_px
+                else:
+                    if np.isnan(inner[row]):
+                        inner[row] = float(outer_out[row]) - full_w_px
+                    if np.isnan(center[row]):
+                        center[row] = float(outer_out[row]) - half_w_px
+
+        conf = float(np.clip(np.count_nonzero(~np.isnan(center)) / ld.BEV_HEIGHT, 0, 1))
+        out.append(
+            replace(
+                p,
+                outer_u=outer_out,
+                inner_u=inner.astype(np.float32),
+                center_u=center.astype(np.float32),
+                confidence=conf,
+                inner_missing=True,
+            )
+        )
+    return out
+
+
 def extend_both_only(
     left: np.ndarray,
     right: np.ndarray,
@@ -518,6 +696,21 @@ def variant_runners() -> dict[str, Callable[..., tuple[ld.LaneDebugFrame, str]]]
         pairs = apply_frenet_normal_width(list(dbg.fork_lane_pairs))
         return make_debug_with_pairs(dbg, pairs), "baseline + Frenet normal ±w"
 
+    def C2(frame, prefer_yellow):
+        _, dbg = run_detect(frame, prefer_yellow)
+        pairs = apply_curvature_radius_rails(list(dbg.fork_lane_pairs))
+        return make_debug_with_pairs(dbg, pairs), "baseline + local circle R radial ±w"
+
+    def C3(frame, prefer_yellow):
+        """A0→clip paint→curvature radius (honest length + curved rails)."""
+        _, dbg = run_detect(frame, prefer_yellow)
+        mask = dbg.yellow_connected_bev if prefer_yellow else dbg.white_bev
+        if mask is None or mask.size == 0:
+            mask = dbg.yellow_bev if prefer_yellow else dbg.white_bev
+        pairs = clip_pairs_to_outer_paint(list(dbg.fork_lane_pairs), mask)
+        pairs = apply_curvature_radius_rails(pairs)
+        return make_debug_with_pairs(dbg, pairs), "clip outer paint + curvature radius rails"
+
     def D0(frame, prefer_yellow):
         _, dbg = run_detect(frame, prefer_yellow)
         mask = dbg.yellow_connected_bev if prefer_yellow else dbg.white_bev
@@ -562,6 +755,8 @@ def variant_runners() -> dict[str, Callable[..., tuple[ld.LaneDebugFrame, str]]]
         "B1_no_onesided_stitch": B1,
         "C0_heading_cos": C0,
         "C1_frenet_normal": C1,
+        "C2_curvature_radius": C2,
+        "C3_clip_curvature_R": C3,
         "D0_clip_then_frenet": D0,
         "D1_both_only_frenet": D1,
         "D2_noext_clip_frenet": D2,
