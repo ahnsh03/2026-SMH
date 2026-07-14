@@ -104,16 +104,25 @@ class PlannerConfig:
     roundabout_lookahead_m: float = 0.32
     roundabout_throttle: float = 0.06
     circle_ignore_fork_for_control: bool = True
+    # ROUNDABOUT_CIRCLE control: 'pp' | 'stanley' | 'mask_p' | 'hybrid' | ''(=normal).
+    # IN needs paint (yellow) centerline here — road COM alone drifts off the ring.
+    circle_tracker: str = 'pp'
     require_green_to_start: bool = False
     stop_on_red: bool = False
+    # When false: still detect ArUco for debug, but keep lane follow (no hard stop).
+    stop_on_aruco: bool = True
     command_watchdog_sec: float = 0.5
     log_state_changes: bool = True
     log_decision_changes: bool = True
     debug_publish_hz: float = 2.0
-    # NORMAL / roundabout-circle tracker: 'pp' | 'mask_p' | 'hybrid'
+    # NORMAL / roundabout-circle tracker: 'pp' | 'mask_p' | 'hybrid' | 'stanley'
     # hybrid = gated PP (straight) + hard-corridor mask COM (curve / large error).
+    # stanley = path CTE/heading Stanley-lite + optional curvature FF (A/B vs mask_p).
     normal_tracker: str = 'pp'
     mask_steer_k: float = 2.0
+    # sim_v2: limo_sim_code_v2 style (cx-half)/W·π·k clipped — strongest simple P.
+    # image_p: error_norm * k. lateral_atan: Stanley-like δ=atan(k e_m/(v+ε))/δ_max.
+    mask_steer_law: str = 'sim_v2'
     mask_steer_alpha: float = 0.4
     mask_near_band_ratio: float = 0.55
     # Farther BEV band (top of IPM). Blended into COM for earlier curve see-ahead.
@@ -122,6 +131,17 @@ class PlannerConfig:
     mask_far_blend: float = 0.0
     # Add white/yellow path CTE+heading on top of COM (mask_p only; hybrid uses PP CTE).
     mask_use_path_correction: bool = True
+    # How to turn road_clean (black/red free-space) into a lateral target:
+    # area = pixel COM (cuts inside on bends); row_mid = per-row L/R edge midpoint;
+    # dist_ridge = distance-transform ridge (farthest from red/black boundary).
+    mask_center_mode: str = 'row_mid'
+    # Optional erode before center extract — keeps target off paint edges (px).
+    mask_erode_px: int = 2
+    # Nominal free-space width (black/red walls). Used when one side is FOV/occlusion
+    # clipped so row_mid can rebuild center as visible_edge ± half_width.
+    mask_lane_width_m: float = 0.35
+    # Observed width below this fraction of lane_width → treat as single-sided.
+    mask_single_side_width_ratio: float = 0.72
     mask_min_area_px: float = 100.0
     mask_curve_steer_threshold: float = 0.35
     mask_curve_speed_scale: float = 0.80
@@ -134,6 +154,9 @@ class PlannerConfig:
     mask_fork_force_pp: bool = True
     # If color_path missing under hard/soft corridor, fail mask → PP fallback.
     mask_require_color_path: bool = True
+    # When mask drops in a corner, hold last COM steer this many frames before
+    # white PP (PP often yanks off when rails vanish).
+    mask_occlusion_hold_frames: int = 24
     # Hybrid gate: w = max(smoothstep(|e|-deadband), smoothstep(|κ|)).
     mask_error_deadband: float = 0.04
     mask_blend_error_lo: float = 0.08
@@ -146,6 +169,23 @@ class PlannerConfig:
     error_speed_cte_full_m: float = 0.16
     error_speed_steer_full: float = 0.50
     error_speed_min_scale: float = 0.48
+    # Phase A: temporal lateral track state (COM norm + path near-y).
+    track_err_alpha: float = 0.40
+    track_err_max_jump: float = 0.35
+    track_path_y_alpha: float = 0.35
+    track_path_y_max_jump_m: float = 0.12
+    track_half_width_m: float = 0.175
+    track_enable_path_hold: bool = True
+    # Phase B: Stanley-lite (δ = ψ + atan(k e / (v+eps)) + κ FF).
+    stanley_k_cte: float = 1.20
+    stanley_k_yaw: float = 1.0
+    stanley_v_soft: float = 0.18
+    stanley_curvature_ff_gain: float = 0.35
+    stanley_steer_alpha: float = 0.35
+    # Phase C: predict CTE across vision/servo delay (seconds). 0 = off.
+    delay_pred_sec: float = 0.0
+    # Approximate |v| from |throttle| for Stanley / delay (m/s at throttle=1).
+    throttle_speed_scale_mps: float = 1.0
 
 
 def load_planner_config(
@@ -171,6 +211,8 @@ def load_planner_config(
     debug = _section(data, 'debug')
     tracker = _section(data, 'tracker')
     mask = _section(data, 'mask_pursuit')
+    track = _section(data, 'track_state')
+    stanley = _section(data, 'stanley')
     selected_route = route_mode or route.get('mode', RouteMode.OUT.value)
     mode = RouteMode(str(selected_route).lower())
     # IN → yellow priority by default; OUT → white (prefer_yellow false).
@@ -284,14 +326,17 @@ def load_planner_config(
         circle_ignore_fork_for_control=bool(
             rb.get('circle_ignore_fork_for_control', True)
         ),
+        circle_tracker=str(rb.get('circle_tracker', 'pp') or 'pp').strip().lower(),
         require_green_to_start=bool(signals.get('require_green_to_start', False)),
         stop_on_red=bool(signals.get('stop_on_red', False)),
+        stop_on_aruco=bool(signals.get('stop_on_aruco', True)),
         command_watchdog_sec=max(0.1, float(safety.get('command_watchdog_sec', 0.5))),
         log_state_changes=bool(debug.get('log_state_changes', True)),
         log_decision_changes=bool(debug.get('log_decision_changes', True)),
         debug_publish_hz=max(0.1, float(debug.get('publish_hz', 2.0))),
         normal_tracker=str(tracker.get('normal', 'pp')).strip().lower(),
         mask_steer_k=max(0.01, float(mask.get('steer_k', 2.0))),
+        mask_steer_law=str(mask.get('steer_law', 'sim_v2') or 'sim_v2').lower(),
         mask_steer_alpha=float(np.clip(mask.get('steer_alpha', 0.4), 0.01, 1.0)),
         mask_near_band_ratio=float(
             np.clip(mask.get('near_band_ratio', 0.55), 0.1, 1.0)
@@ -301,6 +346,12 @@ def load_planner_config(
         ),
         mask_far_blend=float(np.clip(mask.get('far_blend', 0.0), 0.0, 0.8)),
         mask_use_path_correction=bool(mask.get('use_path_correction', True)),
+        mask_center_mode=str(mask.get('center_mode', 'row_mid')).strip().lower(),
+        mask_erode_px=max(0, int(mask.get('erode_px', 2))),
+        mask_lane_width_m=max(0.15, float(mask.get('lane_width_m', 0.35))),
+        mask_single_side_width_ratio=float(
+            np.clip(mask.get('single_side_width_ratio', 0.72), 0.4, 0.95)
+        ),
         mask_min_area_px=max(1.0, float(mask.get('min_area_px', 100.0))),
         mask_curve_steer_threshold=float(
             np.clip(mask.get('curve_steer_threshold', 0.50), 0.0, 1.0)
@@ -317,6 +368,9 @@ def load_planner_config(
         ),
         mask_fork_force_pp=bool(mask.get('fork_force_pp', True)),
         mask_require_color_path=bool(mask.get('require_color_path', True)),
+        mask_occlusion_hold_frames=max(
+            0, int(mask.get('occlusion_hold_frames', 12))
+        ),
         mask_error_deadband=max(0.0, float(mask.get('error_deadband', 0.04))),
         mask_blend_error_lo=max(0.0, float(mask.get('blend_error_lo', 0.08))),
         mask_blend_error_hi=max(
@@ -339,6 +393,31 @@ def load_planner_config(
         ),
         error_speed_min_scale=float(
             np.clip(speed.get('error_speed_min_scale', 0.48), 0.15, 1.0)
+        ),
+        track_err_alpha=float(np.clip(track.get('err_alpha', 0.40), 0.01, 1.0)),
+        track_err_max_jump=max(0.02, float(track.get('err_max_jump', 0.35))),
+        track_path_y_alpha=float(
+            np.clip(track.get('path_y_alpha', 0.35), 0.01, 1.0)
+        ),
+        track_path_y_max_jump_m=max(
+            0.02, float(track.get('path_y_max_jump_m', 0.12))
+        ),
+        track_half_width_m=max(
+            0.05, float(track.get('half_width_m', 0.175))
+        ),
+        track_enable_path_hold=bool(track.get('enable_path_hold', True)),
+        stanley_k_cte=max(0.0, float(stanley.get('k_cte', 1.20))),
+        stanley_k_yaw=max(0.0, float(stanley.get('k_yaw', 1.0))),
+        stanley_v_soft=max(0.01, float(stanley.get('v_soft', 0.18))),
+        stanley_curvature_ff_gain=float(
+            np.clip(stanley.get('curvature_ff_gain', 0.35), 0.0, 2.0)
+        ),
+        stanley_steer_alpha=float(
+            np.clip(stanley.get('steer_alpha', 0.35), 0.01, 1.0)
+        ),
+        delay_pred_sec=max(0.0, float(track.get('delay_pred_sec', 0.0))),
+        throttle_speed_scale_mps=max(
+            0.1, float(track.get('throttle_speed_scale_mps', 1.0))
         ),
     )
 
@@ -434,6 +513,13 @@ class MainPlanner:
         self._steering = 0.0
         self._steer_f = 0.0
         self._hybrid_steer_f = 0.0
+        self._stanley_steer_f = 0.0
+        self._track_e_norm: float | None = None
+        self._track_cte_m: float | None = None
+        self._track_path_y_m: float | None = None
+        self._track_psi: float | None = None
+        self._track_com_cx: float | None = None
+        self._mask_occlusion_hold_frames = 0
         self._lookahead_m = self.config.lookahead_m
         self._last_path_source = PathSource.NONE
         self._last_mask_debug: dict[str, Any] = {}
@@ -444,6 +530,13 @@ class MainPlanner:
         self._steering = 0.0
         self._steer_f = 0.0
         self._hybrid_steer_f = 0.0
+        self._stanley_steer_f = 0.0
+        self._track_e_norm = None
+        self._track_cte_m = None
+        self._track_path_y_m = None
+        self._track_psi = None
+        self._track_com_cx = None
+        self._mask_occlusion_hold_frames = 0
 
     def _step_dt(self, now_sec: float) -> float:
         if self._last_step_time_sec is None or now_sec <= self._last_step_time_sec:
@@ -1011,6 +1104,191 @@ class MainPlanner:
         self._steering = float(np.clip(self._steering + delta, -1.0, 1.0))
         return self._steering
 
+    @staticmethod
+    def _ema_with_jump(
+        previous: float | None,
+        observation: float,
+        *,
+        alpha: float,
+        max_jump: float,
+    ) -> tuple[float, bool]:
+        """Low-pass filter with jump reject (keeps previous on flicker / L-R flip)."""
+        if previous is None or not math.isfinite(previous):
+            return float(observation), False
+        jumped = abs(float(observation) - float(previous)) > float(max_jump)
+        sample = float(previous) if jumped else float(observation)
+        alpha = float(np.clip(alpha, 0.01, 1.0))
+        return (1.0 - alpha) * float(previous) + alpha * sample, jumped
+
+    def _estimate_speed_mps(self) -> float:
+        """Throttle→speed scale for Stanley / delay prediction (no odom required)."""
+        cruise = abs(float(self.config.cruise_throttle))
+        scale = float(self.config.throttle_speed_scale_mps)
+        return max(0.05, cruise * scale)
+
+    def _harden_color_path(self, path_xy: np.ndarray) -> np.ndarray:
+        """Temporal near-y hold + half-width soft clamp on color centerline.
+
+        Rejects sudden lateral jumps (occlusion / L-R flip) and gently pulls
+        paths that sit beyond ~1.35× half-width back toward the prior center.
+        Perception already synthesizes missing rails; this is a control-layer
+        safety net that does not touch fork branch geometry when unused.
+        """
+        arr = np.asarray(path_xy, dtype=np.float32)
+        if (
+            not self.config.track_enable_path_hold
+            or arr.ndim != 2
+            or arr.shape[0] < 2
+            or arr.shape[1] < 2
+        ):
+            return arr
+        rear = self._path_in_rear_axle_frame(arr)
+        near_mask = rear[:, 0] <= max(0.9, float(self.config.heading_preview_m) + 0.4)
+        near = rear[near_mask] if np.any(near_mask) else rear[: min(4, rear.shape[0])]
+        raw_y = float(np.mean(near[:, 1]))
+        filtered_y, jumped = self._ema_with_jump(
+            self._track_path_y_m,
+            raw_y,
+            alpha=self.config.track_path_y_alpha,
+            max_jump=self.config.track_path_y_max_jump_m,
+        )
+        half = float(self.config.track_half_width_m)
+        # Soft half-width prior: if filtered magnitude exceeds rail half*1.35,
+        # blend toward sign(filtered)*half (virtual single-rail center).
+        soft_limit = 1.35 * half
+        if abs(filtered_y) > soft_limit:
+            target = math.copysign(half, filtered_y)
+            filtered_y = 0.7 * filtered_y + 0.3 * target
+        self._track_path_y_m = filtered_y
+        dy = filtered_y - raw_y
+        if abs(dy) < 1e-5:
+            return arr
+        out = arr.copy()
+        out[:, 1] = out[:, 1] + float(dy)
+        self._last_mask_debug = {
+            **getattr(self, '_last_mask_debug', {}),
+            'track_path_y_raw': round(raw_y, 4),
+            'track_path_y_f': round(filtered_y, 4),
+            'track_path_jump': bool(jumped),
+        }
+        return out
+
+    def _stanley_pursuit(
+        self,
+        path: np.ndarray,
+        dt_sec: float | None = None,
+        *,
+        apply_rate_limit: bool = True,
+    ) -> PursuitResult:
+        """Stanley-lite on hardened color path + optional curvature feedforward."""
+        hardened = self._harden_color_path(path)
+        rear_axle_path = self._path_in_rear_axle_frame(hardened)
+        xy = self._ordered_path(rear_axle_path)
+        if xy.shape[0] < self.config.min_points:
+            return PursuitResult(False, path_points=int(xy.shape[0]))
+        xy, path_extrapolation_m = self._extend_path_to_front_axle(xy)
+        path_curvature = self._estimate_path_curvature(xy)
+        cte = self._cross_track_error(xy)
+        heading_error, _heading_cmd = self._heading_correction(xy)
+
+        cte_f, cte_jump = self._ema_with_jump(
+            self._track_cte_m,
+            cte,
+            alpha=self.config.track_err_alpha,
+            max_jump=self.config.track_path_y_max_jump_m,
+        )
+        self._track_cte_m = cte_f
+        psi_f, _ = self._ema_with_jump(
+            self._track_psi,
+            float(heading_error),
+            alpha=self.config.track_err_alpha,
+            max_jump=0.55,
+        )
+        self._track_psi = psi_f
+
+        v = self._estimate_speed_mps()
+        delay = float(self.config.delay_pred_sec)
+        e_pred = float(cte_f)
+        if delay > 1e-6:
+            e_pred = e_pred + delay * v * math.sin(float(psi_f))
+
+        effective_e = math.copysign(
+            max(0.0, abs(e_pred) - self.config.cte_deadband_m), e_pred
+        )
+        stanley_term = math.atan2(
+            self.config.stanley_k_cte * effective_e,
+            v + float(self.config.stanley_v_soft),
+        )
+        yaw_term = float(self.config.stanley_k_yaw) * float(psi_f)
+        ff = float(self.config.stanley_curvature_ff_gain) * math.atan(
+            self.config.wheelbase_m * float(path_curvature)
+        )
+        # Positive path-left angles → negative D-Racer steering.
+        steer_angle = yaw_term + stanley_term + ff
+        raw = float(
+            np.clip(
+                -steer_angle / self.config.max_steer_angle_rad,
+                -self.config.max_steering_command,
+                self.config.max_steering_command,
+            )
+        )
+        if abs(raw) < self.config.steer_command_deadband:
+            raw = 0.0
+
+        alpha = float(self.config.stanley_steer_alpha)
+        self._stanley_steer_f = (1.0 - alpha) * self._stanley_steer_f + alpha * raw
+        filtered = float(self._stanley_steer_f)
+        dt = self.config.nominal_control_dt_sec if dt_sec is None else max(0.0, dt_sec)
+        if apply_rate_limit:
+            steered = self._apply_rate_limited_steering(filtered, dt)
+        else:
+            steered = float(np.clip(filtered, -1.0, 1.0))
+
+        curve_ratio = float(
+            np.clip(
+                abs(path_curvature) / max(self.config.curvature_full_scale, 1e-3),
+                0.0,
+                1.0,
+            )
+        )
+        target = self._target_at_radius(xy, max(0.35, self.config.heading_preview_m))
+        if target is None:
+            target_x, target_y = 0.4, float(-cte_f)
+        else:
+            target_x, target_y = float(target[0]), float(target[1])
+
+        self._last_mask_debug = {
+            **getattr(self, '_last_mask_debug', {}),
+            'stanley_cte_m': round(float(cte), 4),
+            'stanley_cte_f': round(float(cte_f), 4),
+            'stanley_cte_jump': bool(cte_jump),
+            'stanley_psi': round(float(psi_f), 4),
+            'stanley_e_pred': round(float(e_pred), 4),
+            'stanley_ff': round(float(ff), 4),
+            'stanley_v': round(float(v), 3),
+        }
+        return PursuitResult(
+            valid=True,
+            steering=steered,
+            target_x=target_x,
+            target_y=target_y,
+            path_points=int(xy.shape[0]),
+            target_distance=math.hypot(target_x, target_y),
+            lookahead_m=float(self.config.heading_preview_m),
+            desired_lookahead_m=float(self.config.heading_preview_m),
+            path_curvature=float(path_curvature),
+            curve_ratio=curve_ratio,
+            raw_steering=filtered,
+            pp_steering=raw,
+            cross_track_error_m=float(cte_f),
+            cte_steering=float(
+                -stanley_term / self.config.max_steer_angle_rad
+            ),
+            heading_error_rad=float(psi_f),
+            heading_steering=float(-yaw_term / self.config.max_steer_angle_rad),
+            path_extrapolation_m=float(path_extrapolation_m),
+        )
+
     def _mask_com_pursuit(
         self,
         lane: Any,
@@ -1034,22 +1312,22 @@ class MainPlanner:
 
         mask = np.asarray(getattr(lane, 'drivable_area', None), dtype=np.uint8)
         if mask.ndim != 2 or mask.size == 0:
-            return PursuitResult(False)
+            return self._mask_occlusion_hold_or_fail(dt_sec)
         binary = (mask > 0).astype(np.uint8)
         height, width = binary.shape
         if height < 4 or width < 4:
-            return PursuitResult(False)
+            return self._mask_occlusion_hold_or_fail(dt_sec)
 
         path_xy = np.empty((0, 2), dtype=np.float32)
         if color_path is not None:
             arr = np.asarray(color_path, dtype=np.float32)
             if arr.ndim == 2 and arr.shape[0] >= 2 and arr.shape[1] >= 2:
-                path_xy = arr[:, :2]
+                path_xy = self._harden_color_path(arr)
 
         corridor_mode = str(self.config.mask_corridor_mode or 'off').lower()
         if corridor_mode in ('hard', 'soft') and path_xy.shape[0] < 2:
             if self.config.mask_require_color_path:
-                return PursuitResult(False)
+                return self._mask_occlusion_hold_or_fail(dt_sec)
 
         mpp = float(getattr(lane, 'meters_per_pixel', 0.0) or 0.0)
         if mpp <= 1e-9:
@@ -1057,12 +1335,19 @@ class MainPlanner:
 
         work = binary
         weight = None
+        center_mode = str(self.config.mask_center_mode or 'row_mid').lower()
+        erode_px = int(self.config.mask_erode_px)
+        if erode_px > 0:
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * erode_px + 1, 2 * erode_px + 1)
+            )
+            work = cv2.erode(work, kernel, iterations=1)
         if corridor_mode in ('hard', 'soft') and path_xy.shape[0] >= 2:
             corridor = self._bev_corridor_mask(
                 path_xy, height, width, mpp, self.config.mask_corridor_half_width_m
             )
             if corridor_mode == 'hard':
-                work = cv2.bitwise_and(binary, corridor)
+                work = cv2.bitwise_and(work, corridor)
             else:
                 # Soft: distance to path skeleton → Gaussian weight on road.
                 skeleton = self._bev_path_skeleton(path_xy, height, width)
@@ -1071,7 +1356,7 @@ class MainPlanner:
                 dist_m = dist_px.astype(np.float32) * float(mpp)
                 sigma = float(self.config.mask_path_weight_sigma_m)
                 weight = np.exp(-(dist_m * dist_m) / (2.0 * sigma * sigma))
-                weight = weight * (binary > 0).astype(np.float32)
+                weight = weight * (work > 0).astype(np.float32)
 
         band = float(np.clip(self.config.mask_near_band_ratio, 0.1, 1.0))
         far_band = float(np.clip(self.config.mask_far_band_ratio, band, 1.0))
@@ -1080,8 +1365,18 @@ class MainPlanner:
         else:
             far_blend = float(np.clip(far_blend_override, 0.0, 0.8))
 
-        def _roi_com(y_lo: int, y_hi: int) -> tuple[float, float, float] | None:
-            """Return (cx, cy, area) for rows [y_lo, y_hi)."""
+        # limo_sim_code_v2: drive on the largest road blob only (drop side flakes).
+        if str(self.config.mask_steer_law or '').lower() == 'sim_v2':
+            nlab, labels, stats, _ = cv2.connectedComponentsWithStats(
+                (work > 0).astype(np.uint8), connectivity=8
+            )
+            if nlab > 1:
+                best = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+                work = np.where(labels == best, np.uint8(255), np.uint8(0))
+                if weight is not None:
+                    weight = weight * (work > 0).astype(np.float32)
+
+        def _roi_area_com(y_lo: int, y_hi: int) -> tuple[float, float, float] | None:
             if y_hi - y_lo < 2:
                 return None
             if weight is not None:
@@ -1101,29 +1396,253 @@ class MainPlanner:
             cy_v = float(moments['m01'] / area_v) + float(y_lo)
             return cx_v, cy_v, area_v
 
+        def _roi_row_mid(y_lo: int, y_hi: int) -> tuple[float, float, float] | None:
+            """Per-row L/R midpoint with single-side width prior (S-curve occlusion).
+
+            Only treat FOV-touch as a clipped rail when the blob is also
+            *narrower* than the nominal lane — a full-width road that reaches
+            the BEV edge must keep geometric mid (otherwise cornering yanks off).
+            When single-sided, prefer the edge that stays near the temporal
+            ``_track_com_cx`` prior.
+            """
+            if y_hi - y_lo < 2:
+                return None
+            roi = work[y_lo:y_hi, :]
+            expected_w = max(
+                4.0, float(self.config.mask_lane_width_m) / max(mpp, 1e-6)
+            )
+            half_lane = 0.5 * expected_w
+            edge_tol = 2
+            min_ratio = float(self.config.mask_single_side_width_ratio)
+            prev_cx = self._track_com_cx
+            mids: list[float] = []
+            rows_used: list[float] = []
+            areas = 0.0
+            single_hits = 0
+            for i in range(roi.shape[0]):
+                cols = np.flatnonzero(roi[i] > 0)
+                if cols.size < 2:
+                    continue
+                left = float(cols[0])
+                right = float(cols[-1])
+                width_px = right - left + 1.0
+                clipped_l = left <= edge_tol
+                clipped_r = right >= float(width - 1 - edge_tol)
+                narrow = width_px < min_ratio * expected_w
+                geom = 0.5 * (left + right)
+                mid = geom
+                if narrow and clipped_l and not clipped_r:
+                    mid = right - half_lane
+                    single_hits += 1
+                elif narrow and clipped_r and not clipped_l:
+                    mid = left + half_lane
+                    single_hits += 1
+                elif narrow:
+                    # Mid-frame occlusion: pick the reconstruction closest to prior.
+                    c_left = left + half_lane
+                    c_right = right - half_lane
+                    if prev_cx is not None:
+                        mid = (
+                            c_left
+                            if abs(c_left - prev_cx) <= abs(c_right - prev_cx)
+                            else c_right
+                        )
+                    else:
+                        img_c = 0.5 * float(width - 1)
+                        mid = c_left if geom >= img_c else c_right
+                    single_hits += 1
+                # else: full-width (even if touching FOV) → geometric mid
+                # Mild prior only when reconstruct jumps hard (avoid corner freeze).
+                if prev_cx is not None and narrow and abs(mid - float(prev_cx)) > 0.35 * expected_w:
+                    mid = 0.35 * float(prev_cx) + 0.65 * mid
+                mid = float(np.clip(mid, 0.0, float(width - 1)))
+                mids.append(mid)
+                rows_used.append(float(y_lo + i))
+                areas += float(cols.size)
+            if len(mids) < 2 or areas < self.config.mask_min_area_px:
+                return None
+            mids_a = np.asarray(mids, dtype=np.float64)
+            rows_a = np.asarray(rows_used, dtype=np.float64)
+            wrow = (rows_a - float(y_lo) + 1.0)
+            wrow = wrow / max(float(np.sum(wrow)), 1e-6)
+            cx_v = float(np.sum(mids_a * wrow))
+            cy_v = float(np.sum(rows_a * wrow))
+            single_ratio = float(single_hits) / max(len(mids), 1)
+            self._last_mask_debug = {
+                **getattr(self, '_last_mask_debug', {}),
+                'mask_single_side_rows': int(single_hits),
+                'mask_single_side_ratio': round(single_ratio, 3),
+            }
+            return cx_v, cy_v, areas
+
+        def _roi_dist_ridge(y_lo: int, y_hi: int) -> tuple[float, float, float] | None:
+            """Distance-transform ridge: farthest column from road boundary per band."""
+            if y_hi - y_lo < 2:
+                return None
+            roi = work[y_lo:y_hi, :]
+            if int(np.count_nonzero(roi)) < int(self.config.mask_min_area_px):
+                return None
+            dist = cv2.distanceTransform(roi, cv2.DIST_L2, 3)
+            mids: list[float] = []
+            rows_used: list[float] = []
+            areas = 0.0
+            for i in range(dist.shape[0]):
+                row = dist[i]
+                if float(np.max(row)) <= 1e-6:
+                    continue
+                u = float(np.argmax(row))
+                mids.append(u)
+                rows_used.append(float(y_lo + i))
+                areas += float(np.count_nonzero(roi[i]))
+            if len(mids) < 2 or areas < self.config.mask_min_area_px:
+                return None
+            mids_a = np.asarray(mids, dtype=np.float64)
+            rows_a = np.asarray(rows_used, dtype=np.float64)
+            wrow = (rows_a - float(y_lo) + 1.0)
+            wrow = wrow / max(float(np.sum(wrow)), 1e-6)
+            return float(np.sum(mids_a * wrow)), float(np.sum(rows_a * wrow)), areas
+
+        def _roi_com(y_lo: int, y_hi: int) -> tuple[float, float, float] | None:
+            if center_mode == 'dist_ridge':
+                hit = _roi_dist_ridge(y_lo, y_hi)
+                if hit is not None:
+                    return hit
+                return _roi_row_mid(y_lo, y_hi) or _roi_area_com(y_lo, y_hi)
+            if center_mode == 'area':
+                return _roi_area_com(y_lo, y_hi)
+            # Default: row_mid (boundary-aware). Fall back to area if sparse.
+            return _roi_row_mid(y_lo, y_hi) or _roi_area_com(y_lo, y_hi)
+
         # BEV: bottom = near, top = far. Near ROI drives lateral; far COM is a
         # light anticipatory bias so road bends show up before they enter
         # the near window (without the old full-height cut-in).
         y_near0 = int(max(0, math.floor(height * (1.0 - band))))
         near = _roi_com(y_near0, height)
+        corridor_recover = 'none'
+        # Hard corridor emptied by oversteer / paint flicker → widen, then soft
+        # free-space rather than drop to PP path-lost.
+        if near is None and corridor_mode == 'hard' and path_xy.shape[0] >= 2:
+            wide_hw = float(self.config.mask_corridor_half_width_m) * 1.35
+            wide = self._bev_corridor_mask(path_xy, height, width, mpp, wide_hw)
+            work = cv2.bitwise_and(binary if erode_px <= 0 else work, wide)
+            if erode_px > 0:
+                kernel = cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (2 * erode_px + 1, 2 * erode_px + 1)
+                )
+                work = cv2.bitwise_and(
+                    cv2.erode(binary, kernel, iterations=1), wide
+                )
+            near = _roi_com(y_near0, height)
+            corridor_recover = 'widen' if near is not None else 'widen_fail'
+        if near is None and corridor_mode == 'hard':
+            work = binary
+            if erode_px > 0:
+                kernel = cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (2 * erode_px + 1, 2 * erode_px + 1)
+                )
+                work = cv2.erode(work, kernel, iterations=1)
+            weight = None
+            near = _roi_com(y_near0, height)
+            if near is not None:
+                corridor_recover = 'free_fallback'
         if near is None:
-            return PursuitResult(False)
+            return self._mask_occlusion_hold_or_fail(dt_sec)
+        self._mask_occlusion_hold_frames = 0
         cx_near, cy_near, area = near
         half_w = 0.5 * float(max(width - 1, 1))
         error_near = (cx_near - half_w) / half_w
         cx, cy = cx_near, cy_near
-        if far_blend > 1e-6 and far_band > band + 1e-3:
+        single_ratio = float(
+            (getattr(self, '_last_mask_debug', {}) or {}).get(
+                'mask_single_side_ratio', 0.0
+            )
+        )
+        # Far blend is dangerous when one rail/FOV is clipped — kills S-curve.
+        far_blend_eff = far_blend * max(0.0, 1.0 - 1.5 * single_ratio)
+        if far_blend_eff > 1e-6 and far_band > band + 1e-3:
             y_far0 = int(max(0, math.floor(height * (1.0 - far_band))))
             far = _roi_com(y_far0, y_near0)
             if far is not None:
-                cx = (1.0 - far_blend) * cx + far_blend * far[0]
-                cy = (1.0 - far_blend) * cy + far_blend * far[1]
+                cx = (1.0 - far_blend_eff) * cx + far_blend_eff * far[0]
+                cy = (1.0 - far_blend_eff) * cy + far_blend_eff * far[1]
                 area = float(area + far[2])
+
+        law = str(self.config.mask_steer_law or 'sim_v2').lower()
+        # sim_v2 matches limo_sim_code_v2: no temporal COM freeze (it lags corners).
+        if law != 'sim_v2' and update_ema and self._track_com_cx is not None:
+            jump_u = abs(float(cx) - float(self._track_com_cx))
+            max_jump_u = max(
+                6.0,
+                float(self.config.mask_lane_width_m) / max(mpp, 1e-6) * 0.45,
+            )
+            if jump_u > max_jump_u:
+                cx = 0.70 * float(self._track_com_cx) + 0.30 * float(cx)
+            elif single_ratio >= 0.55:
+                cx = 0.40 * float(self._track_com_cx) + 0.60 * float(cx)
+            else:
+                cx = 0.55 * float(self._track_com_cx) + 0.45 * float(cx)
+        if update_ema:
+            self._track_com_cx = float(cx)
 
         # Image-center error: road left of center → need left (negative) steer.
         # normalized_error in [-1, 1]: +1 means road is fully to the right.
-        error_norm = (cx - half_w) / half_w
-        raw_p = float(error_norm) * self.config.mask_steer_k
+        error_norm_raw = (cx - half_w) / half_w
+        if law == 'sim_v2':
+            # External BEV P: trust one frame COM (EMA only on command below).
+            error_norm = float(error_norm_raw)
+            err_jumped = False
+            if update_ema:
+                self._track_e_norm = float(error_norm)
+        elif update_ema:
+            jump_lim = float(self.config.track_err_max_jump)
+            if single_ratio >= 0.55:
+                jump_lim = min(jump_lim, 0.28)
+            error_norm, err_jumped = self._ema_with_jump(
+                self._track_e_norm,
+                float(error_norm_raw),
+                alpha=self.config.track_err_alpha,
+                max_jump=jump_lim,
+            )
+            self._track_e_norm = float(error_norm)
+        else:
+            error_norm = float(error_norm_raw)
+            err_jumped = False
+        e_y_m = -(float(cx) - half_w) * mpp
+        if law == 'sim_v2':
+            # D-Racer: (cx-half)/W · π · k  ≡  -angular_z of limo_sim_code_v2.
+            w_px = float(max(width - 1, 1))
+            raw_p = float(
+                np.clip(
+                    ((float(cx) - half_w) / w_px)
+                    * math.pi
+                    * self.config.mask_steer_k,
+                    -self.config.max_steering_command,
+                    self.config.max_steering_command,
+                )
+            )
+        elif law == 'image_p':
+            raw_p = float(error_norm) * self.config.mask_steer_k
+        else:
+            # Lateral target in meters (BEV +u=right). Road left of center → +e_y
+            # (path-left convention) → negative D-Racer steer after /δ_max.
+            e_eff = math.copysign(
+                max(0.0, abs(e_y_m) - float(self.config.cte_deadband_m)),
+                e_y_m,
+            )
+            v = self._estimate_speed_mps() if update_ema else max(
+                0.05, abs(float(self.config.cruise_throttle))
+            )
+            delta = math.atan2(
+                self.config.mask_steer_k * e_eff,
+                v + float(self.config.stanley_v_soft),
+            )
+            raw_p = float(
+                np.clip(
+                    -delta / max(self.config.max_steer_angle_rad, 1e-6),
+                    -self.config.max_steering_command,
+                    self.config.max_steering_command,
+                )
+            )
         if update_ema:
             alpha = self.config.mask_steer_alpha
             self._steer_f = (1.0 - alpha) * self._steer_f + alpha * raw_p
@@ -1190,18 +1709,68 @@ class MainPlanner:
         )
         # Attach transient debug for the caller (step()).
         self._last_mask_debug = {
+            **getattr(self, '_last_mask_debug', {}),
             'mask_corridor_mode': corridor_mode,
             'mask_area_px': round(float(area), 1),
             'mask_com_cx': round(float(cx), 2),
             'mask_com_cy': round(float(cy), 2),
             'mask_error_norm': round(float(error_norm), 4),
+            'mask_error_norm_raw': round(float(error_norm_raw), 4),
+            'mask_error_jump': bool(err_jumped),
             'mask_error_near': round(float(error_near), 4),
-            'mask_far_blend': round(float(far_blend), 3),
+            'mask_error_y_m': round(float(e_y_m), 4),
+            'mask_steer_law': law,
+            'mask_far_blend': round(float(far_blend_eff), 3),
+            'mask_far_blend_cfg': round(float(far_blend), 3),
             'mask_path_correction': bool(use_path_corr),
             'mask_color_path_points': int(path_xy.shape[0]),
+            'mask_corridor_recover': corridor_recover,
+            'mask_center_mode': center_mode,
+            'mask_erode_px': int(erode_px),
+            'mask_single_side_ratio': round(float(single_ratio), 3),
         }
         return result
 
+    def _mask_occlusion_hold_or_fail(
+        self, dt_sec: float | None
+    ) -> PursuitResult:
+        """Hold last mask steer briefly when free-space vanishes (corner FOV)."""
+        hold_n = int(self.config.mask_occlusion_hold_frames)
+        can_hold = (
+            hold_n > 0
+            and self._mask_occlusion_hold_frames < hold_n
+            and (
+                self._track_com_cx is not None
+                or abs(float(self._steer_f)) > 0.02
+            )
+        )
+        if not can_hold:
+            return PursuitResult(False)
+        self._mask_occlusion_hold_frames += 1
+        held = float(self._steer_f)
+        dt = (
+            self.config.nominal_control_dt_sec
+            if dt_sec is None
+            else max(0.0, float(dt_sec))
+        )
+        steered = self._apply_rate_limited_steering(held, dt)
+        # Force curve throttle — do not blast cruise while free-space is gone.
+        self._last_mask_debug = {
+            **getattr(self, '_last_mask_debug', {}),
+            'mask_occlusion_hold': True,
+            'mask_occlusion_hold_frames': int(self._mask_occlusion_hold_frames),
+        }
+        return PursuitResult(
+            valid=True,
+            steering=steered,
+            target_x=0.35,
+            target_y=0.0,
+            path_points=0,
+            target_distance=0.35,
+            curve_ratio=1.0,
+            raw_steering=held,
+            pp_steering=held,
+        )
 
     @staticmethod
     def _bev_path_skeleton(
@@ -1318,6 +1887,10 @@ class MainPlanner:
             if self._forkish_for_mask(lane):
                 return self._pure_pursuit(color_path, dt_sec)
             return self._mask_com_pursuit(lane, dt_sec, color_path=color_path)
+        if tracker == 'stanley':
+            if self._forkish_for_mask(lane):
+                return self._pure_pursuit(color_path, dt_sec)
+            return self._stanley_pursuit(color_path, dt_sec)
         return self._pure_pursuit(color_path, dt_sec)
 
     @staticmethod
@@ -1573,12 +2146,40 @@ class MainPlanner:
             DrivingState.ROUNDABOUT_EXIT,
         ):
             throttle = self.config.roundabout_throttle
-        elif str(self.config.normal_tracker or 'pp').lower() == 'mask_p':
+        elif str(self.config.normal_tracker or 'pp').lower() in ('mask_p',):
             # limo_sim style: shrink cruise when |steer| is large.
             scale = 1.0 - (
                 1.0 - self.config.mask_curve_speed_scale
             ) * float(np.clip(pursuit.curve_ratio, 0.0, 1.0))
             throttle = self.config.cruise_throttle * scale
+            # Extra slowdown on big COM error / hard turn — reduces merge path-lost.
+            steer_abs = abs(float(pursuit.steering))
+            err_abs = abs(
+                float(
+                    (getattr(self, '_last_mask_debug', {}) or {}).get(
+                        'mask_error_norm', 0.0
+                    )
+                )
+            )
+            err = max(
+                float(
+                    np.clip(
+                        steer_abs / max(self.config.error_speed_steer_full, 1e-3),
+                        0.0,
+                        1.0,
+                    )
+                ),
+                float(np.clip(err_abs / 0.55, 0.0, 1.0)),
+            )
+            if err > 0.2:
+                throttle = float(throttle) * float(
+                    np.clip(
+                        1.0
+                        - (1.0 - float(self.config.error_speed_min_scale)) * err,
+                        0.0,
+                        1.0,
+                    )
+                )
         else:
             throttle = (
                 self.config.cruise_throttle * (1.0 - pursuit.curve_ratio)
@@ -1711,7 +2312,7 @@ class MainPlanner:
         pursuit = PursuitResult(False)
         selected_branch_rank: int | None = None
         branch_selection_reason = 'none'
-        if aruco.should_stop:
+        if self.config.stop_on_aruco and aruco.should_stop:
             command = self._stop()
             path_source = PathSource.STOP
             decision = 'aruco_stop'
@@ -1843,8 +2444,19 @@ class MainPlanner:
         else:
             forkish = self._forkish_for_mask(lane)
             tracker = str(self.config.normal_tracker or 'pp').lower()
+            # Circle: follow yellow/white paint path (PP/Stanley), not free-space COM.
+            if self.state is DrivingState.ROUNDABOUT_CIRCLE:
+                ct = str(self.config.circle_tracker or 'pp').strip().lower()
+                if ct in ('pp', 'stanley', 'mask_p', 'hybrid'):
+                    tracker = ct
             use_mask = (
                 tracker == 'mask_p'
+                and self.state
+                in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
+                and not forkish
+            )
+            use_stanley = (
+                tracker == 'stanley'
                 and self.state
                 in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
                 and not forkish
@@ -1881,18 +2493,46 @@ class MainPlanner:
                         if self.state is DrivingState.ROUNDABOUT_CIRCLE
                         else 'normal_hybrid_fallback_pp'
                     )
+            elif use_stanley:
+                self._last_mask_debug = {}
+                pursuit = self._stanley_pursuit(color_path, dt_sec)
+                if pursuit.valid:
+                    decision = (
+                        'roundabout_circle_stanley'
+                        if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                        else 'normal_stanley'
+                    )
+                else:
+                    pursuit = self._pure_pursuit(color_path, dt_sec)
+                    decision = (
+                        'roundabout_circle_stanley_fallback_pp'
+                        if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                        else 'normal_stanley_fallback_pp'
+                    )
             elif use_mask:
                 self._last_mask_debug = {}
                 pursuit = self._mask_com_pursuit(
                     lane, dt_sec, color_path=color_path
                 )
                 if pursuit.valid:
-                    path_source = PathSource.MASK_DRIVABLE
-                    decision = (
-                        'roundabout_circle_mask'
-                        if self.state is DrivingState.ROUNDABOUT_CIRCLE
-                        else 'normal_mask_follow'
+                    holding = bool(
+                        (self._last_mask_debug or {}).get('mask_occlusion_hold')
                     )
+                    in_circle = self.state is DrivingState.ROUNDABOUT_CIRCLE
+                    if holding:
+                        path_source = PathSource.HOLD_PREVIOUS
+                        decision = (
+                            'roundabout_circle_mask_occlusion_hold'
+                            if in_circle
+                            else 'normal_mask_occlusion_hold'
+                        )
+                    else:
+                        path_source = PathSource.MASK_DRIVABLE
+                        decision = (
+                            'roundabout_circle_mask'
+                            if in_circle
+                            else 'normal_mask_follow'
+                        )
                 else:
                     pursuit = self._pure_pursuit(color_path, dt_sec)
                     decision = (
@@ -1901,7 +2541,7 @@ class MainPlanner:
                         else 'normal_mask_fallback_pp'
                     )
             elif (
-                tracker in ('mask_p', 'hybrid')
+                tracker in ('mask_p', 'hybrid', 'stanley')
                 and forkish
                 and self.state
                 in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
@@ -1915,13 +2555,21 @@ class MainPlanner:
                 )
             else:
                 pursuit = self._pure_pursuit(color_path, dt_sec)
-                decision = (
-                    'roundabout_circle'
-                    if self.state is DrivingState.ROUNDABOUT_CIRCLE
-                    else 'roundabout_exit_wait_branch'
-                    if self.state is DrivingState.ROUNDABOUT_EXIT_READY
-                    else 'normal_lane_follow'
-                )
+                if self.state is DrivingState.ROUNDABOUT_CIRCLE:
+                    # Paint centerline PP (yellow IN / white fallback).
+                    decision = (
+                        'roundabout_circle_lane_pp'
+                        if path_source
+                        in (
+                            PathSource.YELLOW_CENTERLINE,
+                            PathSource.WHITE_CENTERLINE,
+                        )
+                        else 'roundabout_circle'
+                    )
+                elif self.state is DrivingState.ROUNDABOUT_EXIT_READY:
+                    decision = 'roundabout_exit_wait_branch'
+                else:
+                    decision = 'normal_lane_follow'
 
         if pursuit.valid and path_source is not PathSource.STOP:
             self._path_lost_frames = 0
@@ -1960,6 +2608,7 @@ class MainPlanner:
             'path_source': path_source.value,
             'path_confidence': round(float(path_confidence), 3),
             'normal_tracker': str(self.config.normal_tracker),
+            'circle_tracker': str(self.config.circle_tracker),
             'mask_corridor_mode': str(self.config.mask_corridor_mode),
             'mask_fork_force_pp': bool(self.config.mask_fork_force_pp),
             'mask_forkish': bool(self._forkish_for_mask(lane)),
@@ -1967,6 +2616,9 @@ class MainPlanner:
                 k: v
                 for k, v in (self._last_mask_debug or {}).items()
                 if k.startswith('mask_')
+                or k.startswith('track_')
+                or k.startswith('stanley_')
+                or k.startswith('hybrid_')
             },
             'path_points': pursuit.path_points,
             'target_x': round(pursuit.target_x, 3),
@@ -2008,7 +2660,9 @@ class MainPlanner:
             'branch_selection_reason': branch_selection_reason,
             'lane_policy': str(getattr(lane, 'lane_policy', 'explore') or 'explore'),
             'aruco_detected': aruco.detected,
-            'aruco_stop': aruco.should_stop,
+            'aruco_stop': bool(self.config.stop_on_aruco and aruco.should_stop),
+            'aruco_should_stop': aruco.should_stop,
+            'stop_on_aruco': bool(self.config.stop_on_aruco),
             'steering': round(command.steering, 3),
             'control_dt_sec': round(dt_sec, 4),
             'throttle': round(command.throttle, 3),

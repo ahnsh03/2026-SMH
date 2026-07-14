@@ -6,6 +6,9 @@
 - NORMAL: `tracker.normal: mask_p` + hard corridor 0.38
 - 속도: `cruise_throttle: 0.28`, `curve_throttle: 0.18`
 - mask: `steer_k: 2.0`, `alpha: 0.40`, `near_band: 0.85`, `fork_force_pp: true`
+- Phase A: `track_state` 횡오프셋 EMA + jump reject + 센터라인 half-width hold
+- Phase B A/B: `tracker.normal: stanley` (κ FF 포함) — **YAML SSOT는 mask_p 유지**
+  (오프라인 synthetic은 stanley 쪽으로 기울 수 있음 → `out_lap_bench` 확정 전 flip 금지)
 - Fork: 표지 후 / `forced_turn` 시 선택 branch PP만 추종 (LEFT=0, RIGHT=1)
 
 ## 갈림 확인 (시뮬 재현)
@@ -23,12 +26,29 @@ PYTHONUNBUFFERED=1 python3 scripts/drive_test/fork_spawn_unit.py \
 
 모니터링: OpenCV `Lane drive`, `Fork select` · 스냅 `data/captures/fork_drive_logs/<stamp>/r00_*/snap_*.png`
 
-## 보드 적용
+## 보드 적용 (Phase C)
 
-1. 위 `main_planner.yaml`을 보드 워크스페이스에 동기화 (기존처럼 repo/`config` 배포).
-2. 실차 기하만 보드에서 보정: `pure_pursuit.wheelbase_m` / `max_steer_angle_rad`  
-   (D-Racer L=0.175 → δ≈0.4266 — `docs/vehicle-geometry.md`).
+1. `main_planner.yaml`을 보드에 동기화 (갈림·mask corridor 유지).
+2. 실차 기하·속도는 [`config/main_planner.real_car.yaml`](../config/main_planner.real_car.yaml) 값을
+   `pure_pursuit` / `speed` / `track_state`에 반영:
+   - `wheelbase_m: 0.175`, `max_steer_angle_rad: 0.4266`
+   - cruise를 시뮬보다 낮게 시작 (`0.22`)
 3. `STEER_TRIM`은 `config/vehicle_config.yaml` (웹/조이스틱 트림).
-4. 실차에서는 속도·트림만 만지고, 갈림 분리 로직은 시뮬 동결본을 유지.
+4. 직진 hunting이 남으면만 `track_state.delay_pred_sec`를 `0.06~0.12`로 켬.
+5. 실차에서는 속도·트림·delay만 만지고, 갈림 분리 로직은 시뮬 동결본을 유지.
 
-오프라인 스모크: `--mode offline --scenario all` (프레임 기반 L/R layer 확인).
+### tracker A/B (시뮬)
+
+```bash
+# 짧은 구간 steer_rms
+python3 scripts/drive_test/mask_steer_bench.py \
+  --variants mask_p_hard_wide,stanley_soft --segments start,out_in_merge
+
+# OUT 랩 패밀리
+python3 scripts/drive_test/out_lap_bench.py --families mask_p,stanley
+
+# 오프라인 synthetic A/B (Gazebo 없이 steer_rms)
+python3 scripts/drive_test/tracker_ab_offline.py
+```
+
+오프라인 스모크: `fork_spawn_unit.py --mode offline --scenario all` (프레임 기반 L/R layer 확인).

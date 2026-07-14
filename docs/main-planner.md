@@ -162,6 +162,16 @@ D-Racer 규약은 음수 조향이 왼쪽, 양수 조향이 오른쪽이다. 최
 raw_steering = pp_steering + heading_steering + cte_steering
 ```
 
+### NORMAL tracker
+
+- `mask_p` (보드 SSOT): BEV hard-corridor COM + `track_state` 횡오프셋 EMA/jump hold
+- `stanley` (A/B): 색 센터라인 Stanley-lite `δ=ψ+atan(k e/(v+ε))+κ_ff`, fork 시에는 기존처럼 branch PP
+- `hybrid` / `pp`: 실험용
+
+`track_state`는 COM/경로 근거리 y를 시계열로 고정하고, `|y|`가 half-width를
+크게 넘으면 가상 센터(single-rail prior)로 살짝 끌어온다. 실차 지연 보정이
+필요하면 `delay_pred_sec`만 켠다 (`config/main_planner.real_car.yaml`).
+
 조향 포화와 초당 변화율 제한을 적용하므로 카메라 FPS가 바뀌어도 반전 속도가
 유지된다. 경로가 잠깐 사라지면 직전 조향을 유지하고, 계속 유실되면 설정된
 초당 복귀율로 중립까지 풀며 마지막에는 throttle을 0으로 만든다.
