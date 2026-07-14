@@ -67,8 +67,9 @@
 | In 코스 (옵션) | 회전 교차로 | **노란색** | 1회 이상 회전 후 탈출 (포기 불가) |
 | 공통 | 동적 장애물 → 출발/도착 | **흰색** (기본) | 장애물 대응, 빨간불 정지 |
 
-> **코스 ↔ 색 SSOT:** In = 노란 차선, Out = 흰 차선. 인지·플래너·튜닝 spawn이 이 계약을 따른다.  
-> 상세: [lane-occlusion-fork-strategy.md §0.1](./lane-occlusion-fork-strategy.md) · [lane-drive-strategy.md](./lane-drive-strategy.md)
+> **코스 ↔ 색 SSOT:** Out = **흰만** · In = **노란이 있으면 노란 우선**, 없으면 흰  
+> (진입 흰 → 원 노란 → 합류 흰). 팀 용어: **Out 갈림** / **In 탈출 분기**.  
+> 상세: [lane-occlusion-fork-strategy.md §0](./lane-occlusion-fork-strategy.md)
 
 ### In 코스 Option 의미 (주최측 답변)
 

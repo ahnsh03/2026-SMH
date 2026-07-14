@@ -305,6 +305,7 @@ class MainPlanner:
         self._fork_locked_turn = TurnSign.UNKNOWN
         self._fork_selected_rank: int | None = None
         self._fork_selection_reason = 'none'
+        self._forced_turn = TurnSign.UNKNOWN
         self._fork_cached_path = np.empty((0, 2), dtype=np.float32)
         self._fork_cached_source = PathSource.NONE
         self._fork_cached_confidence = 0.0
@@ -358,12 +359,16 @@ class MainPlanner:
         if state in (DrivingState.NORMAL, DrivingState.FINISHED):
             self._fork_absent_frames = 0
         if previous_state is DrivingState.FORK_TURN and state is DrivingState.NORMAL:
-            self.desired_turn = TurnSign.UNKNOWN
-            self._sign_candidate = TurnSign.UNKNOWN
-            self._sign_candidate_frames = 0
-            self._fork_locked_turn = TurnSign.UNKNOWN
-            self._fork_selected_rank = None
-            self._fork_selection_reason = 'none'
+            if self._forced_turn is not TurnSign.UNKNOWN:
+                # Keep the sim override latched across fork completion.
+                self.apply_forced_turn(self._forced_turn)
+            else:
+                self.desired_turn = TurnSign.UNKNOWN
+                self._sign_candidate = TurnSign.UNKNOWN
+                self._sign_candidate_frames = 0
+                self._fork_locked_turn = TurnSign.UNKNOWN
+                self._fork_selected_rank = None
+                self._fork_selection_reason = 'none'
             self._fork_cached_path = np.empty((0, 2), dtype=np.float32)
             self._fork_cached_source = PathSource.NONE
             self._fork_cached_confidence = 0.0
@@ -373,7 +378,12 @@ class MainPlanner:
             self.branch_counter.reset()
 
     def _update_desired_turn(self, observed: TurnSign) -> None:
-        """Confirm a direction sign before latching; freeze it inside a fork."""
+        """Confirm a direction sign before latching; freeze it inside a fork.
+
+        ``_forced_turn`` (sim/test override) blocks camera sign updates.
+        """
+        if self._forced_turn is not TurnSign.UNKNOWN:
+            return
         if self.state is DrivingState.FORK_TURN:
             return
         if observed is TurnSign.UNKNOWN:
@@ -405,17 +415,52 @@ class MainPlanner:
             self._fork_selected_rank = int(self.config.default_out_branch_rank)
             self._fork_selection_reason = 'default_unknown'
 
+    def apply_forced_turn(self, turn: TurnSign) -> None:
+        """Latch LEFT/RIGHT for the whole run (sim experiment override).
+
+        In-route contract for tests:
+          LEFT  → exit the roundabout (rank 0)
+          RIGHT → stay circulating (do not arm exit)
+        Out-route: LEFT→rank0 / RIGHT→rank1 as usual.
+        """
+        if turn is TurnSign.UNKNOWN:
+            self._forced_turn = TurnSign.UNKNOWN
+            return
+        self._forced_turn = turn
+        self.desired_turn = turn
+        self._sign_candidate = turn
+        self._sign_candidate_frames = self.config.sign_confirm_frames
+        self._lock_fork_selection()
+        self._fork_selection_reason = f'forced_{turn.value}'
+
+    def _wants_roundabout_exit(self) -> bool:
+        """IN-mode policy: LEFT exits; RIGHT keeps circling; else default exit."""
+        if self.config.route_mode is not RouteMode.IN:
+            return True
+        latched = (
+            self._forced_turn
+            if self._forced_turn is not TurnSign.UNKNOWN
+            else self.desired_turn
+        )
+        if latched is TurnSign.RIGHT:
+            return False
+        if latched is TurnSign.LEFT:
+            return True
+        # No pre-choice: keep historical default (attempt exit when armed).
+        return True
+
     def force_fork_choice(
         self,
         turn: TurnSign,
         *,
         state: DrivingState | None = None,
     ) -> None:
-        """Test/sim helper: latch turn + rank and optionally jump FSM state."""
-        self.desired_turn = turn
-        self._sign_candidate = turn
-        self._sign_candidate_frames = self.config.sign_confirm_frames
-        self._lock_fork_selection()
+        """Test/sim helper: latch turn + rank and optionally jump FSM state.
+
+        Also sets ``_forced_turn`` so camera signs cannot overwrite the choice
+        (same as launch ``forced_turn:=``).
+        """
+        self.apply_forced_turn(turn)
         if state is not None:
             self.state = state
             if state is DrivingState.FORK_TURN:
@@ -429,13 +474,53 @@ class MainPlanner:
         """PP path for one fork layer only (other branch ignored)."""
         return self._branch_path(lane, rank)
 
+    def _strict_ranked_branch(self, lane: Any, rank: int) -> Any | None:
+        """Match ``lateral_rank`` only — never fall back to list index.
+
+        Used after fork lock / ego-only publish so a lone wrong-side remnant
+        cannot steal the path (index 0 != selected LEFT).
+        """
+        for branch in getattr(lane, 'branches', ()) or ():
+            if (
+                hasattr(branch, 'lateral_rank')
+                and int(branch.lateral_rank) == int(rank)
+            ):
+                return branch
+        return None
+
+    def _locked_ego_path(
+        self, lane: Any, rank: int
+    ) -> tuple[np.ndarray, PathSource, float]:
+        """Single selected corridor after lock (no opposite fork required)."""
+        branch = self._strict_ranked_branch(lane, rank)
+        if branch is not None:
+            points = np.asarray(branch.points, dtype=np.float32)
+            if points.ndim == 2 and points.shape[0] >= self.config.min_points:
+                source = (
+                    PathSource.LEFT_BRANCH
+                    if int(rank) == 0
+                    else PathSource.RIGHT_BRANCH
+                )
+                return points, source, float(getattr(branch, 'confidence', 0.0))
+        # Collapse wrote the selected centerline onto the follow color.
+        return self._color_path(lane)
+
     def _color_or_selected_resume(
         self, lane: Any, color_path: np.ndarray, color_source: PathSource, color_conf: float
     ) -> tuple[np.ndarray, PathSource, float, str]:
         """After fork flicker: keep selected layer if still published, else color."""
         rank = self._fork_selected_rank
-        if rank is not None and lane.fork_active and len(getattr(lane, 'branches', ())) >= 2:
-            path, source, conf = self._selected_layer_path(lane, int(rank))
+        if rank is not None:
+            path, source, conf = self._locked_ego_path(lane, int(rank))
+            # Prefer strict branch over color when present.
+            branch = self._strict_ranked_branch(lane, int(rank))
+            if branch is not None and path.shape[0] >= self.config.min_points:
+                return path, source, conf, 'selected_layer_resume'
+            if (
+                branch is None
+                and color_path.shape[0] >= self.config.min_points
+            ):
+                return color_path, color_source, color_conf, 'color_resume'
             if path.shape[0] >= self.config.min_points:
                 return path, source, conf, 'selected_layer_resume'
         if color_path.shape[0] >= self.config.min_points:
@@ -458,34 +543,58 @@ class MainPlanner:
         )
 
     def _color_path(self, lane: Any) -> tuple[np.ndarray, PathSource, float]:
+        """Course color contract for normal follow.
+
+        * Out: white only (never yellow).
+        * In (route_mode=in): **yellow when available** (priority), else white.
+          Mission flow is white approach → yellow roundabout → white merge;
+          that emerges naturally as yellow appears/disappears. Not a
+          yellow→white→yellow ladder.
+        """
+
         yellow_valid = self._valid_centerline(
             lane.yellow_centerline,
             float(lane.yellow_confidence),
             self.config.yellow_min_confidence,
         )
+        white_valid = self._valid_centerline(
+            lane.white_centerline,
+            float(lane.white_confidence),
+            self.config.white_min_confidence,
+        )
         self._yellow_valid_frames = (
             self._yellow_valid_frames + 1 if yellow_valid else 0
         )
-        if (
-            self.config.route_mode is RouteMode.IN
-            and self.config.prefer_yellow
-            and self._yellow_valid_frames >= self.config.yellow_valid_on_frames
-        ):
+
+        if self.config.route_mode is RouteMode.OUT or not self.config.prefer_yellow:
+            # Out SSOT: white only — yellow paint must not pull the robot.
+            if white_valid:
+                return (
+                    np.asarray(lane.white_centerline, dtype=np.float32),
+                    PathSource.WHITE_CENTERLINE,
+                    float(lane.white_confidence),
+                )
+            return np.empty((0, 2), dtype=np.float32), PathSource.NONE, 0.0
+
+        # In: prefer yellow once stable; otherwise keep white (approach / merge).
+        if self._yellow_valid_frames >= self.config.yellow_valid_on_frames:
             return (
                 np.asarray(lane.yellow_centerline, dtype=np.float32),
                 PathSource.YELLOW_CENTERLINE,
                 float(lane.yellow_confidence),
             )
-
-        if self._valid_centerline(
-            lane.white_centerline,
-            float(lane.white_confidence),
-            self.config.white_min_confidence,
-        ):
+        if white_valid:
             return (
                 np.asarray(lane.white_centerline, dtype=np.float32),
                 PathSource.WHITE_CENTERLINE,
                 float(lane.white_confidence),
+            )
+        # Yellow visible but not yet debounced, and no white: take yellow early.
+        if yellow_valid:
+            return (
+                np.asarray(lane.yellow_centerline, dtype=np.float32),
+                PathSource.YELLOW_CENTERLINE,
+                float(lane.yellow_confidence),
             )
         return np.empty((0, 2), dtype=np.float32), PathSource.NONE, 0.0
 
@@ -864,7 +973,26 @@ class MainPlanner:
 
     def step(self, frame: np.ndarray, *, now_sec: float) -> PlannerOutput:
         dt_sec = self._step_dt(now_sec)
-        lane = lane_detection.detect(frame)
+        # Feed last lock into perception so overlays / publish drop the
+        # opposite fork and ignore merge-lane starts (active_lane policy).
+        # EXIT_READY stays in explore so both candidates remain until exit starts.
+        active_rank = None
+        if (
+            self.state in (DrivingState.FORK_TURN, DrivingState.ROUNDABOUT_EXIT)
+            and self._fork_selected_rank is not None
+        ):
+            active_rank = int(self._fork_selected_rank)
+        # Course contract: Out → white-only forks; In → yellow-first.
+        prefer_yellow = (
+            bool(self.config.prefer_yellow)
+            if self.config.route_mode is RouteMode.IN
+            else False
+        )
+        lane = lane_detection.detect(
+            frame,
+            active_branch_rank=active_rank,
+            prefer_yellow=prefer_yellow,
+        )
         traffic = traffic_sign.detect(frame)
         aruco = aruco_detection.detect(frame)
 
@@ -901,19 +1029,30 @@ class MainPlanner:
             and branch_event
             and now_sec >= self._fork_cooldown_until_sec
         ):
-            self._lock_fork_selection()
+            # forced_turn 실험: 카메라 표지로 덮어쓰지 않도록 강제 래치를 재적용.
+            if self._forced_turn is not TurnSign.UNKNOWN:
+                self.apply_forced_turn(self._forced_turn)
+            else:
+                self._lock_fork_selection()
             self._set_state(DrivingState.FORK_TURN, now_sec)
 
         if self.state is DrivingState.ROUNDABOUT_CIRCLE:
             enough_time = elapsed >= self.config.min_lap_time_sec
             branch_ready = self.branch_counter.events >= self.config.branch_required_events
             crossing_ready = self.crossing_counter.events >= self.config.crossing_required_events
-            if enough_time and (branch_ready or crossing_ready):
+            if (
+                enough_time
+                and (branch_ready or crossing_ready)
+                and self._wants_roundabout_exit()
+            ):
                 self._set_state(DrivingState.ROUNDABOUT_EXIT_READY, now_sec)
 
         if self.state is DrivingState.ROUNDABOUT_EXIT_READY:
             if self._fork_selected_rank is None:
-                self._lock_fork_selection()
+                if self._forced_turn is not TurnSign.UNKNOWN:
+                    self.apply_forced_turn(self._forced_turn)
+                else:
+                    self._lock_fork_selection()
             exit_rank = int(
                 self._fork_selected_rank
                 if self._fork_selected_rank is not None
@@ -959,23 +1098,40 @@ class MainPlanner:
                 decision = f'out_fork_{self._fork_locked_turn.value}'
                 self._fork_absent_frames = 0
             else:
-                self._fork_absent_frames += 1
+                # Locked ego corridor (opposite fork already dropped by perception).
+                path, path_source, path_confidence = self._locked_ego_path(
+                    lane, rank
+                )
+                strict = self._strict_ranked_branch(lane, rank)
                 if (
-                    self._fork_cached_path.shape[0] >= self.config.min_points
-                    and self._fork_absent_frames <= self.config.fork_path_hold_frames
+                    strict is not None
+                    and path.shape[0] >= self.config.min_points
                 ):
-                    path_source = self._fork_cached_source
-                    path_confidence = self._fork_cached_confidence
-                    pursuit = self._pure_pursuit(self._fork_cached_path, dt_sec)
-                    decision = 'out_fork_cached_branch'
-                else:
-                    path, path_source, path_confidence, resume = (
-                        self._color_or_selected_resume(
-                            lane, color_path, path_source, path_confidence
-                        )
-                    )
+                    self._fork_cached_path = path.copy()
+                    self._fork_cached_source = path_source
+                    self._fork_cached_confidence = path_confidence
                     pursuit = self._pure_pursuit(path, dt_sec)
-                    decision = f'out_fork_{resume}'
+                    decision = f'out_fork_ego_follow_rank{rank}'
+                    self._fork_absent_frames = 0
+                else:
+                    self._fork_absent_frames += 1
+                    if (
+                        self._fork_cached_path.shape[0] >= self.config.min_points
+                        and self._fork_absent_frames
+                        <= self.config.fork_path_hold_frames
+                    ):
+                        path_source = self._fork_cached_source
+                        path_confidence = self._fork_cached_confidence
+                        pursuit = self._pure_pursuit(self._fork_cached_path, dt_sec)
+                        decision = 'out_fork_cached_branch'
+                    else:
+                        path, path_source, path_confidence, resume = (
+                            self._color_or_selected_resume(
+                                lane, color_path, path_source, path_confidence
+                            )
+                        )
+                        pursuit = self._pure_pursuit(path, dt_sec)
+                        decision = f'out_fork_{resume}'
             if self._fork_absent_frames >= self.config.fork_exit_off_frames:
                 self._set_state(DrivingState.NORMAL, now_sec)
         elif self.state is DrivingState.ROUNDABOUT_EXIT:
@@ -1003,23 +1159,39 @@ class MainPlanner:
                 decision = f'roundabout_exit_rank{rank}'
                 self._fork_absent_frames = 0
             else:
-                self._fork_absent_frames += 1
+                path, path_source, path_confidence = self._locked_ego_path(
+                    lane, rank
+                )
+                strict = self._strict_ranked_branch(lane, rank)
                 if (
-                    self._fork_cached_path.shape[0] >= self.config.min_points
-                    and self._fork_absent_frames <= self.config.fork_path_hold_frames
+                    strict is not None
+                    and path.shape[0] >= self.config.min_points
                 ):
-                    path_source = self._fork_cached_source
-                    path_confidence = self._fork_cached_confidence
-                    pursuit = self._pure_pursuit(self._fork_cached_path, dt_sec)
-                    decision = 'roundabout_exit_cached'
-                else:
-                    path, path_source, path_confidence, resume = (
-                        self._color_or_selected_resume(
-                            lane, color_path, path_source, path_confidence
-                        )
-                    )
+                    self._fork_cached_path = path.copy()
+                    self._fork_cached_source = path_source
+                    self._fork_cached_confidence = path_confidence
                     pursuit = self._pure_pursuit(path, dt_sec)
-                    decision = f'roundabout_exit_{resume}'
+                    decision = f'roundabout_exit_ego_follow_rank{rank}'
+                    self._fork_absent_frames = 0
+                else:
+                    self._fork_absent_frames += 1
+                    if (
+                        self._fork_cached_path.shape[0] >= self.config.min_points
+                        and self._fork_absent_frames
+                        <= self.config.fork_path_hold_frames
+                    ):
+                        path_source = self._fork_cached_source
+                        path_confidence = self._fork_cached_confidence
+                        pursuit = self._pure_pursuit(self._fork_cached_path, dt_sec)
+                        decision = 'roundabout_exit_cached'
+                    else:
+                        path, path_source, path_confidence, resume = (
+                            self._color_or_selected_resume(
+                                lane, color_path, path_source, path_confidence
+                            )
+                        )
+                        pursuit = self._pure_pursuit(path, dt_sec)
+                        decision = f'roundabout_exit_{resume}'
             if self._fork_absent_frames >= self.config.fork_exit_off_frames:
                 self._set_state(DrivingState.NORMAL, now_sec)
         else:
@@ -1102,8 +1274,10 @@ class MainPlanner:
             'sign_candidate': self._sign_candidate.value,
             'sign_candidate_frames': self._sign_candidate_frames,
             'fork_locked_turn': self._fork_locked_turn.value,
+            'forced_turn': self._forced_turn.value,
             'selected_branch_rank': selected_branch_rank,
             'branch_selection_reason': branch_selection_reason,
+            'lane_policy': str(getattr(lane, 'lane_policy', 'explore') or 'explore'),
             'aruco_detected': aruco.detected,
             'aruco_stop': aruco.should_stop,
             'steering': round(command.steering, 3),

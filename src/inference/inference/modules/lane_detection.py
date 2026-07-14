@@ -56,13 +56,14 @@ VISUALIZE_CONTROL = "control"
 VISUALIZE_ON = "on"
 
 # ┌──────────────────────────────────────────────────────────┐
-# │  여기만 고치면 된다.                                      │
+# │  기본은 off. 시뮬 갈림 실험은 lane_preview_node 한 창만. │
 # │                                                          │
 # │    "off"      창 없음                                    │
-# │    "control"  주행 확인용 3개만 (아래 CONTROL_WINDOWS)    │
-# │    "on"       디버그 창 전부                              │
+# │    "control"  주행 확인용 통합 1개 (lane_control)         │
+# │    "on"       디버그 창 전부 (튜닝 전용)                   │
+# │  환경변수: LANE_VISUALIZE=off|control|on                 │
 # └──────────────────────────────────────────────────────────┘
-VISUALIZE_MODE = "on"
+VISUALIZE_MODE = "off"
 
 # 보드/SSH/headless에서는 창을 띄우면 죽는다. 코드를 안 고치고 끄려면
 # 환경변수로 덮어쓴다(있을 때만 우선).
@@ -94,12 +95,8 @@ VISUALIZE_MODE = resolve_visualize_mode(
 )
 VISUALIZE = VISUALIZE_MODE != VISUALIZE_OFF
 
-# CONTROL 모드에서 띄울 창. 판단제어로 나가는 결과(좌우 경계·갈래)만 본다.
-CONTROL_WINDOWS = (
-    "white_boundaries",
-    "yellow_boundaries",
-    "road_branches",
-)
+# CONTROL 모드: 흰/노란 경계 + 갈래를 한 창으로 통합 (창 난립 방지).
+CONTROL_WINDOWS = ("lane_control",)
 
 
 def window_enabled(name: str) -> bool:
@@ -186,11 +183,14 @@ class LaneDetections:
     )
     # 노란 가로 실선(정지선/원형교차로 진입선 등) 등장 여부.
     yellow_crossing_line: bool = False
-    # 갈림길 정보(판단제어용): 분기 발생 여부와 각 분기 경로.
-    # 각 RoadBranch.lateral_rank = 분기 번호(0=가장 왼쪽), points = base_link
-    # 센터라인(Nx3, x 전방/y 왼쪽/z=0). 갈림길이 없으면 branches는 단일 경로.
+    # Out 갈림 / In 탈출 분기: 갈림 활성 여부와 갈래 목록.
+    # RoadBranch.lateral_rank: 0=왼쪽 갈래, 1=오른쪽. points=base_link 센터라인.
+    # 갈림이 아니면 branches는 단일 경로 1개. 용어 SSOT: docs/lane-occlusion-fork-strategy.md §0
     fork_active: bool = False
     branches: tuple["RoadBranch", ...] = ()
+    # Active-lane policy after fork lock (see modules/active_lane.py).
+    active_branch_rank: int | None = None
+    lane_policy: str = "explore"
     # 기존 pipeline이 즉시 AttributeError를 내지 않도록 남긴 읽기 전용 호환값.
     # 이 모듈은 더 이상 조향이나 주행 신뢰도를 계산하지 않는다.
     steering_offset: float = 0.0
@@ -262,10 +262,17 @@ class LaneDebugFrame:
     white_crossing_line: bool = False
     red_coverage: float = 0.0
     red_pixel_count: int = 0
-    # Yellow (or white) fork: outer+inner pairs for L/R path verification.
+    # Out 갈림 / In 탈출: 차로 쌍(outer+inner) → 갈래 검증용.
+    # fork_split_source: road_split_marks | yellow_alt_marks | yellow_marks |
+    #   white_marks | white_alt_marks | cells  (§0 용어표)
     fork_lane_pairs: tuple = ()
     fork_mark_tracks: tuple = ()
-    fork_split_source: str = ""  # "yellow_marks" | "cells" | ""
+    fork_split_source: str = ""
+    # Active-lane policy (see modules/active_lane.py): explore | locked | ego_only
+    # Course contract: Out→prefer_yellow=False (white only), In→True (yellow first).
+    prefer_yellow: bool | None = None
+    active_branch_rank: int | None = None
+    lane_policy: str = "explore"
 
 
 # =========================================================
@@ -1780,126 +1787,19 @@ def enumerate_boundary_candidates(
     return ranked_candidates[:MAX_PATH_CANDIDATES_PER_ROW]
 
 
-def track_boundary_path(
-    boundary_mask: np.ndarray,
-    raw_road_mask: np.ndarray,
-    clean_road_mask: np.ndarray,
-    reference_centerline: np.ndarray | None,
-    temporal_centerline: np.ndarray | None,
-    temporal_left: np.ndarray | None,
-    temporal_right: np.ndarray | None,
-    required_side: str | None,
-    opposite_line_mask: np.ndarray | None = None,
-    observable_mask: np.ndarray | None = None,
-    is_ego_course: bool = False,
-    use_single_line_angle_bias: bool = False,
-    side_debug: dict[str, object] | None = None,
-    boundary_segments_by_row: list[list[tuple[int, int]]] | None = None,
-    opposite_segments_by_row: list[list[tuple[int, int]]] | None = None,
-    road_segments_by_row: list[list[tuple[int, int]]] | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """모든 행의 후보를 연결해 위치/방향/곡률이 연속인 경로를 찾는다."""
 
-    height = boundary_mask.shape[0]
-    candidates_by_row: dict[int, list[tuple[float, float, float, int]]] = {}
-
-    # 후보 하나마다 마스크를 슬라이스해 세면 프레임당 수천 번 numpy를 부른다.
-    # 행 누적합을 한 번 만들어 두면 구간 합이 뺄셈 한 번으로 끝난다.
-    all_sums = _boundary_row_sums(
-        raw_road_mask,
-        clean_road_mask,
-        observable_mask,
-        opposite_line_mask,
-    )
-
-    # 도로 폭 보정에는 관측선의 국소 기울기가 필요하므로 세그먼트를 먼저
-    # 전부 모아 위/아래 행과 이어 본다.
-    segments_by_row = (
-        boundary_segments_by_row
-        if boundary_segments_by_row is not None
-        else find_line_segments_by_row(boundary_mask)
-    )
-    slopes_by_row = estimate_segment_slopes(segments_by_row, height)
-    if use_single_line_angle_bias:
-        component_labels, component_angles = single_line_component_angles_deg(
-            boundary_mask,
-            side_debug,
-        )
-    else:
-        component_labels = np.zeros_like(boundary_mask, dtype=np.int32)
-        component_angles = {}
-    if side_debug is not None:
-        side_debug.setdefault("components", 0)
-        side_debug.setdefault("angle_deg", None)
-
-    def row_single_line_angle_deg(
-        row_v: int,
-        segments: list[tuple[int, int]],
-    ) -> float | None:
-        """이 행에 선이 하나일 때 그 선이 속한 연결조각의 각도를 찾는다."""
-
-        if len(segments) != 1 or not component_angles:
-            return None
-        start_u, end_u = segments[0]
-        row_labels = component_labels[row_v, start_u:end_u + 1]
-        angle_labels = np.array(
-            [label for label in row_labels if int(label) in component_angles],
-            dtype=np.int32,
-        )
-        if angle_labels.size == 0:
-            return None
-        labels_found, counts = np.unique(angle_labels, return_counts=True)
-        dominant_label = int(labels_found[int(np.argmax(counts))])
-        return component_angles.get(dominant_label)
-
-    # 좌우 색이 다른 차로(합류부)를 만들려면 반대색 선의 세그먼트도 필요하다.
-    opposite_by_row = opposite_segments_by_row
-    if opposite_by_row is None and opposite_line_mask is not None:
-        opposite_by_row = find_line_segments_by_row(opposite_line_mask)
-
-    for v in range(height - 1, -1, -1):
-        segments = segments_by_row[v]
-        if not segments:
-            continue
-        row_angle_deg = row_single_line_angle_deg(v, segments)
-
-        row_candidates = enumerate_boundary_candidates(
-            segments,
-            raw_road_mask[v],
-            clean_road_mask[v],
-            v,
-            reference_centerline,
-            temporal_centerline,
-            temporal_left,
-            temporal_right,
-            required_side,
-            None
-            if all_sums is None
-            else (
-                all_sums[0][v],
-                all_sums[1][v],
-                all_sums[2][v],
-                None if all_sums[3] is None else all_sums[3][v],
-            ),
-            slopes_by_row[v],
-            is_ego_course,
-            None if opposite_by_row is None else opposite_by_row[v],
-            row_angle_deg,
-            side_debug,
-            None if road_segments_by_row is None else road_segments_by_row[v],
-        )
-        if row_candidates:
-            candidates_by_row[v] = row_candidates
+def _solve_boundary_dp(
+    candidates_by_row: dict[int, list[tuple[float, float, float, int]]],
+    height: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    """Connect per-row L/R candidates into one continuous corridor (DP)."""
 
     raw_left = np.full(height, np.nan, dtype=np.float32)
     raw_right = np.full(height, np.nan, dtype=np.float32)
     left_observed = np.zeros(height, dtype=bool)
     right_observed = np.zeros(height, dtype=bool)
     if not candidates_by_row:
-        if side_debug is not None:
-            side_debug["selected_left"] = 0
-            side_debug["selected_right"] = 0
-        return raw_left, raw_right, left_observed, right_observed
+        return raw_left, raw_right, left_observed, right_observed, float("-inf")
 
     # key -> (누적 점수, 이전 key, 직전 중심선 기울기, 연결 노드 수)
     states: dict[
@@ -2032,11 +1932,198 @@ def track_boundary_path(
         )
         cursor = states[cursor][1]
 
+    best_score = float(states[best_key][0]) if states else float("-inf")
+    return raw_left, raw_right, left_observed, right_observed, best_score
+
+
+def track_boundary_path(
+    boundary_mask: np.ndarray,
+    raw_road_mask: np.ndarray,
+    clean_road_mask: np.ndarray,
+    reference_centerline: np.ndarray | None,
+    temporal_centerline: np.ndarray | None,
+    temporal_left: np.ndarray | None,
+    temporal_right: np.ndarray | None,
+    required_side: str | None,
+    opposite_line_mask: np.ndarray | None = None,
+    observable_mask: np.ndarray | None = None,
+    is_ego_course: bool = False,
+    use_single_line_angle_bias: bool = False,
+    side_debug: dict[str, object] | None = None,
+    boundary_segments_by_row: list[list[tuple[int, int]]] | None = None,
+    opposite_segments_by_row: list[list[tuple[int, int]]] | None = None,
+    road_segments_by_row: list[list[tuple[int, int]]] | None = None,
+    find_alternate: bool = False,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """모든 행의 후보를 연결해 위치/방향/곡률이 연속인 경로를 찾는다.
+
+    ``find_alternate=True``이면 주 경계 코스가 쓴 후보를 제외하고 DP를 한 번
+    더 풀어 **보조 경계 코스**(코드명 ``*_alt_*``)를 반환한다. 주+보조 = 경계
+    4선 → Out 갈림·In 탈출의 갈래 2개용 ``ForkLanePair``. 용어: strategy.md §0.
+    """
+
+    height = boundary_mask.shape[0]
+    empty = np.full(height, np.nan, dtype=np.float32)
+    empty_flags = np.zeros(height, dtype=bool)
+
+    all_sums = _boundary_row_sums(
+        raw_road_mask,
+        clean_road_mask,
+        observable_mask,
+        opposite_line_mask,
+    )
+    segments_by_row = (
+        boundary_segments_by_row
+        if boundary_segments_by_row is not None
+        else find_line_segments_by_row(boundary_mask)
+    )
+    slopes_by_row = estimate_segment_slopes(segments_by_row, height)
+    if use_single_line_angle_bias:
+        component_labels, component_angles = single_line_component_angles_deg(
+            boundary_mask,
+            side_debug,
+        )
+    else:
+        component_labels = np.zeros_like(boundary_mask, dtype=np.int32)
+        component_angles = {}
+    if side_debug is not None:
+        side_debug.setdefault("components", 0)
+        side_debug.setdefault("angle_deg", None)
+
+    def row_single_line_angle_deg(
+        row_v: int,
+        segments: list[tuple[int, int]],
+    ) -> float | None:
+        if len(segments) != 1 or not component_angles:
+            return None
+        start_u, end_u = segments[0]
+        row_labels = component_labels[row_v, start_u:end_u + 1]
+        angle_labels = np.array(
+            [label for label in row_labels if int(label) in component_angles],
+            dtype=np.int32,
+        )
+        if angle_labels.size == 0:
+            return None
+        labels_found, counts = np.unique(angle_labels, return_counts=True)
+        dominant_label = int(labels_found[int(np.argmax(counts))])
+        return component_angles.get(dominant_label)
+
+    opposite_by_row = opposite_segments_by_row
+    if opposite_by_row is None and opposite_line_mask is not None:
+        opposite_by_row = find_line_segments_by_row(opposite_line_mask)
+
+    def build_candidates_by_row(
+        *,
+        use_temporal: bool,
+        write_side_debug: bool,
+    ) -> dict[int, list[tuple[float, float, float, int]]]:
+        out: dict[int, list[tuple[float, float, float, int]]] = {}
+        dbg = side_debug if write_side_debug else None
+        for v in range(height - 1, -1, -1):
+            segments = segments_by_row[v]
+            if not segments:
+                continue
+            row_angle_deg = row_single_line_angle_deg(v, segments)
+            row_candidates = enumerate_boundary_candidates(
+                segments,
+                raw_road_mask[v],
+                clean_road_mask[v],
+                v,
+                reference_centerline,
+                temporal_centerline if use_temporal else None,
+                temporal_left if use_temporal else None,
+                temporal_right if use_temporal else None,
+                required_side,
+                None
+                if all_sums is None
+                else (
+                    all_sums[0][v],
+                    all_sums[1][v],
+                    all_sums[2][v],
+                    None if all_sums[3] is None else all_sums[3][v],
+                ),
+                slopes_by_row[v],
+                is_ego_course,
+                None if opposite_by_row is None else opposite_by_row[v],
+                row_angle_deg,
+                dbg,
+                None if road_segments_by_row is None else road_segments_by_row[v],
+            )
+            if row_candidates:
+                out[v] = row_candidates
+        return out
+
+    candidates_by_row = build_candidates_by_row(
+        use_temporal=True, write_side_debug=True
+    )
+    raw_left, raw_right, left_observed, right_observed, _ = _solve_boundary_dp(
+        candidates_by_row, height
+    )
     if side_debug is not None:
         side_debug["selected_left"] = int(np.count_nonzero(left_observed))
         side_debug["selected_right"] = int(np.count_nonzero(right_observed))
 
-    return raw_left, raw_right, left_observed, right_observed
+    if not find_alternate:
+        return (
+            raw_left,
+            raw_right,
+            left_observed,
+            right_observed,
+            empty.copy(),
+            empty.copy(),
+            empty_flags.copy(),
+            empty_flags.copy(),
+        )
+
+    # Alt without temporal bias so the non-ego fork corridor is not suppressed.
+    alt_candidates_by_row = build_candidates_by_row(
+        use_temporal=False, write_side_debug=False
+    )
+
+    def is_duplicate_of_primary(v: int, left_u: float, right_u: float) -> bool:
+        primary_left = raw_left[v]
+        primary_right = raw_right[v]
+        if np.isnan(primary_left) or np.isnan(primary_right):
+            return False
+        return (
+            abs(left_u - primary_left) <= ROAD_WIDTH_TOLERANCE_PX
+            and abs(right_u - primary_right) <= ROAD_WIDTH_TOLERANCE_PX
+        )
+
+    remaining_candidates_by_row = {
+        v: remaining
+        for v, candidates in alt_candidates_by_row.items()
+        if (
+            remaining := [
+                candidate
+                for candidate in candidates
+                if not is_duplicate_of_primary(v, candidate[0], candidate[1])
+            ]
+        )
+    }
+    alt_left, alt_right, alt_left_observed, alt_right_observed, _ = (
+        _solve_boundary_dp(remaining_candidates_by_row, height)
+    )
+    return (
+        raw_left,
+        raw_right,
+        left_observed,
+        right_observed,
+        alt_left,
+        alt_right,
+        alt_left_observed,
+        alt_right_observed,
+    )
+
 
 
 def interpolate_boundary_pair(
@@ -2473,10 +2560,33 @@ def build_global_boundary_course(
     boundary_segments_by_row: list[list[tuple[int, int]]] | None = None,
     opposite_segments_by_row: list[list[tuple[int, int]]] | None = None,
     road_segments_by_row: list[list[tuple[int, int]]] | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """행별 후보를 전체 경로로 연결해 교차로에서도 연속적인 경계를 만든다."""
+    find_alternate: bool = False,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """행별 후보를 전체 경로로 연결해 교차로에서도 연속적인 경계를 만든다.
 
-    raw_left, raw_right, left_observed, right_observed = track_boundary_path(
+    Returns
+    -------
+    left_observed, right_observed, left, right, alt_left, alt_right
+        ``alt_*`` are empty (NaN) unless ``find_alternate`` is True.
+    """
+
+    (
+        raw_left,
+        raw_right,
+        left_observed,
+        right_observed,
+        alt_raw_left,
+        alt_raw_right,
+        _,
+        _,
+    ) = track_boundary_path(
         boundary_mask,
         raw_road_mask,
         clean_road_mask,
@@ -2493,34 +2603,58 @@ def build_global_boundary_course(
         boundary_segments_by_row,
         opposite_segments_by_row,
         road_segments_by_row,
+        find_alternate=find_alternate,
     )
-    if use_yellow_gap_limit:
-        interpolated_left, interpolated_right = interpolate_yellow_boundary_pair(
-            raw_left,
-            raw_right,
+
+    def gap_fill(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if use_yellow_gap_limit:
+            return interpolate_yellow_boundary_pair(left, right)
+        return interpolate_boundary_pair(left, right)
+
+    def finalize(
+        left: np.ndarray,
+        right: np.ndarray,
+        *,
+        keep_nearest: bool = True,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if keep_nearest:
+            left, right = keep_nearest_continuous_run(left, right)
+        if smooth_course:
+            left, right = smooth_boundary_pair(left, right)
+        return left, right
+
+    filled_left, filled_right = gap_fill(raw_left, raw_right)
+    interpolated_left, interpolated_right = finalize(filled_left, filled_right)
+
+    alt_interpolated_left = np.full_like(raw_left, np.nan)
+    alt_interpolated_right = np.full_like(raw_right, np.nan)
+    if find_alternate:
+        # Keep far fork segment (do not drop with keep_nearest); stitch stem
+        # onto primary after the last alt-valid row (WonJung merge tip).
+        alt_filled_left, alt_filled_right = gap_fill(alt_raw_left, alt_raw_right)
+        alt_valid_rows = np.flatnonzero(
+            ~np.isnan(alt_filled_left) & ~np.isnan(alt_filled_right)
         )
-    else:
-        interpolated_left, interpolated_right = interpolate_boundary_pair(
-            raw_left,
-            raw_right,
+        if alt_valid_rows.size > 0:
+            merge_row = int(alt_valid_rows[-1])
+            tail_rows = np.arange(merge_row + 1, len(alt_filled_left))
+            fillable = tail_rows[
+                ~np.isnan(filled_left[tail_rows])
+                & ~np.isnan(filled_right[tail_rows])
+            ]
+            alt_filled_left[fillable] = filled_left[fillable]
+            alt_filled_right[fillable] = filled_right[fillable]
+        alt_interpolated_left, alt_interpolated_right = finalize(
+            alt_filled_left, alt_filled_right, keep_nearest=False
         )
-    # 추적 허용 간격(0.35 m)보다 보간 간격(0.20 m)이 짧아서
-    # 같은 DP 경로에 포함됐지만 화면에서 떨어진 덩어리가 남을
-    # 수 있다. 차량에 가장 가까운 충분히 긴 연속 구간 하나만 유지한다.
-    interpolated_left, interpolated_right = keep_nearest_continuous_run(
-        interpolated_left,
-        interpolated_right,
-    )
-    if smooth_course:
-        interpolated_left, interpolated_right = smooth_boundary_pair(
-            interpolated_left,
-            interpolated_right,
-        )
+
     return (
         left_observed,
         right_observed,
         interpolated_left,
         interpolated_right,
+        alt_interpolated_left,
+        alt_interpolated_right,
     )
 
 
@@ -3479,17 +3613,36 @@ def show_visualization(
         )
     if window_enabled("drivable_area"):
         cv2.imshow("drivable_area", scaled(road_clean, nearest=True))
+    # lane_control은 detect_with_debug에서 갈래까지 합쳐 띄운다.
     cv2.waitKey(1)
 
 
-def detect(frame: np.ndarray) -> LaneDetections:
-    """색상별 좌우 경계, 노란선 플래그와 road_clean을 반환한다."""
+def detect(
+    frame: np.ndarray,
+    *,
+    active_branch_rank: int | None = None,
+    prefer_yellow: bool | None = None,
+) -> LaneDetections:
+    """색상별 좌우 경계, 노란선 플래그와 road_clean을 반환한다.
 
-    detections, _debug = detect_with_debug(frame)
+    ``prefer_yellow`` — 코스 계약. False=Out(흰 갈래·흰 추종), True=In(노란 우선).
+    None이면 레거시(ego 색·양쪽 후보). ``active_branch_rank``는 선택 갈래 잠금.
+    """
+
+    detections, _debug = detect_with_debug(
+        frame,
+        active_branch_rank=active_branch_rank,
+        prefer_yellow=prefer_yellow,
+    )
     return detections
 
 
-def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame]:
+def detect_with_debug(
+    frame: np.ndarray,
+    *,
+    active_branch_rank: int | None = None,
+    prefer_yellow: bool | None = None,
+) -> tuple[LaneDetections, LaneDebugFrame]:
     """Runtime detections plus intermediate masks for mode tuners."""
 
     global cached_shape
@@ -3610,6 +3763,8 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         white_right_observed,
         white_left,
         white_right,
+        white_alt_left,
+        white_alt_right,
     ) = build_global_boundary_course(
         boundary_mask=white_bev,
         raw_road_mask=road_raw,
@@ -3627,6 +3782,7 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         boundary_segments_by_row=white_segments_by_row,
         opposite_segments_by_row=yellow_segments_by_row,
         road_segments_by_row=road_segments_by_row,
+        find_alternate=True,
     )
     white_centerline = centerline_from_boundaries(white_left, white_right)
 
@@ -3658,6 +3814,8 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         yellow_right_observed,
         yellow_left,
         yellow_right,
+        yellow_alt_left,
+        yellow_alt_right,
     ) = build_global_boundary_course(
         boundary_mask=yellow_boundary_bev,
         raw_road_mask=road_raw,
@@ -3688,6 +3846,7 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         boundary_segments_by_row=yellow_segments_by_row,
         opposite_segments_by_row=white_segments_by_row,
         road_segments_by_row=road_segments_by_row,
+        find_alternate=True,
     )
 
     yellow_left = temporally_smooth_boundary(
@@ -3730,76 +3889,45 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
     fork_active = len(road_branches) >= 2
     fork_split_source = "cells" if road_branches else ""
 
-    # Marking-based L/R pairs (yellow connected, then white, then road-split).
-    fork_lane_pairs, fork_mark_tracks = extract_marking_fork_lane_pairs(
-        yellow_boundary_bev
+    # Marking / dual-course → 갈래(branches).
+    # Out(prefer_yellow=False): 흰·road_split만 — 노란 갈래로 덮지 않음.
+    # In(prefer_yellow=True): 노란 우선 → road_split/흰 폴백.
+    fork_lane_pairs, fork_mark_tracks, marking_branches, fork_mark_color = (
+        select_course_fork_pairs(
+            prefer_yellow=prefer_yellow,
+            yellow_left=yellow_left,
+            yellow_right=yellow_right,
+            yellow_alt_left=yellow_alt_left,
+            yellow_alt_right=yellow_alt_right,
+            yellow_boundary_bev=yellow_boundary_bev,
+            white_left=white_left,
+            white_right=white_right,
+            white_alt_left=white_alt_left,
+            white_alt_right=white_alt_right,
+            white_dash_connected_bev=white_dash_connected_bev,
+            road_clean=road_clean,
+        )
     )
-    marking_branches = fork_lane_pairs_to_road_branches(fork_lane_pairs)
-    fork_mark_color = "yellow"
-    if len(marking_branches) < 2:
-        white_pairs, white_tracks = extract_marking_fork_lane_pairs(
-            white_dash_connected_bev
-        )
-        white_branches = fork_lane_pairs_to_road_branches(white_pairs)
-        if len(white_branches) >= 2:
-            fork_lane_pairs = white_pairs
-            fork_mark_tracks = white_tracks
-            marking_branches = white_branches
-            fork_mark_color = "white"
-    # White out-fork often has only 2 outer paints; road dual-corridor gives
-    # real V inners. Prefer that over half/full-width synthetic inners.
-    if (
-        fork_mark_color == "white"
-        and len(fork_mark_tracks) <= 2
-        and len(marking_branches) >= 2
-    ):
-        road_pairs, road_tracks = extract_road_split_fork_lane_pairs(
-            road_clean, white_dash_connected_bev
-        )
-        road_branches_marks = fork_lane_pairs_to_road_branches(road_pairs)
-        if len(road_branches_marks) >= 2:
-            fork_lane_pairs = road_pairs
-            fork_mark_tracks = road_tracks
-            marking_branches = road_branches_marks
-            fork_mark_color = "road_split"
-    if len(marking_branches) < 2:
-        road_pairs, road_tracks = extract_road_split_fork_lane_pairs(
-            road_clean,
-            white_dash_connected_bev
-            if int(np.count_nonzero(white_dash_connected_bev))
-            >= int(np.count_nonzero(yellow_boundary_bev))
-            else yellow_boundary_bev,
-        )
-        road_branches_marks = fork_lane_pairs_to_road_branches(road_pairs)
-        if len(road_branches_marks) >= 2:
-            fork_lane_pairs = road_pairs
-            fork_mark_tracks = road_tracks
-            marking_branches = road_branches_marks
-            fork_mark_color = "road_split"
 
-    if len(marking_branches) >= 2:
-        use_marks = False
-        if fork_mark_color == "yellow" and yellow_is_detected and ego_road_color in (
-            "yellow",
-            None,
-        ):
-            use_marks = True
-        elif fork_mark_color == "white" and ego_road_color in ("white", None):
-            use_marks = True
-        elif fork_mark_color == "road_split" and ego_road_color in (
-            "white",
-            "yellow",
-            None,
-        ):
-            use_marks = True
-        # If cells already forked, marking/road centers still win when conf is solid.
-        if use_marks or (
-            fork_active
-            and float(np.mean([b.confidence for b in marking_branches])) >= 0.25
-        ):
-            road_branches = marking_branches
-            fork_active = True
-            fork_split_source = f"{fork_mark_color}_marks"
+    if len(marking_branches) >= 2 and fork_source_allowed_for_course(
+        fork_mark_color,
+        prefer_yellow=prefer_yellow,
+        yellow_is_detected=yellow_is_detected,
+        ego_road_color=ego_road_color,
+    ):
+        road_branches = marking_branches
+        fork_active = True
+        fork_split_source = f"{fork_mark_color}_marks"
+
+    # Out: yellow-ego cell forks must not publish without a white mark source.
+    if (
+        prefer_yellow is False
+        and fork_split_source == "cells"
+        and ego_road_color == "yellow"
+    ):
+        road_branches = []
+        fork_active = False
+        fork_split_source = ""
 
     # 흰/노란 차선 센터라인(좌우 경계 중점) → base_link 점열
     white_centerline_points = boundary_to_vehicle_points(
@@ -3829,6 +3957,59 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
 
     if VISUALIZE:
         bev = bev_color
+        if window_enabled("lane_control"):
+            white_panel = make_boundary_preview(
+                bev, road_clean, white_left, white_right, "WHITE"
+            )
+            yellow_panel = make_boundary_preview(
+                bev,
+                road_clean,
+                yellow_left,
+                yellow_right,
+                "YELLOW",
+            )
+            if fork_lane_pairs:
+                pair_debug = LaneDebugFrame(
+                    bev=bev,
+                    road_clean=road_clean,
+                    fork_lane_pairs=tuple(fork_lane_pairs),
+                    fork_split_source=fork_split_source,
+                    road_branches=tuple(road_branches),
+                    ego_road_color=ego_road_color,
+                    fork_active=fork_active,
+                )
+                fork_panel = make_fork_lane_pair_preview(pair_debug, focus="all")
+            else:
+                fork_panel = make_course_cell_preview(
+                    bev, road_cells, road_branches, ego_road_color
+                )
+            target_h = max(
+                white_panel.shape[0], yellow_panel.shape[0], fork_panel.shape[0]
+            )
+
+            def _fit(panel: np.ndarray) -> np.ndarray:
+                if panel.shape[0] == target_h:
+                    return panel
+                scale = target_h / float(panel.shape[0])
+                return cv2.resize(
+                    panel,
+                    (max(1, int(round(panel.shape[1] * scale))), target_h),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+
+            combined = np.hstack(
+                [_fit(white_panel), _fit(yellow_panel), _fit(fork_panel)]
+            )
+            cv2.imshow(
+                "lane_control",
+                cv2.resize(
+                    combined,
+                    None,
+                    fx=VISUALIZATION_SCALE,
+                    fy=VISUALIZATION_SCALE,
+                    interpolation=cv2.INTER_NEAREST,
+                ),
+            )
         if window_enabled("road_branches"):
             branch_preview = make_course_cell_preview(
                 bev, road_cells, road_branches, ego_road_color
@@ -3955,8 +4136,12 @@ def detect_with_debug(frame: np.ndarray) -> tuple[LaneDetections, LaneDebugFrame
         fork_lane_pairs=tuple(fork_lane_pairs),
         fork_mark_tracks=tuple(fork_mark_tracks),
         fork_split_source=fork_split_source,
+        prefer_yellow=prefer_yellow,
     )
-    return detections, debug
+    # Late import avoids circular dependency (active_lane → this module).
+    from inference.modules.active_lane import apply_active_lane_policy
+
+    return apply_active_lane_policy(detections, debug, active_branch_rank)
 
 
 # =============================================================
@@ -3982,7 +4167,7 @@ MIN_BRANCH_WIDTH_PX = int(round(MIN_BRANCH_WIDTH_M / METERS_PER_PIXEL))
 
 @dataclass(frozen=True)
 class RoadBranch:
-    """road_clean의 공통 진입부와 분기 구간을 합친 경로 후보."""
+    """한 갈래의 센터라인 후보 (코드명 branch; 문서 용어=갈래)."""
 
     lateral_rank: int = 0
     confidence: float = 0.0
@@ -3994,11 +4179,10 @@ class RoadBranch:
 
 @dataclass(frozen=True)
 class ForkLanePair:
-    """One fork path as outer + inner marking columns (BEV u) and center.
+    """한 갈래의 차로 쌍: outer+inner (BEV u) + center.
 
-    ``lateral_rank`` 0 = leftmost path. Column arrays are length BEV_HEIGHT
-    with NaN where that marking is absent. ``outer_missing`` / ``inner_missing``
-    mark sides that were synthesized from width prior (not measured).
+    문서 용어=차로 쌍. ``lateral_rank`` 0 = 왼쪽 갈래. 배열 길이 BEV_HEIGHT,
+    결측은 NaN. ``outer_missing`` / ``inner_missing`` = 폭 prior로 합성.
     """
 
     lateral_rank: int
@@ -4882,12 +5066,232 @@ def extract_road_split_fork_lane_pairs(
     return pairs, tracks
 
 
+def fork_source_allowed_for_course(
+    fork_mark_color: str,
+    *,
+    prefer_yellow: bool | None,
+    yellow_is_detected: bool,
+    ego_road_color: str | None,
+) -> bool:
+    """Whether a candidate fork source may become planner ``branches``.
+
+    Out (``prefer_yellow=False``): white / road_split only — never yellow_*.
+    In (``True``): yellow preferred; white/road_split allowed as fallback.
+    """
+
+    color = str(fork_mark_color or "")
+    if prefer_yellow is False:
+        return color in ("white", "white_alt", "road_split")
+    if prefer_yellow is True:
+        if color in ("yellow", "yellow_alt"):
+            # In already chose yellow candidates; do not require HSV flag again.
+            return True
+        return color in ("white", "white_alt", "road_split")
+    # Legacy auto (None): ego color gate.
+    if color in ("yellow", "yellow_alt"):
+        return bool(yellow_is_detected) and ego_road_color in ("yellow", None)
+    if color in ("white", "white_alt"):
+        return ego_road_color in ("white", None)
+    if color == "road_split":
+        return ego_road_color in ("white", "yellow", None)
+    return False
+
+
+def select_course_fork_pairs(
+    *,
+    prefer_yellow: bool | None,
+    yellow_left: np.ndarray,
+    yellow_right: np.ndarray,
+    yellow_alt_left: np.ndarray,
+    yellow_alt_right: np.ndarray,
+    yellow_boundary_bev: np.ndarray,
+    white_left: np.ndarray,
+    white_right: np.ndarray,
+    white_alt_left: np.ndarray,
+    white_alt_right: np.ndarray,
+    white_dash_connected_bev: np.ndarray,
+    road_clean: np.ndarray,
+) -> tuple[list, list, list, str]:
+    """Pick L/R fork pairs for the active course color contract.
+
+    Returns ``(pairs, tracks, branches, mark_color)``.
+    """
+
+    pairs: list = []
+    tracks: list = []
+    branches: list = []
+    mark_color = ""
+
+    def take(candidate_pairs, candidate_tracks, color: str) -> bool:
+        nonlocal pairs, tracks, branches, mark_color
+        converted = fork_lane_pairs_to_road_branches(candidate_pairs)
+        if len(converted) < 2:
+            return False
+        pairs = list(candidate_pairs)
+        tracks = list(candidate_tracks or [])
+        branches = converted
+        mark_color = color
+        return True
+
+    def try_white_then_split() -> None:
+        nonlocal pairs, tracks, branches, mark_color
+        wp, wt = extract_marking_fork_lane_pairs(white_dash_connected_bev)
+        take(wp, wt, "white")
+        if mark_color == "white" and len(tracks) <= 2 and len(branches) >= 2:
+            rp, rt = extract_road_split_fork_lane_pairs(
+                road_clean, white_dash_connected_bev
+            )
+            take(rp, rt, "road_split")
+        if len(branches) < 2:
+            rp, rt = extract_road_split_fork_lane_pairs(
+                road_clean, white_dash_connected_bev
+            )
+            if not take(rp, rt, "road_split"):
+                rp, rt = extract_road_split_fork_lane_pairs(
+                    road_clean, yellow_boundary_bev
+                )
+                take(rp, rt, "road_split")
+        if len(branches) < 2:
+            take(
+                fork_lane_pairs_from_dual_courses(
+                    white_left, white_right, white_alt_left, white_alt_right
+                ),
+                [],
+                "white_alt",
+            )
+
+    if prefer_yellow is True:
+        if not take(
+            fork_lane_pairs_from_dual_courses(
+                yellow_left, yellow_right, yellow_alt_left, yellow_alt_right
+            ),
+            [],
+            "yellow_alt",
+        ):
+            yp, yt = extract_marking_fork_lane_pairs(yellow_boundary_bev)
+            take(yp, yt, "yellow")
+        if len(branches) < 2:
+            try_white_then_split()
+        return pairs, tracks, branches, mark_color
+
+    # Out (False) and legacy (None): white/road_split first.
+    # Out never stores yellow_* candidates (would be gated anyway).
+    if prefer_yellow is False:
+        try_white_then_split()
+        return pairs, tracks, branches, mark_color
+
+    # Legacy None: try yellow then white; ego gate decides in caller.
+    if not take(
+        fork_lane_pairs_from_dual_courses(
+            yellow_left, yellow_right, yellow_alt_left, yellow_alt_right
+        ),
+        [],
+        "yellow_alt",
+    ):
+        yp, yt = extract_marking_fork_lane_pairs(yellow_boundary_bev)
+        take(yp, yt, "yellow")
+    if len(branches) < 2:
+        try_white_then_split()
+    return pairs, tracks, branches, mark_color
+
+
 def extract_yellow_fork_lane_pairs(
     yellow_connected_bev: np.ndarray,
 ) -> tuple[list[ForkLanePair], list[np.ndarray]]:
     """Track yellow markings and split into left/right fork lane pairs."""
 
     return extract_marking_fork_lane_pairs(yellow_connected_bev)
+
+
+def fork_lane_pairs_from_dual_courses(
+    primary_left: np.ndarray,
+    primary_right: np.ndarray,
+    alt_left: np.ndarray,
+    alt_right: np.ndarray,
+    *,
+    min_valid_rows: int | None = None,
+) -> list[ForkLanePair]:
+    """주+보조 경계 코스 → 좌/우 ``ForkLanePair`` (갈래 2개).
+
+    각 DP 코스 = 한 갈래의 L/R 페인트. ``alt_*``는 코드명=보조 코스
+    (alternate). far mid-u로 rank 0=왼쪽. 용어: strategy.md §0.
+    """
+
+    min_rows = (
+        int(min_valid_rows)
+        if min_valid_rows is not None
+        else max(8, FORK_TRACK_MIN_ROWS // 2)
+    )
+    primary_left = np.asarray(primary_left, dtype=np.float32)
+    primary_right = np.asarray(primary_right, dtype=np.float32)
+    alt_left = np.asarray(alt_left, dtype=np.float32)
+    alt_right = np.asarray(alt_right, dtype=np.float32)
+    if primary_left.shape != (BEV_HEIGHT,) or alt_left.shape != (BEV_HEIGHT,):
+        return []
+
+    def course_valid(left: np.ndarray, right: np.ndarray) -> int:
+        return int(np.count_nonzero(~np.isnan(left) & ~np.isnan(right)))
+
+    if course_valid(primary_left, primary_right) < min_rows:
+        return []
+    if course_valid(alt_left, alt_right) < min_rows:
+        return []
+
+    far_end = max(1, int(round(BEV_HEIGHT * FORK_FAR_ZONE_RATIO)))
+
+    def far_mid(left: np.ndarray, right: np.ndarray) -> float:
+        both = ~np.isnan(left[:far_end]) & ~np.isnan(right[:far_end])
+        if np.any(both):
+            return float(
+                np.nanmedian(0.5 * (left[:far_end][both] + right[:far_end][both]))
+            )
+        both = ~np.isnan(left) & ~np.isnan(right)
+        if not np.any(both):
+            return float("nan")
+        return float(np.nanmedian(0.5 * (left[both] + right[both])))
+
+    mid_p = far_mid(primary_left, primary_right)
+    mid_a = far_mid(alt_left, alt_right)
+    if np.isnan(mid_p) or np.isnan(mid_a):
+        return []
+    if abs(mid_p - mid_a) * METERS_PER_PIXEL < max(
+        0.08, 0.5 * MIN_BRANCH_SEPARATION_M
+    ):
+        # Alt collapsed onto primary — not a real fork.
+        return []
+
+    if mid_p <= mid_a:
+        left_l, left_r = primary_left, primary_right
+        right_l, right_r = alt_left, alt_right
+    else:
+        left_l, left_r = alt_left, alt_right
+        right_l, right_r = primary_left, primary_right
+
+    pairs: list[ForkLanePair] = []
+    for rank, outer, inner, side in (
+        (0, left_l, left_r, "left"),
+        (1, right_r, right_l, "right"),
+    ):
+        center, outer_missing, inner_missing = _pair_center_u(
+            outer, inner, side=side
+        )
+        valid = int(np.count_nonzero(~np.isnan(center)))
+        if valid < min_rows:
+            return []
+        pairs.append(
+            ForkLanePair(
+                lateral_rank=rank,
+                outer_u=outer.astype(np.float32, copy=True),
+                inner_u=inner.astype(np.float32, copy=True),
+                center_u=center,
+                outer_missing=outer_missing,
+                inner_missing=inner_missing,
+                confidence=float(np.clip(valid / float(BEV_HEIGHT), 0.0, 1.0)),
+            )
+        )
+    pairs = stitch_fork_stem_continuity(pairs, mark_mask=None)
+    pairs = refine_fork_lane_pairs(pairs, mark_mask=None)
+    return pairs if len(pairs) >= 2 else []
 
 
 def find_drivable_segments(row: np.ndarray) -> list[tuple[int, int]]:
@@ -6120,7 +6524,14 @@ def make_fork_focus_preview(
     *,
     focus: str = "all",
 ) -> np.ndarray:
-    """Fork preview: prefer marking L/R pairs; else cell branches."""
+    """Fork preview: prefer marking L/R pairs; else cell branches.
+
+    When ``debug.active_branch_rank`` is set (planner lock), forced focus
+    overlays only that layer so viz matches the path PP follows.
+    """
+
+    if getattr(debug, "active_branch_rank", None) is not None:
+        focus = "left" if int(debug.active_branch_rank) == 0 else "right"
 
     if debug.fork_lane_pairs:
         return make_fork_lane_pair_preview(debug, focus=focus)

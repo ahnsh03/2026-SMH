@@ -140,7 +140,7 @@ Launch: `sim_bringup.launch.py` (또는 `sim_auto_driving`이 이를 include).
 | `sim_control_bridge` | 필수 | `/control` → `/cmd_vel` (실차 `control_node` 대용) |
 | `sim_camera_republish` | 필수 | 시뮬 카메라 → D-Racer와 같은 `/camera/image/compressed` |
 | `sim_battery_stub` | 권장 | 배터리 토픽 스텁 |
-| `sim_camera_preview` | 선택 | OpenCV/Qt 프리뷰 창 (`use_camera_view:=false`로 끔) |
+| `sim_camera_preview` | 선택 | OpenCV 창 — bringup **`view:=none` 기본 OFF** (`view:=cam`으로 켬) |
 | `monitor_node` | **불필요(기본 OFF)** | 아래 §2.5 |
 
 실차 하드웨어 노드(`camera_node`, `control_node`, `battery_node`)를  
@@ -235,7 +235,7 @@ y = ((width - 1) / 2 - col) * meters_per_pixel
 `MainPlanner`는 `fork_active` / `branches` / centerline / drivable를 **이미 소비**한다 — 필드 이름·단위를 바꾸지 말 것.
 
 **코스 ↔ 색:** Out → `white_centerline` / 흰 fork · In → `yellow_centerline` / 노란 fork.  
-SSOT: [lane-occlusion-fork-strategy.md §0.1](./lane-occlusion-fork-strategy.md).
+SSOT: [lane-occlusion-fork-strategy.md §0](./lane-occlusion-fork-strategy.md).
 
 ---
 
@@ -322,7 +322,11 @@ LANE_VISUALIZE=on ros2 launch dracer_sim sim_auto_driving.launch.py
 | 값 | 의미 |
 |----|------|
 | `off` / 미설정 | 창 없음 (기본) |
-| `control` | 경계·분기 등 주행 관련 창 (`white_boundaries`, `yellow_boundaries`, `road_branches`) |
+| `control` | 주행 확인 **통합 1창** `lane_control` (흰|노란|갈래) |
+| `on` / `all` | HSV·보간 등 디버그 창 전부 (비권장) |
+
+시뮬 권장: bringup `view:=none` + sim-auto `viz:=lane` ([dev-environment.md](./dev-environment.md)).
+`LANE_VISUALIZE=control|on`은 `viz:=debug|all`과 동급 (inference 자체 창).
 | `on` / `1` | 전체 창 |
 
 보드/SSH에서는 **켜지 마세요** (OpenCV 창·성능). 순차 검증은 **§6.2**.
@@ -380,7 +384,7 @@ camera frame
 | 2 | `yellow` (`2`) | 노란 경계·점선 연결이 합리적인가 |
 | 3 | `dash` (`3`) | 분기/합류 점선(노랑·흰)이 분리·연결되는가 |
 | 4 | `dash_left` / `dash_right` (`4`/`5`) | 선택한 갈래 쪽 점선만 남고 반대 고어 선은 빠지는가 |
-| 5 | `fork` (`6`) | 갈림 L/R **outer+inner+center** 쌍이 맞는지 (`src=yellow_marks`, pairs=2) |
+| 5 | `fork` (`6`) | **Out 갈림** `src=road_split_marks`/`white_*` · **In 탈출** `src=yellow_alt_marks` (pairs=2, rank 0/1) |
 | 6 | `fork_left` / `fork_right` (`7`/`8`) | 한쪽 쌍만 강조했을 때 의도한 갈래인가 |
 | 7 | `red` (`9`) | 동적 장애물 빨간 차로 커버리지가 뜨는가 |
 | 8 | `crossing` (`0`) | 가로 정지선/진입선이 경계를 오염시키지 않는가 |

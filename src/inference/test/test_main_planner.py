@@ -401,6 +401,114 @@ def test_out_fork_state_does_not_treat_single_branch_as_turn_path():
     assert output.decision == 'out_fork_color_resume'
 
 
+def test_forced_turn_right_stays_in_roundabout_circle():
+    """IN + forced RIGHT: do not arm exit even when branch events fire."""
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    branch = SimpleNamespace(
+        points=path, confidence=0.9, lateral_rank=0
+    )
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=path,
+        white_confidence=0.9,
+        yellow_confidence=0.9,
+        white_visible=True,
+        yellow_visible=True,
+        fork_active=True,
+        yellow_crossing_line=False,
+        branches=(branch, SimpleNamespace(points=path, confidence=0.9, lateral_rank=1)),
+        lane_policy='explore',
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.IN,
+            prefer_yellow=True,
+            yellow_valid_on_frames=1,
+            min_points=5,
+            min_lap_time_sec=0.5,
+            branch_required_events=1,
+            branch_on_frames=1,
+            branch_off_frames=1,
+        )
+    )
+    planner.apply_forced_turn(TurnSign.RIGHT)
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        planner.step(frame, now_sec=0.0)  # enter circle
+        assert planner.state is DrivingState.ROUNDABOUT_CIRCLE
+        out = planner.step(frame, now_sec=1.0)
+
+    assert out.state is DrivingState.ROUNDABOUT_CIRCLE
+    assert out.debug['forced_turn'] == 'right'
+    assert planner._fork_selection_reason == 'forced_right'
+
+
+def test_forced_turn_left_arms_roundabout_exit():
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    left = SimpleNamespace(points=path, confidence=0.9, lateral_rank=0)
+    right = SimpleNamespace(
+        points=path * np.array([1.0, -1.0], dtype=np.float32),
+        confidence=0.9,
+        lateral_rank=1,
+    )
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=path,
+        white_confidence=0.9,
+        yellow_confidence=0.9,
+        white_visible=True,
+        yellow_visible=True,
+        fork_active=True,
+        yellow_crossing_line=False,
+        branches=(left, right),
+        lane_policy='explore',
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.IN,
+            prefer_yellow=True,
+            yellow_valid_on_frames=1,
+            min_points=5,
+            min_lap_time_sec=0.5,
+            branch_required_events=1,
+            branch_on_frames=1,
+            branch_off_frames=1,
+        )
+    )
+    planner.apply_forced_turn(TurnSign.LEFT)
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        planner.step(frame, now_sec=0.0)
+        out = planner.step(frame, now_sec=1.0)
+
+    assert out.state in (
+        DrivingState.ROUNDABOUT_EXIT_READY,
+        DrivingState.ROUNDABOUT_EXIT,
+    )
+    assert out.debug['forced_turn'] == 'left'
+    assert planner._fork_selected_rank == 0
+
+
 def test_force_fork_choice_left_rank0_right_rank1():
     planner = MainPlanner(PlannerConfig(min_points=5))
     planner.force_fork_choice(TurnSign.LEFT, state=DrivingState.FORK_TURN)

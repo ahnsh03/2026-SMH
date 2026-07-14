@@ -49,6 +49,44 @@ def test_track_and_pair_synthetic_fork():
     )
 
 
+def test_dual_courses_to_fork_pairs():
+    """WonJung primary+alt courses → left/right ForkLanePair by far mid-u."""
+    from inference.modules import lane_detection as ld
+
+    h = ld.BEV_HEIGHT
+    mid = (ld.BEV_WIDTH - 1) / 2.0
+    primary_l = np.full(h, np.nan, dtype=np.float32)
+    primary_r = np.full(h, np.nan, dtype=np.float32)
+    alt_l = np.full(h, np.nan, dtype=np.float32)
+    alt_r = np.full(h, np.nan, dtype=np.float32)
+    for row in range(h - 1, h // 5, -1):
+        t = 1.0 - row / float(h - 1)
+        # Primary = left lane; alt = right lane (diverging).
+        primary_l[row] = mid - 40 - 30 * t
+        primary_r[row] = mid - 10 - 20 * t
+        alt_l[row] = mid + 10 + 20 * t
+        alt_r[row] = mid + 40 + 30 * t
+
+    pairs = ld.fork_lane_pairs_from_dual_courses(
+        primary_l, primary_r, alt_l, alt_r
+    )
+    assert len(pairs) == 2
+    assert pairs[0].lateral_rank == 0
+    assert pairs[1].lateral_rank == 1
+    c0 = float(np.nanmedian(pairs[0].center_u))
+    c1 = float(np.nanmedian(pairs[1].center_u))
+    assert c0 < c1
+
+    # Swapped mid order should still rank left=0.
+    swapped = ld.fork_lane_pairs_from_dual_courses(
+        alt_l, alt_r, primary_l, primary_r
+    )
+    assert len(swapped) == 2
+    assert float(np.nanmedian(swapped[0].center_u)) < float(
+        np.nanmedian(swapped[1].center_u)
+    )
+
+
 def test_fork_preview_with_pairs():
     from inference.modules import lane_detection as ld
 

@@ -138,8 +138,9 @@ def run_offline_once(scenario: Scenario, frame_path: Path, out_dir: Path) -> dic
     planner = build_planner(scenario.route)
     planner.force_fork_choice(_turn(scenario.turn), state=_state(scenario.state))
 
+    prefer_yellow = scenario.route == 'in'
     # Bypass sign/aruco: call lane detect then drive decision path via step patches
-    lane = ld.detect(frame)
+    lane = ld.detect(frame, prefer_yellow=prefer_yellow)
     # Manually exercise selected layer (same as FORK_TURN body).
     rank = int(planner._fork_selected_rank)
     path, source, conf = planner._selected_layer_path(lane, rank)
@@ -147,7 +148,7 @@ def run_offline_once(scenario: Scenario, frame_path: Path, out_dir: Path) -> dic
 
     preview = None
     try:
-        _, dbg = ld.detect_with_debug(frame)
+        _, dbg = ld.detect_with_debug(frame, prefer_yellow=prefer_yellow)
         preview = ld.make_fork_lane_pair_preview(dbg, focus='all')
         focus = 'left' if rank == 0 else 'right'
         focused = ld.make_fork_lane_pair_preview(dbg, focus=focus)

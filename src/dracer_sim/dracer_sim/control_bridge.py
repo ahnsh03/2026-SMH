@@ -33,6 +33,8 @@ class ControlBridge(Node):
     self.declare_parameter('max_steer_angle_rad', 0.5236)
     self.declare_parameter('cmd_mode', CMD_MODE_ACKERMANN)
     self.declare_parameter('wheelbase_m', 0.24)
+    # If inference dies without a final stop, zero cmd_vel after this gap.
+    self.declare_parameter('command_watchdog_sec', 0.5)
 
     control_topic = str(self.get_parameter('control_topic').value)
     cmd_vel_topic = str(self.get_parameter('cmd_vel_topic').value)
@@ -41,10 +43,14 @@ class ControlBridge(Node):
     self.max_steer_angle_rad = float(self.get_parameter('max_steer_angle_rad').value)
     self.cmd_mode = str(self.get_parameter('cmd_mode').value)
     self.wheelbase_m = float(self.get_parameter('wheelbase_m').value)
+    self.command_watchdog_sec = float(
+      self.get_parameter('command_watchdog_sec').value
+    )
 
     self.throttle = 0.0
     self.steering = 0.0
     self.e_stop_active = False
+    self._last_control_sec = self.get_clock().now().nanoseconds * 1e-9
 
     self.cmd_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
     self.create_subscription(Control, control_topic, self._on_control, 10)
@@ -55,6 +61,7 @@ class ControlBridge(Node):
       f'Control bridge: {control_topic} -> {cmd_vel_topic} '
       f'(mode={self.cmd_mode}, v_max={self.max_linear_speed}, '
       f'steer_max={self.max_steer_angle_rad}, '
+      f'watchdog={self.command_watchdog_sec:.2f}s, '
       f'steering: +right→Gazebo left-negated, e_stop via {joystick_topic})'
     )
 
@@ -63,6 +70,7 @@ class ControlBridge(Node):
       return
     self.throttle = float(msg.throttle)
     self.steering = float(msg.steering)
+    self._last_control_sec = self.get_clock().now().nanoseconds * 1e-9
 
   def _on_joystick(self, msg: Joystick):
     """Match real control_node: latch E-Stop and force throttle to 0."""
@@ -74,11 +82,25 @@ class ControlBridge(Node):
     self.throttle = 0.0
     self.get_logger().warning('E-STOP engaged. Ignoring incoming throttle commands.')
 
+  def _publish_zero(self):
+    twist = Twist()
+    self.cmd_pub.publish(twist)
+
   def _publish_cmd_vel(self):
-    throttle = 0.0 if self.e_stop_active else self.throttle
+    now_sec = self.get_clock().now().nanoseconds * 1e-9
+    stale = (
+      self.command_watchdog_sec > 0.0
+      and (now_sec - self._last_control_sec) > self.command_watchdog_sec
+    )
+    if self.e_stop_active or stale:
+      if stale and not self.e_stop_active:
+        self.throttle = 0.0
+        self.steering = 0.0
+      self._publish_zero()
+      return
     linear, angular_z = control_to_cmd_vel(
       self.steering,
-      throttle,
+      self.throttle,
       max_linear_speed=self.max_linear_speed,
       max_steer_angle_rad=self.max_steer_angle_rad,
       cmd_mode=self.cmd_mode,
@@ -88,6 +110,16 @@ class ControlBridge(Node):
     twist.linear.x = linear
     twist.angular.z = angular_z
     self.cmd_pub.publish(twist)
+
+  def destroy_node(self):
+    try:
+      self.throttle = 0.0
+      self.steering = 0.0
+      for _ in range(5):
+        self._publish_zero()
+    except Exception:
+      pass
+    super().destroy_node()
 
 
 def main(args=None):

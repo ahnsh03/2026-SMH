@@ -14,13 +14,14 @@
 | D3-G 보드 | ✅ | |
 
 ```bash
-./scripts/dev_container.sh sim-bringup     # 터미널1 — Gazebo만
+./scripts/dev_container.sh sim-bringup view:=none   # 터미널1 — Gazebo (카메라/BEV OFF)
 docker exec -it 2026-smh-sim bash          # 터미널2
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ```
 
-**인지 검증은 Gazebo를 다시 띄우지 마세요.** `sim_auto_driving` / `LANE_VISUALIZE=… launch`는 bringup이 이미 있으면 Gazebo가 하나 더 뜹니다. 카메라 토픽만 구독하는 튜너를 쓰세요.
+**인지 검증은 Gazebo를 다시 띄우지 마세요.** `sim_auto_driving` / `LANE_VISUALIZE=…` 올인원 launch는 bringup이 이미 있으면 Gazebo가 하나 더 뜹니다.  
+튜너는 카메라 토픽만·`prefer_yellow`는 장면별 (Out=`--label out_fork` → False, In=`exit` → True). 계약: [lane-occlusion-fork-strategy.md §0](../../docs/lane-occlusion-fork-strategy.md).
 
 ---
 
@@ -30,9 +31,10 @@ source install/setup.bash
 
 | Phase | 키 | 목표 |
 |-------|----|------|
-| **A** | `2` yellow → `3` dash | 노란 점선이 이어져 **4가닥**이 명확히 보이게 |
-| **B** | `4` / `5` | (선택) 한쪽 고어 점선만 남는지 |
-| **C** | `6` / `7` / `8` | A 통과 후 L/R 차로 쌍·중앙 분리 |
+| **A** | `2` yellow → `3` dash | **In 탈출**용 노란 점선 4가닥 |
+| **A′** | `1` white → `6` fork | **Out 갈림**용 흰/`road_split` 차로 쌍 |
+| **B** | `4` / `5` | (선택) 한쪽 고어 점선만 |
+| **C** | `6` / `7` / `8` | L/R 차로 쌍·중앙 (장면별 `src` 확인) |
 
 기본 시작 모드 = **`dash` (Phase A)**.
 

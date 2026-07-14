@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # PC(WSL) 개발 컨테이너 — Ubuntu 22.04 + ROS2 Humble
 #
-# 시뮬 개발 (컨테이너 1개 + 터미널 2개):
+# 시뮬 개발 (컨테이너 1개 + 터미널 2~3개):
 #   ./scripts/dev_container.sh sim-up          # 2026-smh-sim 생성·시작 (1회)
-#   ./scripts/dev_container.sh sim-bringup     # 터미널1: Gazebo+브리지 (Ctrl+C → launch만 종료)
-#   docker exec -it 2026-smh-sim bash          # 터미널2: 코드 빌드·inference 실행
+#   ./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork view:=none
+#   ./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=left viz:=lane
 #   ./scripts/dev_container.sh sim-down        # 컨테이너 제거
 set -euo pipefail
 
@@ -136,10 +136,10 @@ sim_up() {
     cat <<EOF
 
 다음 단계:
-  터미널1  ./scripts/dev_container.sh sim-bringup
+  터미널1  ./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork
 
-  터미널2  docker exec -it ${SIM_CONTAINER_NAME} bash
-           source /opt/ros/humble/setup.bash && source install/setup.bash
+  터미널2  ./scripts/dev_container.sh sim-auto route_mode:=out
+           # Ctrl+C 후 재실행으로 자율만 껐다켜기 (Gazebo 유지)
 
   종료     ./scripts/dev_container.sh sim-down
 EOF
@@ -246,10 +246,11 @@ Usage: ./scripts/dev_container.sh <command>
 시뮬 개발 (컨테이너 1개: ${SIM_CONTAINER_NAME}):
   sim-up           시뮬 컨테이너 생성·시작 (백그라운드, sleep)
   sim-down         시뮬 컨테이너 중지·삭제
-  sim-bringup      build-sim + Gazebo launch (Ctrl+C 시 launch만 종료, 컨테이너 유지)
+  sim-bringup      build-sim + Gazebo only (Ctrl+C → Gazebo만 종료)
+  sim-auto         자율 스택만 (joystick+inference+인지창). bringup 위에서 껐다켜기
   teleport         bringup 유지한 채 spawn_poses.yaml 프리셋으로 LIMO 텔레포트
   lane-tune        인지 모드 튜너 안내 (Gazebo 미기동 — bringup 후 컨테이너에서 실행)
-  sim              build-sim + 자율주행 launch
+  sim              build-sim + 올인원 자율 (bringup+stack) — 실험용으로는 sim-auto 권장
   sim-manual       build-sim + 수동주행 launch
   verify-sim       토픽 검증 (bringup 실행 중)
 
@@ -266,9 +267,11 @@ Usage: ./scripts/dev_container.sh <command>
 
 Examples:
   ./scripts/dev_container.sh sim-up
-  ./scripts/dev_container.sh sim-bringup
-  ./scripts/dev_container.sh teleport --list
-  ./scripts/dev_container.sh teleport in_roundabout_exit
+  ./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork
+./scripts/dev_container.sh sim-auto route_mode:=out
+./scripts/dev_container.sh sim-auto route_mode:=in forced_turn:=left
+./scripts/dev_container.sh teleport --list
+./scripts/dev_container.sh teleport out_fork
   docker exec -it ${SIM_CONTAINER_NAME} bash
   ./scripts/dev_container.sh sim-bringup use_camera_view:=false headless:=true
   # 인지 검증 (Gazebo 재기동 금지):
@@ -365,7 +368,49 @@ exec python3 scripts/teleport_spawn_pose.py \"\$@\"
 
   ❌ LANE_VISUALIZE=… ros2 launch dracer_sim sim_auto_driving.launch.py
      (bringup이 이미 있으면 Gazebo가 하나 더 뜸)
+  ✅ bringup 위: ./scripts/dev_container.sh sim-auto route_mode:=out
 EOF
+    ;;
+  sim-auto)
+    ensure_sim_display
+    shift || true
+    if ! sim_container_running; then
+      echo "[SEA-Me] ${SIM_CONTAINER_NAME} 이 없습니다. sim-up → sim-bringup 후 사용하세요." >&2
+      exit 1
+    fi
+    # Launch file / entrypoint changes need one colcon; .py with symlink is live after that.
+    # control_bridge lives in bringup — restart T1 after bridge changes or stop won't work.
+    remote="/tmp/smh-auto-$$.sh"
+    {
+      printf '%s\n' "$SIM_EXEC_PREAMBLE"
+      printf 'set -euo pipefail\ncd /workspace\n'
+      printf 'exec ros2 launch dracer_sim sim_auto_stack.launch.py'
+      if [ "$#" -gt 0 ]; then
+        printf ' %q' "$@"
+      fi
+      printf '\n'
+    } | docker exec -i "${SIM_CONTAINER_NAME}" tee "${remote}" > /dev/null
+    set +e
+    if [ -t 0 ]; then
+      docker exec -e DISPLAY="${DISPLAY:-:0}" -it "${SIM_CONTAINER_NAME}" bash "${remote}"
+    else
+      docker exec -e DISPLAY="${DISPLAY:-:0}" -i "${SIM_CONTAINER_NAME}" bash "${remote}"
+    fi
+    auto_rc=$?
+    set -e
+    # Best-effort stop even if destroy_node did not run (Ctrl+C / kill).
+    docker exec -i "${SIM_CONTAINER_NAME}" bash -c "
+${SIM_EXEC_PREAMBLE}
+cd /workspace
+for _ in 1 2 3 4 5; do
+  ros2 topic pub --once /control control_msgs/msg/Control \
+    '{header: {frame_id: base_link}, steering: 0.0, throttle: 0.0}' >/dev/null 2>&1 || true
+  ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist \
+    '{linear: {x: 0.0}, angular: {z: 0.0}}' >/dev/null 2>&1 || true
+done
+" 2>/dev/null || true
+    docker exec -i "${SIM_CONTAINER_NAME}" rm -f "${remote}" 2>/dev/null || true
+    exit "${auto_rc}"
     ;;
   sim)
     ensure_sim_display

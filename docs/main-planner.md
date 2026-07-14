@@ -17,18 +17,28 @@ MainPlanner.step(frame)
 Pure Pursuit + mission state → ControlCommand → /control
 ```
 
-기존 `modules/roundabout.py` override는 제거했다. 일반 주행, Out 코스
-갈림길, In 코스 회전교차로의 상태와 최종 제어권은 `MainPlanner`가 소유한다.
+기존 `modules/roundabout.py` override는 제거했다. 일반 주행, **Out 갈림**,
+**In 회전교차로(유지·탈출 분기)** 의 상태와 최종 제어권은 `MainPlanner`가 소유한다.
+
+용어(갈림·갈래·보조 코스 등): [lane-occlusion-fork-strategy.md §0](./lane-occlusion-fork-strategy.md).
+코드의 `branches` / `fork_active` / `*_alt_*`는 **와이어 식별자**로 유지한다.
 
 ### 코스 ↔ 차선 색
 
 | `route.mode` | 코스 | **추종 차선 색** | 비고 |
 |--------------|------|------------------|------|
-| `out` | Out (S자·갈림) | **흰색** | `white_centerline` / 흰 fork `branches` |
-| `in` | In (회전교차로) | **노란색** | `yellow_centerline` / 노란 fork `branches` |
+| `out` | Out (S자·**Out 갈림**) | **흰색** | `white_centerline` / 흰 갈래(`branches`) |
+| `in` | In (회전·**In 탈출 분기**) | **노란색** | `yellow_centerline` / 노란 갈래(`branches`) |
 
 인지는 흰·노란을 동시에 내보낸다. 플래너가 코스에 맞는 색을 경로로 고른다.
-자세한 인지 쪽 계약: [lane-occlusion-fork-strategy.md §0.1](./lane-occlusion-fork-strategy.md).
+
+| 코스 | 추종 | 금지/폴백 |
+|------|------|-----------|
+| **Out** | **흰만** (`white_centerline` / 흰·`road_split` 갈래) | 노란 경로·노란 갈래 **금지** (`prefer_yellow` Out에서 강제 False) |
+| **In** | **노란이 있으면 노란 우선**, 없으면 흰 | 미션: 흰(진입) → 노란(원) → 흰(합류). “없으면 last resort 노란”이 아님 |
+
+표지 없이 방향 고정(시뮬): `forced_turn:=left|right` → 카메라 표지 무시, 로그 `sign_ignored(forced=…)`.  
+자세한 인지 계약: [lane-occlusion-fork-strategy.md §0](./lane-occlusion-fork-strategy.md).
 
 ## 코스 선택과 설정
 
@@ -37,7 +47,7 @@ Pure Pursuit + mission state → ControlCommand → /control
 ```yaml
 route:
   mode: out          # out | in
-  prefer_yellow: false
+  # prefer_yellow omitted: OUT=항상 흰 전용(강제). IN=기본 True.
 ```
 
 launch에서 이번 실행만 덮어쓸 수도 있다. 인자를 생략하면 YAML 값을 쓴다.
@@ -47,9 +57,9 @@ ros2 launch inference auto_driving.launch.py route_mode:=out   # 흰 차선
 ros2 launch inference auto_driving.launch.py route_mode:=in    # 노란 차선
 ```
 
-- **`route_mode:=out`:** 흰 센터라인·흰 갈림 branch 우선 (`prefer_yellow: false`가 기본).  
-- **`route_mode:=in`:** 노란 센터라인을 우선한다. YAML에서 `prefer_yellow: true`로 두거나, launch/설정이 In 모드일 때 노란을 경로로 쓰도록 맞춘다.  
-  노란 경로가 confidence·점 개수 기준을 만족하지 못하면 흰색으로 fallback한다.
+- **`route_mode:=out`:** 흰 센터라인·흰/`road_split` 갈래만. 노란으로 끌려가지 않음.  
+- **`route_mode:=in`:** 노란이 안정적으로 보이면 노란 우선, 아니면 흰(진입·합류).
+- **`forced_turn:=left|right`:** 표지 무시하고 방향·rank 고정 (Out·In 공통).
 
 설정 영역:
 
@@ -70,10 +80,10 @@ ros2 launch inference auto_driving.launch.py route_mode:=in    # 노란 차선
 |---|---|---|
 | `WAIT_GREEN` | 초록불 대기(설정 시) | 정지 |
 | `NORMAL` | 기본 주행 | 흰색/노란색 센터라인 |
-| `FORK_TURN` | Out 코스 표지판 갈림길 | 선택한 좌/우 branch |
-| `ROUNDABOUT_CIRCLE` | In 코스 회전 중 | 색상 센터라인 |
-| `ROUNDABOUT_EXIT_READY` | 한 바퀴 완료, branch 대기 | 색상 센터라인 |
-| `ROUNDABOUT_EXIT` | 회전교차로 탈출 | 설정된 branch |
+| `FORK_TURN` | **Out 갈림** (표지 잠금) | 선택 갈래 (`branches[rank]`) |
+| `ROUNDABOUT_CIRCLE` | In · 회전 **유지** | 색상 센터라인 |
+| `ROUNDABOUT_EXIT_READY` | 한 바퀴 후 · 탈출 갈래 대기 | 색상 센터라인 |
+| `ROUNDABOUT_EXIT` | **In 탈출 분기** · 선택 갈래 추종 | 설정된 갈래 |
 
 ArUco 정지는 상태를 바꾸지 않는 최우선 인터럽트다. 해제되면 기존 상태에서
 다시 주행한다.

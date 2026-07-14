@@ -62,9 +62,10 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 
 - 텍스처: `models/track_plane/materials/textures/track_cw_real.png` (팀 CW 트랙)
 - **실제 크기**: 이미지 가로 전체 **12.0 m**, 세로 **8.9975 m** (1211×908 px 비율)
-- 스폰 기본값: `spawn_pose:=start` (x=2.6, y=-3.92, yaw=-π) — 미션 프리셋은 `config/spawn_poses.yaml`
-- **카메라 프리뷰**: `sim_bringup` 기본 `use_camera_view:=true` (320×180 → 창 640×360)
-- **BEV 프리뷰**: 기본 `use_bev_view:=true` — Metric IPM (`config/lane_vision.yaml`, y_half=0.77 / x_max=1.5) 가이드 포함
+- 스폰 기본값: `spawn_pose:=start` — 미션 프리셋은 `config/spawn_poses.yaml`
+- OpenCV 창: bringup 기본 **`view:=none`** (카메라/BEV OFF). `view:=cam|bev|both`로 켬
+- 자율 인지 창: `sim-auto` 기본 **`viz:=lane`** — [docs/dev-environment.md](../../docs/dev-environment.md)
+- 코스 색: Out=흰만 · In=노란 우선 — [docs/lane-occlusion-fork-strategy.md](../../docs/lane-occlusion-fork-strategy.md) §0
 
 ### 미션 표지판 (갈림길 · ArUco)
 

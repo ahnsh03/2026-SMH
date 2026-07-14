@@ -149,7 +149,11 @@ def _center_on_road_ratio(pairs: list[Any], road_clean: np.ndarray) -> float:
 
 
 def score_fork_result(
-    ld: Any, frame: np.ndarray, params: ForkParams
+    ld: Any,
+    frame: np.ndarray,
+    params: ForkParams,
+    *,
+    prefer_yellow: bool = False,
 ) -> tuple[ForkScore, Any, np.ndarray]:
     ld.apply_detect_tune(
         fork_track_assoc_m=params.assoc_m,
@@ -159,7 +163,7 @@ def score_fork_result(
         fork_track_max_row_gap=params.max_row_gap,
         fork_near_zone_ratio=params.near_zone,
     )
-    _dets, debug = ld.detect_with_debug(frame)
+    _dets, debug = ld.detect_with_debug(frame, prefer_yellow=prefer_yellow)
 
     yellow = debug.yellow_connected_bev
     white = debug.white_dash_connected_bev
@@ -168,13 +172,19 @@ def score_fork_result(
     if white.size == 0:
         white = np.zeros((ld.BEV_HEIGHT, ld.BEV_WIDTH), dtype=np.uint8)
 
-    # Score the same preference path as runtime (yellow then white).
+    # Match runtime course contract (Out=white-first, In=yellow-first).
     pairs = list(debug.fork_lane_pairs)
     tracks = list(debug.fork_mark_tracks)
     if not pairs:
-        pairs, tracks = ld.extract_marking_fork_lane_pairs(yellow)
-    if not pairs:
-        pairs, tracks = ld.extract_marking_fork_lane_pairs(white)
+        if prefer_yellow:
+            pairs, tracks = ld.extract_marking_fork_lane_pairs(yellow)
+            if not pairs:
+                pairs, tracks = ld.extract_marking_fork_lane_pairs(white)
+        else:
+            pairs, tracks = ld.extract_marking_fork_lane_pairs(white)
+            if not pairs:
+                # Out: do not score yellow-only paint as the primary fork.
+                pass
 
     n_tracks = len(tracks)
     far_end = max(1, int(round(ld.BEV_HEIGHT * params.far_zone)))
@@ -359,18 +369,26 @@ def main() -> int:
 
     stamp = _stamp()
     scene = resolve_scene(args.label)
+    prefer_yellow = scene.startswith('in_')
     run_dir = OUT_ROOT / scene / 'runs' / stamp
     run_dir.mkdir(parents=True, exist_ok=True)
     verify_dir = OUT_ROOT / scene / 'verify'
     verify_dir.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(run_dir / 'source_frame.png'), frame)
-    (run_dir / 'scene.txt').write_text(scene + '\n', encoding='utf-8')
+    (run_dir / 'scene.txt').write_text(
+        f'{scene}\nprefer_yellow={prefer_yellow}\n', encoding='utf-8'
+    )
 
     grid = build_grid()
-    print(f'[auto-fork] sweeping {len(grid)} param sets → {run_dir}')
+    print(
+        f'[auto-fork] sweeping {len(grid)} param sets → {run_dir} '
+        f'(prefer_yellow={prefer_yellow})'
+    )
     results: list[tuple[ForkScore, Any, np.ndarray]] = []
     for i, params in enumerate(grid):
-        scored, debug, preview = score_fork_result(ld, frame, params)
+        scored, debug, preview = score_fork_result(
+            ld, frame, params, prefer_yellow=prefer_yellow
+        )
         results.append((scored, debug, preview))
         if (i + 1) % 20 == 0 or i == 0:
             print(
