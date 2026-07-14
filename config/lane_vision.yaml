@@ -12,14 +12,12 @@ bev_scale:
   meters_per_pixel_lateral: 0.0039772727
   meters_per_pixel_longitudinal: null
   forward_range_m_approx: 1.5
-  note: 'Trapezoid reference only. Prefer metric_ipm for runtime / planner.
-
-    '
+  note: 'Trapezoid reference only. Prefer metric_ipm for runtime / planner.'
 metric_ipm:
   camera:
     hfov_deg: 70.42
     height_ground_m: 0.13
-    pitch_down_deg: 10.0
+    pitch_down_deg: 20.0
   range:
     x_min_m: 0.22
     x_max_m: 1.5
@@ -62,27 +60,50 @@ hsv:
     # Board D3-G field tune (2026-07-14): raised from 174 to cut floor glare.
     v_min: 180
     v_max: 255
+  # 노란 차선. 실측(bag_20260711_144948) — 노란 선 H 18~25 / S 131~168 / V 179~255.
+  # 이전 값(h_min 0, s_min 32, v_min 79)은 노란 조명을 받은 노면(H 19~32 / S 34~102 /
+  # V 81~201)까지 통째로 잡아서, 밝은 구간에서 화면의 37~49%가 "노란 선"이 되었다.
+  # 진짜 노란 선이 그 노이즈에 묻혀 회전교차로 진입 판단이 흔들린다.
+  #   s_min 110 : 노면 채도 상한(102)과 노란 선 하한(131) 사이. 오검출 100%→3%.
+  #   h_min 15  : 빨간 매트가 H 3~9 라 0 이면 빨강까지 노란 선으로 잡혔다.
   yellow:
-    h_min: 0
-    h_max: 55
-    s_min: 32
+    h_min: 15
+    h_max: 45
+    s_min: 110
     s_max: 255
-    v_min: 79
+    v_min: 120
     v_max: 255
+  # Drivable area, not "black". Measured on bag_20260711_144948 (실차, 대회장 조명).
+  # 노면은 검지 않다 — 조명 때문에 V 49~158, 채도는 회색(S 18)에서 갈색(S 152)까지
+  # 프레임마다 요동친다. 그래서 S는 쓰지 않는다.
+  #   h_max 89 : 트랙 밖 파란 바닥(H≈110)을 배제. 빨간 차로는 H≈7이라 그대로 포함된다
+  #              (아루코 구간이라 주행가능영역이어야 한다).
+  #   v_max 200: 빨간 매트(V≤197) 99.9% 포함 · 흰 선(V 중앙 251) 배제.
+  # 노란 선(H≈38)은 색상이 노면과 같은 계열이라 여기서 걸러지지 않는다. 노면 위 표시일
+  # 뿐 코리도 경계가 아니므로 무해하다 — 경계 판정은 차선 검출의 몫.
   black_road:
     h_min: 0
-    h_max: 179
+    h_max: 89
     s_min: 0
     s_max: 255
-    v_min: 0
-    v_max: 30
+    # v_min 10: 프레임 2981의 검은 매트가 V<30 이라 구멍이 났다.
+    # v_max 200: 흰 선(V 중앙 251)을 자르는 선. 밝은 빨강은 red_road 가 받는다.
+    v_min: 10
+    v_max: 200
+  # 빨간 차로는 주행가능영역이다(아루코 구간). road_raw = black | red 로 합쳐진다.
+  # 실측(bag_20260711_144948): H 3~9, S 137~233, V 145~239.
+  #   - 기존 H 170~179 는 색상환의 반대쪽 끝이라 0.1% 만 잡았다 → red_h_low_wrap 로
+  #     저역(0~15)을 켠다.
+  #   - 기존 s_max 192 는 실제 채도(중앙 206)보다 낮아 대부분을 잘랐다.
+  #   - v_max 250: 밝은 구간의 빨강은 V가 239까지 오른다(프레임 2555). 흰 선은
+  #     s_min 130 으로 배제되므로 V를 높여도 유입되지 않는다.
   red_road:
     h_min: 170
     h_max: 179
-    s_min: 125
-    s_max: 192
-    v_min: 161
-    v_max: 229
+    s_min: 130
+    s_max: 255
+    v_min: 120
+    v_max: 250
   note: OpenCV HSV (H 0-179). Tuned with scripts/vision_tune/tune_hsv.py. Sim/real
     shared; Won Tae may refine final competition values.
 detect_tune:
@@ -94,7 +115,8 @@ detect_tune:
   dash_max_heading_diff_deg: 27.0
   dash_min_component_area_px: 12
   dash_branch_assoc_m: 0.22
-  red_h_low_wrap: 0
+  # 빨간 매트의 실제 색상은 H 3~9 (색상환 저역). 0 이면 저역 대역이 꺼져 빨강을 못 잡는다.
+  red_h_low_wrap: 15
   fork_track_assoc_m: 0.05
   fork_track_min_rows: 14
   fork_pair_width_m: 0.35

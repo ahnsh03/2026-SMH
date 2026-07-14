@@ -121,6 +121,26 @@ python3 scripts/vision_tune/tune_bev.py --folder data/captures/sim
 
 ## 카메라 캡처 (단축키만 저장)
 
+### 실차 (권장) — 모니터 웹에서 캡처
+
+보드에는 GUI가 없으므로 **모니터로 보고, 웹에서 Capture** 합니다.
+
+```bash
+# 보드
+ros2 launch inference auto_driving.launch.py   # monitor 포함
+# PC 브라우저: http://<보드IP>:5000
+# → Image 카드의 Capture 버튼 또는 키 C
+# 저장: data/captures/real/frame_*.jpg  (vehicle_config CAPTURE_DIR)
+```
+
+HSV 튜닝은 DISPLAY가 있는 PC에서:
+
+```bash
+python3 scripts/vision_tune/tune_hsv.py --folder data/captures/real --channel white
+```
+
+### DISPLAY 있을 때 (시뮬·로컬 OpenCV 창)
+
 ```bash
 python3 scripts/vision_tune/capture_camera.py --out data/captures/sim
 ```
@@ -168,6 +188,16 @@ python3 scripts/vision_tune/tune_lane_control.py --drive
 
 흰/노란 차선 · 검정/빨강 차로 마스크를 Metric IPM BEV에서 맞춘다.  
 **툴·yaml 저장 = 승현**, 대회용 **최종 정밀값 = 원태**와 맞춤. 시드는 원태 브랜치 기본값.
+
+**실차 (보드 GUI 없음):** 모니터에서 Capture → 폴더 모드로 튜닝.
+
+```bash
+# 보드: launch + 브라우저 Capture
+# PC / DISPLAY 있는 곳:
+python3 scripts/vision_tune/tune_hsv.py --folder data/captures/real --channel white
+```
+
+시뮬 / 라이브 토픽 (DISPLAY 필요):
 
 ```bash
 python3 scripts/vision_tune/tune_hsv.py

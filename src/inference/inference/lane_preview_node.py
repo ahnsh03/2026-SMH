@@ -17,7 +17,10 @@ import time
 import cv2
 import numpy as np
 import rclpy
-from cv_bridge import CvBridge
+try:
+    from cv_bridge import CvBridge
+except ImportError:  # 보드엔 cv_bridge가 없을 수 있다. compressed 경로는 불필요.
+    CvBridge = None
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
@@ -60,6 +63,13 @@ class LanePreviewNode(Node):
         self.declare_parameter('max_hz', 12.0)
         self.declare_parameter('route_mode', '')  # in|out → color contract
         self.declare_parameter('prefer_yellow', -1)  # -1=from route, 0/1 override
+        # tune 모드 웹 패널 매핑 (모니터 opencv 패널 기본 토픽과 일치):
+        #   edge      = 경계 검출 결과 프리뷰
+        #   grayscale = 원본 흰 HSV 마스크 (dbg.white_bev)
+        #   blur      = 점선 연결본 (검출에 실제 들어가는 마스크)
+        self.declare_parameter('web_topic', '/opencv/image/edge')
+        self.declare_parameter('web_topic_hsv', '/opencv/image/grayscale')
+        self.declare_parameter('web_topic_connected', '/opencv/image/blur')
 
         self.window_name = str(self.get_parameter('window_name').value)
         self.window_scale = float(self.get_parameter('window_scale').value)
@@ -78,11 +88,16 @@ class LanePreviewNode(Node):
         else:
             self.prefer_yellow = False  # sim Out-default safe
 
+        # tune 모드: cv2 창(imshow) 대신 흰 차선 프리뷰를 CompressedImage로
+        # 웹(모니터 debug_image 패널)에 발행한다. ld.VISUALIZE_MODE는 import 시
+        # LANE_VISUALIZE 환경변수로 이미 결정돼 있으므로 여기서 읽어 둔다.
+        self.tune_mode = ld.VISUALIZE_MODE == ld.VISUALIZE_TUNE
+
         # Do not open lane_detection's own debug windows; this node owns one view.
         ld.VISUALIZE = False
         ld.VISUALIZE_MODE = ld.VISUALIZE_OFF
 
-        self.bridge = CvBridge()
+        self.bridge = CvBridge() if CvBridge is not None else None
         self._last_process = 0.0
         self._planner_line = ''
         self._active_rank: int | None = None
@@ -92,11 +107,28 @@ class LanePreviewNode(Node):
         self._throttle = 0.0
         self._have_control = False
 
-        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
-        try:
-            cv2.moveWindow(self.window_name, window_x, window_y)
-        except cv2.error:
-            pass
+        if self.tune_mode:
+            # 헤드리스 보드: 창을 열지 않고 웹 토픽으로만 발행한다.
+            self.web_pub = self.create_publisher(
+                CompressedImage, str(self.get_parameter('web_topic').value), 2
+            )
+            self.web_pub_hsv = self.create_publisher(
+                CompressedImage, str(self.get_parameter('web_topic_hsv').value), 2
+            )
+            self.web_pub_connected = self.create_publisher(
+                CompressedImage,
+                str(self.get_parameter('web_topic_connected').value),
+                2,
+            )
+        else:
+            self.web_pub = None
+            self.web_pub_hsv = None
+            self.web_pub_connected = None
+            cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+            try:
+                cv2.moveWindow(self.window_name, window_x, window_y)
+            except cv2.error:
+                pass
 
         qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -135,11 +167,18 @@ class LanePreviewNode(Node):
                 10,
             )
 
-        self.get_logger().info(
-            f'Lane preview: {topic} focus={self.focus} '
-            f'prefer_yellow={self.prefer_yellow} route={route or "-"} '
-            f'(keys: 0=all 1=left 2=right a=auto-from-planner q=quit)'
-        )
+        if self.tune_mode:
+            self.get_logger().info(
+                f'Lane preview [tune]: {topic} → '
+                f'{self.get_parameter("web_topic").value} '
+                f'(white boundary → 웹 모니터 패널, cv2 창 없음)'
+            )
+        else:
+            self.get_logger().info(
+                f'Lane preview: {topic} focus={self.focus} '
+                f'prefer_yellow={self.prefer_yellow} route={route or "-"} '
+                f'(keys: 0=all 1=left 2=right a=auto-from-planner q=quit)'
+            )
 
     def _on_planner_debug(self, msg: String) -> None:
         self._planner_line = str(msg.data or '')[:180]
@@ -163,6 +202,12 @@ class LanePreviewNode(Node):
             self._process(frame)
 
     def _on_image(self, msg: Image) -> None:
+        if self.bridge is None:
+            self.get_logger().warning(
+                'cv_bridge 없음 — raw Image 경로를 쓸 수 없습니다. '
+                'use_compressed:=true 로 실행하거나 ros-humble-cv-bridge 설치.'
+            )
+            return
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except Exception as exc:
@@ -173,31 +218,35 @@ class LanePreviewNode(Node):
     def _process(self, frame: np.ndarray) -> None:
         now = time.monotonic()
         if now - self._last_process < 1.0 / self.max_hz:
-            cv2.waitKey(1)
+            # tune 모드엔 창이 없으므로 GUI 이벤트 펌프(waitKey)를 건너뛴다.
+            if not self.tune_mode:
+                cv2.waitKey(1)
             return
         self._last_process = now
 
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('0'):
-            self.focus = 'all'
-            self._manual_focus = True
-            self._active_rank = None
-        elif key == ord('1'):
-            self.focus = 'left'
-            self._manual_focus = True
-            self._active_rank = 0
-        elif key == ord('2'):
-            self.focus = 'right'
-            self._manual_focus = True
-            self._active_rank = 1
-        elif key == ord('a'):
-            # Resume auto focus from planner lock.
-            self._manual_focus = False
-            self.focus = focus_name_for_rank(self._active_rank)
-        elif key in (ord('q'), 27):
-            self.get_logger().info('quit key — destroy window')
-            cv2.destroyWindow(self.window_name)
-            return
+        # 키보드 포커스 전환은 창이 있을 때만. tune(웹)은 planner 자동 포커스만.
+        if not self.tune_mode:
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('0'):
+                self.focus = 'all'
+                self._manual_focus = True
+                self._active_rank = None
+            elif key == ord('1'):
+                self.focus = 'left'
+                self._manual_focus = True
+                self._active_rank = 0
+            elif key == ord('2'):
+                self.focus = 'right'
+                self._manual_focus = True
+                self._active_rank = 1
+            elif key == ord('a'):
+                # Resume auto focus from planner lock.
+                self._manual_focus = False
+                self.focus = focus_name_for_rank(self._active_rank)
+            elif key in (ord('q'), 27):
+                self.get_logger().info('quit key — destroy window')
+                cv2.destroyWindow(self.window_name)
+                return
 
         try:
             lane, dbg = ld.detect_with_debug(
@@ -210,8 +259,11 @@ class LanePreviewNode(Node):
             self.get_logger().warning(f'detect failed: {exc}')
             return
 
+        # tune 모드는 흰 차선 생성 결과만 본다(요청 범위). 웹 패널 1개 = 흰 경계.
+        if self.tune_mode:
+            canvas = ld.render_mode_preview('white', dbg)
         # One canvas: white/yellow course + road; fork rails only when armed+active.
-        if self._enable_fork and (
+        elif self._enable_fork and (
             dbg.fork_lane_pairs
             or bool(dbg.fork_active)
             or len(dbg.road_branches) >= 2
@@ -290,13 +342,55 @@ class LanePreviewNode(Node):
             1,
             cv2.LINE_AA,
         )
-        cv2.imshow(self.window_name, canvas)
+        if self.tune_mode:
+            self._publish_web(self.web_pub, canvas)
+            # 진단용: 원본 흰 HSV → 점선 연결본을 각 패널로. HSV가 선을 제대로
+            # 잡는지 vs 좌우 분류가 틀리는지를 갈라서 볼 수 있다.
+            self._publish_web(
+                self.web_pub_hsv, self._mask_to_bgr(getattr(dbg, 'white_bev', None))
+            )
+            self._publish_web(
+                self.web_pub_connected,
+                self._mask_to_bgr(getattr(dbg, 'white_dash_connected_bev', None)),
+            )
+        else:
+            cv2.imshow(self.window_name, canvas)
+
+    @staticmethod
+    def _mask_to_bgr(mask) -> np.ndarray | None:
+        """단일채널 마스크(0/1 또는 0/255)를 볼 수 있는 BGR로 변환."""
+
+        if mask is None or getattr(mask, 'size', 0) == 0:
+            return None
+        m = np.asarray(mask)
+        if m.dtype != np.uint8:
+            m = m.astype(np.uint8)
+        if m.max(initial=0) <= 1:  # 0/1 이진 마스크면 보이도록 스케일
+            m = m * 255
+        if m.ndim == 2:
+            m = cv2.cvtColor(m, cv2.COLOR_GRAY2BGR)
+        return m
+
+    def _publish_web(self, pub, image) -> None:
+        """이미지를 JPEG CompressedImage로 웹 토픽에 발행한다(모니터 패널용)."""
+
+        if pub is None or image is None:
+            return
+        ok, buf = cv2.imencode('.jpg', image)
+        if not ok:
+            return
+        msg = CompressedImage()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.format = 'jpeg'
+        msg.data = buf.tobytes()
+        pub.publish(msg)
 
     def destroy_node(self) -> None:
-        try:
-            cv2.destroyWindow(self.window_name)
-        except cv2.error:
-            pass
+        if not self.tune_mode:
+            try:
+                cv2.destroyWindow(self.window_name)
+            except cv2.error:
+                pass
         super().destroy_node()
 
 
