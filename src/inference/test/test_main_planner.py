@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -186,7 +187,11 @@ def test_roundabout_uses_dedicated_lookahead_and_throttle():
         PlannerConfig(
             min_points=3,
             roundabout_lookahead_m=0.32,
+            roundabout_straight_lookahead_m=0.32,
+            roundabout_curve_lookahead_m=0.32,
             roundabout_throttle=0.06,
+            lookahead_shrink_rate_m_per_sec=10.0,
+            lookahead_grow_rate_m_per_sec=10.0,
             steering_rate_limit_per_sec=10.0,
         )
     )
@@ -226,6 +231,7 @@ def test_brief_path_loss_holds_then_returns_steering():
     planner = MainPlanner(
         PlannerConfig(
             path_lost_hold_frames=2,
+            path_lost_hold_max_steering=1.0,
             path_lost_stop_frames=10,
             path_lost_steering_return_rate_per_sec=2.0,
         )
@@ -290,10 +296,12 @@ def test_curvature_reduces_lookahead_and_throttle():
             min_points=5,
             lookahead_m=0.8,
             curve_lookahead_m=0.45,
-            lookahead_shrink_rate_m=1.0,
+            lookahead_shrink_rate_m_per_sec=10.0,
             curvature_full_scale=0.5,
             cruise_throttle=0.13,
             curve_throttle=0.07,
+            throttle_accel_rate_per_sec=10.0,
+            throttle_decel_rate_per_sec=10.0,
             steering_rate_limit_per_sec=10.0,
         )
     )
@@ -330,9 +338,13 @@ def test_in_course_exits_on_second_debounced_branch():
         route_mode=RouteMode.IN,
         prefer_yellow=True,
         yellow_valid_on_frames=1,
+        roundabout_entry_confirm_sec=0.0,
+        roundabout_entry_require_crossing=False,
         min_points=5,
         min_lap_time_sec=1.0,
         branch_required_events=2,
+        branch_select_on_frames=1,
+        branch_select_off_frames=1,
         branch_on_frames=1,
         branch_off_frames=1,
         crossing_on_frames=1,
@@ -540,3 +552,340 @@ def test_fork_uses_cached_branch_during_short_detection_flicker():
     assert output.path_source is PathSource.LEFT_BRANCH
     assert output.decision == 'out_fork_cached_branch'
     assert output.debug['selected_branch_rank'] == 0
+
+
+def test_steering_release_and_reversal_use_faster_rate():
+    path = np.array([[0.1, 0.0], [1.0, 0.5]], dtype=np.float32)
+    planner = MainPlanner(
+        PlannerConfig(
+            min_points=2,
+            lookahead_m=0.5,
+            curve_lookahead_m=0.5,
+            steering_rate_limit_per_sec=1.0,
+            steering_release_rate_limit_per_sec=10.0,
+        )
+    )
+    planner._steering = 0.8
+
+    result = planner._pure_pursuit(path, dt_sec=0.1)
+
+    assert result.raw_steering < 0.0
+    assert abs(result.steering - (-0.2)) < 1e-9
+
+
+def test_saturated_steering_is_not_held_when_path_is_lost():
+    empty = np.empty((0, 2), dtype=np.float32)
+    lane = SimpleNamespace(
+        white_centerline=empty,
+        yellow_centerline=empty,
+        white_confidence=0.0,
+        yellow_confidence=0.0,
+        white_visible=False,
+        yellow_visible=False,
+        fork_active=False,
+        yellow_crossing_line=False,
+        branches=(),
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            path_lost_hold_frames=2,
+            path_lost_hold_max_steering=0.35,
+            path_lost_steering_return_rate_per_sec=8.0,
+        )
+    )
+    planner._steering = 1.0
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        output = planner.step(frame, now_sec=0.0)
+
+    assert abs(output.command.steering - 0.2) < 1e-9
+    assert output.decision.endswith('path_lost_return')
+
+
+def test_curvature_filter_reacts_faster_to_curve_than_to_straight():
+    planner = MainPlanner(
+        PlannerConfig(
+            curvature_full_scale=1.0,
+            curvature_rise_tau_sec=0.05,
+            curvature_fall_tau_sec=0.50,
+        )
+    )
+    _, rising = planner._filtered_curve_ratio(1.0, True, 0.10)
+    _, falling = planner._filtered_curve_ratio(0.0, True, 0.10)
+
+    assert rising > 0.8
+    assert falling > 0.6
+
+
+def test_invalid_curvature_holds_then_selects_conservative_profile():
+    planner = MainPlanner(
+        PlannerConfig(
+            curvature_invalid_hold_sec=0.40,
+            curvature_rise_tau_sec=0.05,
+        )
+    )
+    planner._curve_ratio = 0.4
+
+    _, held = planner._filtered_curve_ratio(0.0, False, 0.20)
+    _, conservative = planner._filtered_curve_ratio(0.0, False, 0.25)
+
+    assert abs(held - 0.4) < 1e-9
+    assert conservative > held
+
+
+def test_throttle_accelerates_slowly_and_decelerates_quickly():
+    planner = MainPlanner(
+        PlannerConfig(
+            default_throttle=0.10,
+            throttle_accel_rate_per_sec=0.20,
+            throttle_decel_rate_per_sec=0.80,
+        )
+    )
+
+    assert abs(planner._update_throttle(0.30, 0.10) - 0.12) < 1e-9
+    assert abs(planner._update_throttle(0.05, 0.10) - 0.05) < 1e-9
+
+
+def test_lookahead_growth_is_time_based_and_speed_gated():
+    planner = MainPlanner(
+        PlannerConfig(
+            lookahead_m=1.0,
+            curve_lookahead_m=0.5,
+            lookahead_grow_rate_m_per_sec=0.5,
+        )
+    )
+    planner._lookahead_m = 0.5
+
+    desired, ratio = planner._adaptive_lookahead(1.0, 0.10)
+
+    assert desired == 1.0
+    assert ratio == 1.0
+    assert abs(planner._lookahead_m - 0.55) < 1e-9
+
+
+def test_roundabout_lookahead_varies_between_curve_and_straight_values():
+    planner = MainPlanner(
+        PlannerConfig(
+            lookahead_m=1.0,
+            curve_lookahead_m=0.55,
+            curvature_full_scale=0.8,
+            roundabout_straight_lookahead_m=0.80,
+            roundabout_curve_lookahead_m=0.55,
+            lookahead_shrink_rate_m_per_sec=10.0,
+            lookahead_grow_rate_m_per_sec=10.0,
+        )
+    )
+    planner._lookahead_m = 0.55
+
+    straight_desired, straight_ratio = planner._adaptive_lookahead(
+        1.0,
+        0.1,
+        straight_lookahead_m=planner.config.roundabout_straight_lookahead_m,
+        curve_lookahead_m=planner.config.roundabout_curve_lookahead_m,
+    )
+    curve_desired, curve_ratio = planner._adaptive_lookahead(
+        0.0,
+        0.1,
+        straight_lookahead_m=planner.config.roundabout_straight_lookahead_m,
+        curve_lookahead_m=planner.config.roundabout_curve_lookahead_m,
+    )
+
+    assert straight_ratio == 1.0
+    assert straight_desired == 0.80
+    assert curve_ratio == 0.0
+    assert curve_desired == 0.55
+
+
+def test_previous_recovery_demand_prevents_lookahead_growth():
+    planner = MainPlanner(
+        PlannerConfig(
+            min_points=5,
+            lookahead_m=1.0,
+            curve_lookahead_m=0.5,
+            lookahead_shrink_rate_m_per_sec=10.0,
+            lookahead_grow_rate_m_per_sec=10.0,
+            cruise_throttle=0.28,
+            curve_throttle=0.10,
+        )
+    )
+    planner._lookahead_m = 1.0
+    planner._throttle = 0.28
+    planner._control_demand_ratio = 1.0
+    straight_path = np.array(
+        [[0.25, 0.0], [0.45, 0.0], [0.65, 0.0], [0.85, 0.0], [1.05, 0.0]],
+        dtype=np.float32,
+    )
+
+    result = planner._pure_pursuit(straight_path, 0.10)
+
+    assert result.lookahead_m == 0.5
+
+
+def test_blended_branch_path_keeps_near_lane_then_joins_branch():
+    planner = MainPlanner(PlannerConfig(branch_blend_distance_m=0.35, min_points=3))
+    lane_path = np.array(
+        [[0.20, 0.00], [0.40, 0.00], [0.60, 0.00], [0.90, 0.00]],
+        dtype=np.float32,
+    )
+    # Branch starts offset laterally and rejoins further out.
+    branch_path = np.array(
+        [[0.30, 0.20], [0.50, 0.20], [0.70, 0.10], [1.00, 0.00]],
+        dtype=np.float32,
+    )
+    blended = planner._blended_branch_path(lane_path, branch_path)
+    assert blended.shape[0] >= 2
+    # Near overlap should be pulled toward the lane center (y≈0).
+    near = blended[blended[:, 0] <= 0.35]
+    assert near.shape[0] >= 1
+    assert abs(float(near[0, 1])) < abs(float(branch_path[0, 1]))
+
+
+def test_roundabout_entry_timer_starts_on_context_and_resets_on_dropout():
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=path.copy(),
+        white_confidence=0.9,
+        yellow_confidence=0.0,
+        white_visible=True,
+        yellow_visible=True,
+        fork_active=False,
+        yellow_crossing_line=False,
+        branches=(),
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.IN,
+            prefer_yellow=True,
+            yellow_valid_on_frames=1,
+            roundabout_entry_confirm_sec=0.5,
+            roundabout_entry_require_crossing=True,
+            min_points=5,
+            min_lap_time_sec=100.0,
+        )
+    )
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        before_context = planner.step(frame, now_sec=100.0)
+        lane.yellow_confidence = 0.9
+        candidate_started = planner.step(frame, now_sec=101.0)
+        still_waiting = planner.step(frame, now_sec=101.4)
+
+        lane.yellow_confidence = 0.0
+        planner.step(frame, now_sec=101.45)
+        lane.yellow_confidence = 0.9
+        restarted = planner.step(frame, now_sec=102.0)
+        confirmed_without_crossing = planner.step(frame, now_sec=102.6)
+        lane.yellow_crossing_line = True
+        entered = planner.step(frame, now_sec=102.7)
+
+    assert before_context.state is DrivingState.NORMAL
+    assert before_context.path_source is PathSource.WHITE_CENTERLINE
+    assert candidate_started.state is DrivingState.NORMAL
+    assert still_waiting.state is DrivingState.NORMAL
+    assert restarted.state is DrivingState.NORMAL
+    assert restarted.debug['roundabout_entry_candidate_elapsed_sec'] == 0.0
+    assert confirmed_without_crossing.state is DrivingState.NORMAL
+    assert confirmed_without_crossing.debug['roundabout_entry_context_ready'] is False
+    assert entered.state is DrivingState.ROUNDABOUT_CIRCLE
+    assert entered.path_source is PathSource.YELLOW_CENTERLINE
+    assert entered.debug['roundabout_entry_candidate_elapsed_sec'] == 0.7
+
+
+def test_roundabout_entry_can_use_stable_yellow_without_crossing_detector():
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=path.copy(),
+        white_confidence=0.9,
+        yellow_confidence=0.9,
+        white_visible=True,
+        yellow_visible=True,
+        fork_active=False,
+        yellow_crossing_line=False,
+        branches=(),
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.IN,
+            prefer_yellow=True,
+            yellow_valid_on_frames=1,
+            roundabout_entry_confirm_sec=0.5,
+            roundabout_entry_require_crossing=False,
+            min_points=5,
+            min_lap_time_sec=100.0,
+        )
+    )
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        waiting = planner.step(frame, now_sec=10.0)
+        entered = planner.step(frame, now_sec=10.6)
+
+    assert waiting.state is DrivingState.NORMAL
+    assert waiting.path_source is PathSource.WHITE_CENTERLINE
+    assert entered.state is DrivingState.ROUNDABOUT_CIRCLE
+    assert entered.path_source is PathSource.YELLOW_CENTERLINE
+    assert entered.debug['roundabout_entry_context_ready'] is True
+
+
+def test_legacy_lookahead_rates_convert_via_nominal_dt():
+    from inference.pipeline import load_planner_config
+    import tempfile
+    yaml_text = """
+pure_pursuit:
+  nominal_control_dt_sec: 0.10
+  lookahead_shrink_rate_m: 0.15
+  lookahead_grow_rate_m: 0.07
+"""
+    with tempfile.TemporaryDirectory() as directory:
+        cfg = Path(directory) / 'cfg.yaml'
+        cfg.write_text(yaml_text)
+        loaded = load_planner_config(cfg)
+    assert abs(loaded.lookahead_shrink_rate_m_per_sec - 1.50) < 1e-9
+    assert abs(loaded.lookahead_grow_rate_m_per_sec - 0.70) < 1e-9
+
+
+def test_per_sec_lookahead_rates_win_over_legacy_keys():
+    from inference.pipeline import load_planner_config
+    import tempfile
+    yaml_text = """
+pure_pursuit:
+  nominal_control_dt_sec: 0.10
+  lookahead_shrink_rate_m: 0.15
+  lookahead_grow_rate_m: 0.07
+  lookahead_shrink_rate_m_per_sec: 2.0
+  lookahead_grow_rate_m_per_sec: 0.25
+"""
+    with tempfile.TemporaryDirectory() as directory:
+        cfg = Path(directory) / 'cfg.yaml'
+        cfg.write_text(yaml_text)
+        loaded = load_planner_config(cfg)
+    assert abs(loaded.lookahead_shrink_rate_m_per_sec - 2.0) < 1e-9
+    assert abs(loaded.lookahead_grow_rate_m_per_sec - 0.25) < 1e-9

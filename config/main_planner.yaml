@@ -14,6 +14,11 @@ route:
   fork_path_hold_frames: 3
   # Prevent the same junction from immediately retriggering after exit.
   fork_reentry_cooldown_sec: 2.0
+  # Keep the near lane center and blend gradually toward the selected branch.
+  branch_blend_distance_m: 0.35
+  # Control-path selection debounce (separate from roundabout encounter counters).
+  branch_select_on_frames: 3
+  branch_select_off_frames: 3
 
 pure_pursuit:
   # Adaptive LD: long on straights, short on curves.
@@ -22,6 +27,13 @@ pure_pursuit:
   curvature_full_scale: 0.8
   lookahead_shrink_rate_m: 0.15
   lookahead_grow_rate_m: 0.07
+  # Curvature rises quickly for corner entry and decays slowly after straighten.
+  curvature_rise_tau_sec: 0.08
+  curvature_fall_tau_sec: 0.30
+  curvature_invalid_hold_sec: 0.40
+  # Time-based LD slew (wins over legacy per-step rates above when both set).
+  lookahead_shrink_rate_m_per_sec: 1.50
+  lookahead_grow_rate_m_per_sec: 0.50
   curvature_near_m: 0.30
   curvature_mid_m: 0.60
   curvature_far_m: 0.90
@@ -35,6 +47,8 @@ pure_pursuit:
   # Time-based limits: behavior no longer changes with camera FPS.
   # Faster reversal reduces entry/exit lag while remaining time-based.
   steering_rate_limit_per_sec: 6.0
+  # Releasing or reversing steering must be faster than adding more lock.
+  steering_release_rate_limit_per_sec: 10.0
   path_lost_steering_return_rate_per_sec: 2.5
   nominal_control_dt_sec: 0.10
   # PP handles curve feed-forward; this bounded Stanley-shaped term restores
@@ -53,6 +67,9 @@ speed:
   # Interpolated with the same path-curvature ratio as adaptive LD.
   cruise_throttle: 0.17
   curve_throttle: 0.08
+  # Acceleration is deliberately gradual; deceleration reacts faster.
+  accel_rate_per_sec: 0.20
+  decel_rate_per_sec: 0.60
   curve_steering_threshold: 0.50  # legacy; curvature ratio is authoritative
   default_throttle: 0.0
 
@@ -68,13 +85,20 @@ path:
   # Preserve a valid corner command across brief centerline flicker. Longer
   # loss still returns steering to neutral and eventually stops throttle.
   path_lost_hold_frames: 2
+  # Large steering is never held during loss; it returns immediately.
+  path_lost_hold_max_steering: 0.35
   path_lost_stop_frames: 10
   fork_exit_off_frames: 8
 
 roundabout:
   # Enter circle mode once a stable yellow path or a yellow crossing line appears.
   entry_on_yellow: true
+  entry_confirm_sec: 0.5
+  # Enable only when yellow_crossing_line is verified reliably on the track.
+  entry_require_crossing: false
   min_lap_time_sec: 5.0
+  # At an exit fork, rightmost continues circling; leftmost exits the circle.
+  continue_branch_rank: -1
   exit_branch_rank: 0
   branch_required_events: 2
   crossing_required_events: 2
@@ -85,6 +109,11 @@ roundabout:
   # Tight circle needs a dedicated target distance and lower speed.
   lookahead_m: 0.6
   throttle: 0.06
+  # Optional adaptive endpoints (default to lookahead_m when omitted).
+  straight_lookahead_m: 0.6
+  curve_lookahead_m: 0.6
+  # NORMAL re-entry only after white-only lane remains continuous this long.
+  exit_confirm_sec: 1.5
 
 signals:
   # Keep false until start/finish signal context is validated on the real track.
