@@ -14,15 +14,13 @@
 | D3-G 보드 | ✅ | |
 
 ```bash
-./scripts/dev_container.sh sim-bringup view:=none   # fork 튜닝용 (기본은 both)
-# 또는 일상: ./scripts/dev_container.sh sim-bringup
-docker exec -it 2026-smh-sim bash          # 터미널2 (튜너·수동 셸)
+./scripts/dev_container.sh sim-bringup view:=none   # 터미널1 — Gazebo (카메라/BEV OFF)
+docker exec -it 2026-smh-sim bash          # 터미널2
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ```
 
 **인지 검증은 Gazebo를 다시 띄우지 마세요.** `sim_auto_driving` / `LANE_VISUALIZE=…` 올인원 launch는 bringup이 이미 있으면 Gazebo가 하나 더 뜹니다.  
-자율 주행 검증은 **`sim-auto`** (MainPlanner). `tune_lane_control.py`는 **레거시 `lane_control.yaml`** 전용이며 auto와 `/control` 충돌.  
 튜너는 카메라 토픽만·`prefer_yellow`는 장면별 (Out=`--label out_fork` → False, In=`exit` → True). 계약: [lane-occlusion-fork-strategy.md §0](../../docs/lane-occlusion-fork-strategy.md).
 
 ---
@@ -79,10 +77,10 @@ python3 scripts/vision_tune/tune_bev.py --folder data/captures/sim
 
 | 창 | 역할 |
 |----|------|
-| `ipm_tune_origin` | 원본 + crop 선 (`x_max`) |
-| `ipm_tune_bev` | Metric BEV (등방 m/px) |
-| `ipm_tune_trapezoid` | `--compare` 일 때만 (참고) |
-| `ipm_tune_controls` | 트랙바 |
+| `ipm_tune (origin \| BEV)` | **단일 창** — 좌: 원본+crop / 우: 변환 BEV + 트랙바 (WSLg 다중창 누락 방지) |
+
+캡처 폴더 예: `python3 scripts/vision_tune/tune_bev.py --folder data/captures/from_bag/in`  
+트랙바(`pitch`/`height`/`crop` …)를 움직이면 **오른쪽 BEV가 바로** 다시 워프됩니다.
 
 ### 트랙바 (IPM)
 
@@ -121,26 +119,6 @@ python3 scripts/vision_tune/tune_bev.py --folder data/captures/sim
 
 ## 카메라 캡처 (단축키만 저장)
 
-### 실차 (권장) — 모니터 웹에서 캡처
-
-보드에는 GUI가 없으므로 **모니터로 보고, 웹에서 Capture** 합니다.
-
-```bash
-# 보드
-ros2 launch inference auto_driving.launch.py   # monitor 포함
-# PC 브라우저: http://<보드IP>:5000
-# → Image 카드의 Capture 버튼 또는 키 C
-# 저장: data/captures/real/frame_*.jpg  (vehicle_config CAPTURE_DIR)
-```
-
-HSV 튜닝은 DISPLAY가 있는 PC에서:
-
-```bash
-python3 scripts/vision_tune/tune_hsv.py --folder data/captures/real --channel white
-```
-
-### DISPLAY 있을 때 (시뮬·로컬 OpenCV 창)
-
 ```bash
 python3 scripts/vision_tune/capture_camera.py --out data/captures/sim
 ```
@@ -148,6 +126,43 @@ python3 scripts/vision_tune/capture_camera.py --out data/captures/sim
 - 창 `capture_hotkey` (640×360)에 포커스
 - **`c` 또는 Space** → PNG 1장 · **`q`** → 종료
 - 저장 후 uid 1000으로 chown (호스트 삭제 가능)
+
+---
+
+## 조이스틱 bag 재생 + 캡처 (IN / OUT)
+
+실차 수동 주행 bag을 **Gazebo 없이** 재생하며 PNG를 뽑는다.  
+워크스페이스 복사본: `bags/in_course`, `bags/out_course`  
+(원본: monorepo `data/bag_20260711_150234` = IN, `data/bag_20260711_144948` = OUT)
+
+```bash
+# 2026-smh-sim 안에서
+source /opt/ros/humble/setup.bash && source install/setup.bash
+
+python3 scripts/vision_tune/capture_from_bag.py in          # IN 코스
+python3 scripts/vision_tune/capture_from_bag.py out         # OUT 코스
+python3 scripts/vision_tune/capture_from_bag.py out --rate 0.3 --start 10
+```
+
+| 키 | 동작 |
+|----|------|
+| `c` | 현재 프레임 PNG 저장 → `data/captures/from_bag/<in\|out>/` |
+| `SPACE` | 재생 / 일시정지 (**시작은 PAUSE**) |
+| `←` `→` / `,` `.` | 프레임 단위 이동 |
+| `[` `]` | 재생 속도 ↓ / ↑ |
+| `r` | 처음으로 |
+| `q` / ESC | 종료 |
+
+창이 안 보이면: 이전 프로세스가 남아 있는지 확인(`Ctrl+C`) 후 다시 실행. 작업표시줄에서 `bag_capture_*` 창을 찾거나, 창은 (48,48)에 뜹니다.
+
+캡처 후:
+
+```bash
+python3 scripts/vision_tune/tune_hsv.py --from-bag in
+python3 scripts/vision_tune/tune_hsv.py --from-bag out
+```
+
+(기준 HSV는 `origin/board` 실차 튜닝값이 `lane_vision.yaml`에 로드됨)
 
 ---
 
@@ -189,37 +204,63 @@ python3 scripts/vision_tune/tune_lane_control.py --drive
 흰/노란 차선 · 검정/빨강 차로 마스크를 Metric IPM BEV에서 맞춘다.  
 **툴·yaml 저장 = 승현**, 대회용 **최종 정밀값 = 원태**와 맞춤. 시드는 원태 브랜치 기본값.
 
-**실차 (보드 GUI 없음):** 모니터에서 Capture → 폴더 모드로 튜닝.
-
 ```bash
-# 보드: launch + 브라우저 Capture
-# PC / DISPLAY 있는 곳:
-python3 scripts/vision_tune/tune_hsv.py --folder data/captures/real --channel white
+python3 scripts/vision_tune/tune_hsv.py --from-bag in
+python3 scripts/vision_tune/tune_hsv.py --folder data/captures/from_bag/out
+python3 scripts/vision_tune/tune_hsv.py --channel yellow
 ```
 
-시뮬 / 라이브 토픽 (DISPLAY 필요):
-
-```bash
-python3 scripts/vision_tune/tune_hsv.py
-python3 scripts/vision_tune/tune_hsv.py --channel white
-python3 scripts/vision_tune/tune_hsv.py --folder data/captures/sim
-```
+기준값: `origin/board` 브랜치 실차 튜닝(bag_20260711_144948) → `config/lane_vision.yaml` `hsv:`  
+추가 미세조정 후 `s` 저장. `b`=board 기준으로 되돌리기, `d`=원태 시드.
 
 | 창 | 역할 |
 |----|------|
-| `hsv_tune_origin` | 원본 + crop |
-| `hsv_tune_bev` | BEV + 마스크 오버레이 (클릭 샘플) |
-| `hsv_tune_mask` | 이진 마스크 |
-| `hsv_tune_controls` | channel + H/S/V min/max |
+| `hsv_tune (origin \| BEV \| mask)` | **단일 창** — 좌: 원본 / 중: BEV+마스크 / 우: 이진 마스크 + 트랙바 |
 
 | 키 | 동작 |
 |----|------|
 | `1`–`4` | white / yellow / black_road / red_road |
-| 클릭 | 해당 픽셀 HSV로 범위 **확장** |
+| `b` | 활성 채널 → **origin/board** 실차 기준값 |
+| 클릭 | ORIGIN/BEV 패널에서 해당 픽셀 HSV로 범위 **확장** |
 | `d` | 활성 채널을 원태 시드 기본값으로 |
 | `s` | `config/lane_vision.yaml` → `hsv:` 저장 |
 | `n` / `p` | 폴더 모드 다음/이전 |
 | `q` / ESC | 종료 |
+
+---
+
+## OUT/IN 주행가능 영역 프리뷰 (road + fitted rails)
+
+road는 항상 **검정|빨강 HSV 합집합**, 코리도는 **인지 피팅 레일 사이 채움**  
+(OUT=흰, IN=노란 — 두 색을 OR하지 않음). raw white 좌·우 극값 fill은 쓰지 않음.
+
+```bash
+python3 scripts/vision_tune/preview_out_drivable.py --from-bag out --course out
+python3 scripts/vision_tune/preview_out_drivable.py --from-bag out --start 11 --fork   # out_fork만
+python3 scripts/vision_tune/preview_out_drivable.py --from-bag in --course in
+```
+
+| 키 | 합성 모드 |
+|----|----------|
+| `1` | `road` — black\|red only |
+| `2` | `between` — **피팅** 좌·우 레일 사이 (또는 `--fork` 시 out_fork 차로 쌍) |
+| `3` | `road_in` — road ∩ between (**기본**) |
+| `4` | `union` — between ∪ road |
+| `f` | `enable_fork` 토글 (**기본 OFF** — 갈림길 11–12만 ON) |
+| `g` | kinematic ego-band 가드 토글 (**기본 ON**) |
+| `0` | fork 갈래 필터 both → L → R |
+
+기본 경로는 **일반 흰/노란 피팅 + 기구학 밴드 가드** (앞차축·트레드·\(R_{\min}\)·차로폭).  
+`out_fork`는 일반 차로에서 튀므로 켜지 않음. 런타임도 표지판 게이트 뒤에서만 fork.  
+OUT 캡처 **11–12**만 `--fork` (또는 `f`) 후 mode 2/3 확인.
+
+기구학 가드: 레일 midpoint가 ego 도달가능 밴드 밖이면 track_width prior로 리셋하고, between를 밴드와 AND.  
+BEV 오버레이 갈색 = ego band.
+
+`n`/`p` 프레임 · `SPACE` 자동 · `s` → `data/captures/out_drivable_preview/`  
+오버레이: road=회색 · between=초록 · 활성 차선 HSV · fitted L/R 점 · driv=시안
+
+헬퍼: [`out_drivable.py`](out_drivable.py) (`road_mask_from_hsv`, `fill_between_fitted_rails`, `build_kinematic_ego_band`).
 
 ---
 
@@ -269,6 +310,9 @@ Metric IPM이면 종·횡이 이미 등방이라 검증용; 사다리꼴 쓸 때
 | `window_layout.py` | OpenCV 창 화면 안 배치 (`w`) |
 | `tune_bev_roi.py` | 사다리꼴만 (참고) |
 | `bev_roi.py` | 사다리꼴 기하 |
-| `capture_camera.py` | 핫키 캡처 |
+| `capture_camera.py` | 핫키 캡처 (라이브 토픽) |
+| `capture_from_bag.py` | **IN/OUT bag 재생 + 핫키 캡처** |
+| `preview_out_drivable.py` | OUT/IN: road(black\|red) + **피팅 레일** between 프리뷰 |
+| `out_drivable.py` | road / fill_between_fitted_rails 헬퍼 |
 | `../../config/lane_vision.yaml` | `metric_ipm:` + `hsv:` + `detect_tune:` SSOT |
 | `../../config/lane_control.yaml` | planner 게인 |

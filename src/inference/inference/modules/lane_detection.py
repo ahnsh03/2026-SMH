@@ -342,14 +342,11 @@ def _load_hsv_thresholds() -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """lane_vision.yaml hsv 블록을 OpenCV inRange 하한/상한으로 읽는다."""
 
     defaults = {
-        "white": ((0, 0, 180), (179, 29, 255)),
-        # s_min 32 는 노란 조명 받은 노면(S 34~102)까지 노란 선으로 잡았다.
-        # 실측 근거는 lane_vision.yaml 의 yellow 주석 참고.
-        "yellow": ((15, 110, 120), (45, 255, 255)),
-        # 주행가능영역. V<=30 은 Gazebo 렌더 기준이라 실차에서 0% 매칭이었다.
-        # 실측 근거는 lane_vision.yaml 의 black_road / red_road 주석 참고.
-        "black_road": ((0, 0, 10), (89, 255, 200)),
-        "red_road": ((170, 130, 120), (179, 255, 250)),
+        # Fallbacks only — YAML hsv block is SSOT (bag-tuned 2026-07-15).
+        "white": ((0, 0, 210), (179, 20, 255)),
+        "yellow": ((15, 50, 160), (50, 150, 255)),
+        "black_road": ((17, 0, 50), (70, 255, 140)),
+        "red_road": ((0, 180, 145), (9, 255, 230)),
     }
     try:
         with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as f:

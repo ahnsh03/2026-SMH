@@ -12,9 +12,13 @@ camera:
   horizontal_fov_rad: 1.22906           # Logitech C920e
   frame_id: camera
   mount:
-    height_ground_m: 0.13               # 추정 — 실차 실측 후 갱신
+    # D-Racer camera mount (팀 실측 → planner rear-axle frame).
+    # rear_axle → camera = wheelbase + ahead_front_axle
+    #                  = 0.175 + 0.025 = 0.20 m  (profiles.real perception_to_rear_axle_x_m)
+    height_ground_m: 0.13
     ahead_front_axle_m: 0.025
-    pitch_down_deg: 10.0                # 추정 — 실차 실측 후 갱신
+    # Gazebo default. Board BEV SSOT pitch lives in config/lane_vision.yaml (not here).
+    pitch_down_deg: 10.0
 
 control:
   input_topic: /control                 # control_msgs/Control

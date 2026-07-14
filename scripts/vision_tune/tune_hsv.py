@@ -5,23 +5,21 @@ Tune white / yellow / black_road / red_road ranges on Metric IPM BEV (or
 camera view). Click a pixel to expand the active range around that sample.
 Saves ``config/lane_vision.yaml`` → ``hsv:``.
 
-Precise competition values may still be refined by Won Tae; this tool is the
-shared field/sim interface.
-
 Examples (inside 2026-smh-sim after source /opt/ros/humble/setup.bash):
 
-  python3 scripts/vision_tune/tune_hsv.py
-  python3 scripts/vision_tune/tune_hsv.py --folder data/captures/sim
+  python3 scripts/vision_tune/tune_hsv.py --from-bag in
+  python3 scripts/vision_tune/tune_hsv.py --folder data/captures/from_bag/out
   python3 scripts/vision_tune/tune_hsv.py --topic /camera/image/compressed
 
 Keys:
   1–4   select channel (white/yellow/black/red)
-  d     reset active channel to Won Tae seed defaults
+  b     reset active channel → origin/board field baseline
+  d     reset active channel → Won Tae seed defaults
   s     save all channels to lane_vision.yaml
   n/p   next/prev image (folder mode)
   q/ESC quit
 
-Click on ``hsv_tune_bev`` or ``hsv_tune_origin`` to expand range to sample.
+Click on the ORIGIN or BEV panel to expand range to sample.
 """
 
 from __future__ import annotations
@@ -34,12 +32,14 @@ import cv2
 import numpy as np
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parents[1]
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from hsv import (  # noqa: E402
     CHANNEL_NAMES,
     HsvRange,
+    board_range,
     default_config_path,
     default_range,
     expand_range_with_sample,
@@ -54,19 +54,26 @@ from metric_ipm import (  # noqa: E402
     load_metric_ipm,
     warp_metric_ipm,
 )
+from window_layout import place_window  # noqa: E402
 
-WIN_ORIGIN = 'hsv_tune_origin'
-WIN_BEV = 'hsv_tune_bev'
-WIN_MASK = 'hsv_tune_mask'
-WIN_CTRL = 'hsv_tune_controls'
-PREVIEW_W = 640
-PREVIEW_H = 360
+# Single mosaic window (WSLg drops extra HighGUI windows).
+WIN_MAIN = 'hsv_tune (origin | BEV | mask)'
+WIN_CTRL = WIN_MAIN
+
+PANEL_W = 420
+PANEL_H = 360
+GAP = 4
 
 CHANNEL_COLORS = {
     'white': (255, 255, 255),
     'yellow': (0, 255, 255),
     'black_road': (80, 80, 80),
     'red_road': (0, 0, 255),
+}
+
+FROM_BAG_DIRS = {
+    'in': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'in',
+    'out': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out',
 }
 
 
@@ -84,23 +91,77 @@ def _decode_compressed(data: bytes) -> np.ndarray | None:
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
 
-def _scale_to_preview(frame: np.ndarray) -> np.ndarray:
-    return cv2.resize(frame, (PREVIEW_W, PREVIEW_H), interpolation=cv2.INTER_NEAREST)
+def _fit_panel(frame: np.ndarray, width: int, height: int) -> np.ndarray:
+    out = np.zeros((height, width, 3), dtype=np.uint8)
+    if frame is None or frame.size == 0:
+        return out
+    h, w = frame.shape[:2]
+    if h < 1 or w < 1:
+        return out
+    scale = min(width / w, height / h)
+    nw = max(1, int(round(w * scale)))
+    nh = max(1, int(round(h * scale)))
+    resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_NEAREST)
+    x0 = (width - nw) // 2
+    y0 = (height - nh) // 2
+    out[y0 : y0 + nh, x0 : x0 + nw] = resized
+    return out
 
 
-def _preview_to_frame_xy(
-    px: int,
-    py: int,
+def _label_panel(panel: np.ndarray, title: str) -> None:
+    cv2.rectangle(panel, (0, 0), (panel.shape[1] - 1, 28), (0, 0, 0), -1)
+    cv2.putText(
+        panel,
+        title,
+        (8, 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def _panel_from_mosaic_x(mx: int) -> str | None:
+    if mx < PANEL_W:
+        return 'origin'
+    if mx < PANEL_W + GAP + PANEL_W:
+        return None
+    if mx < 2 * PANEL_W + GAP:
+        return 'bev'
+    return None
+
+
+def _mosaic_to_frame_xy(
+    mx: int,
+    my: int,
+    which: str,
     frame_w: int,
     frame_h: int,
 ) -> tuple[int, int] | None:
-    if frame_w <= 0 or frame_h <= 0:
+    if which == 'origin':
+        panel_x = mx
+    elif which == 'bev':
+        panel_x = mx - (PANEL_W + GAP)
+    else:
         return None
-    x = int(round(px * frame_w / PREVIEW_W))
-    y = int(round(py * frame_h / PREVIEW_H))
-    if not (0 <= x < frame_w and 0 <= y < frame_h):
+    if not (0 <= panel_x < PANEL_W and 28 <= my < PANEL_H):
         return None
-    return x, y
+    # Undo letterbox in _fit_panel.
+    scale = min(PANEL_W / frame_w, PANEL_H / frame_h)
+    nw = max(1, int(round(frame_w * scale)))
+    nh = max(1, int(round(frame_h * scale)))
+    x0 = (PANEL_W - nw) // 2
+    y0 = (PANEL_H - nh) // 2
+    px = panel_x - x0
+    py = my - y0
+    if not (0 <= px < nw and 0 <= py < nh):
+        return None
+    fx = int(round(px * frame_w / nw))
+    fy = int(round(py * frame_h / nh))
+    if not (0 <= fx < frame_w and 0 <= fy < frame_h):
+        return None
+    return fx, fy
 
 
 class HsvTuneState:
@@ -108,9 +169,12 @@ class HsvTuneState:
         self.ranges = {k: v.clamp() for k, v in ranges.items()}
         self.channel_idx = 0
         self._suppress_trackbar = False
+        self._ui_ready = False
         self.last_origin: np.ndarray | None = None
         self.last_bev: np.ndarray | None = None
         self.last_sample: str = ''
+        self.frame: np.ndarray | None = None
+        self.config_path = default_config_path()
 
     @property
     def channel(self) -> str:
@@ -154,15 +218,24 @@ class HsvTuneState:
         cv2.setTrackbarPos('v_max', WIN_CTRL, p.v_max)
         self._suppress_trackbar = False
 
+    def on_trackbar(self, _value: int = 0) -> None:
+        if not self._ui_ready or self.frame is None:
+            return
+        _show_frame(self.frame, self, self.config_path)
+
     def reset_active_default(self) -> None:
         self.ranges[self.channel] = default_range(self.channel)
         self._push_trackbars()
 
-    def apply_click(self, which: str, x: int, y: int) -> None:
+    def reset_active_board(self) -> None:
+        self.ranges[self.channel] = board_range(self.channel)
+        self._push_trackbars()
+
+    def apply_click(self, which: str, mx: int, my: int) -> None:
         frame = self.last_bev if which == 'bev' else self.last_origin
         if frame is None:
             return
-        mapped = _preview_to_frame_xy(x, y, frame.shape[1], frame.shape[0])
+        mapped = _mosaic_to_frame_xy(mx, my, which, frame.shape[1], frame.shape[0])
         if mapped is None:
             return
         fx, fy = mapped
@@ -176,21 +249,44 @@ class HsvTuneState:
         )
 
 
-def _on_mouse_factory(state: HsvTuneState, which: str):
+def _on_mouse(state: HsvTuneState):
     def _cb(event: int, x: int, y: int, _flags: int, _userdata: object) -> None:
-        if event == cv2.EVENT_LBUTTONDOWN:
-            state.apply_click(which, x, y)
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        which = _panel_from_mosaic_x(x)
+        if which is None:
+            return
+        state.apply_click(which, x, y)
+        if state.frame is not None:
+            _show_frame(state.frame, state, state.config_path)
 
     return _cb
 
 
 def _init_ui(state: HsvTuneState) -> None:
-    for name in (WIN_ORIGIN, WIN_BEV, WIN_MASK):
-        cv2.namedWindow(name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(name, PREVIEW_W, PREVIEW_H)
-    cv2.namedWindow(WIN_CTRL, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WIN_CTRL, 420, 320)
-    cv2.createTrackbar('channel', WIN_CTRL, state.channel_idx, 3, lambda *_: None)
+    state._ui_ready = False
+    mosaic_w = 3 * PANEL_W + 2 * GAP
+    cv2.namedWindow(WIN_MAIN, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WIN_MAIN, mosaic_w, PANEL_H + 80)
+    place_window(WIN_MAIN, 48, 48)
+
+    blank = np.zeros((PANEL_H, mosaic_w, 3), dtype=np.uint8)
+    cv2.putText(
+        blank,
+        'origin | BEV | mask — loading…',
+        (24, PANEL_H // 2),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (180, 180, 180),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.imshow(WIN_MAIN, blank)
+    cv2.waitKey(1)
+    place_window(WIN_MAIN, 48, 48)
+
+    cb = state.on_trackbar
+    cv2.createTrackbar('channel', WIN_CTRL, state.channel_idx, 3, cb)
     for key, vmax in (
         ('h_min', 179),
         ('h_max', 179),
@@ -199,13 +295,17 @@ def _init_ui(state: HsvTuneState) -> None:
         ('v_min', 255),
         ('v_max', 255),
     ):
-        cv2.createTrackbar(key, WIN_CTRL, 0, vmax, lambda *_: None)
+        cv2.createTrackbar(key, WIN_CTRL, 0, vmax, cb)
     state._push_trackbars()
-    cv2.setMouseCallback(WIN_ORIGIN, _on_mouse_factory(state, 'origin'))
-    cv2.setMouseCallback(WIN_BEV, _on_mouse_factory(state, 'bev'))
+    cv2.setMouseCallback(WIN_MAIN, _on_mouse(state))
+    state._ui_ready = True
 
 
-def _show_frame(frame: np.ndarray, state: HsvTuneState, config_path: Path) -> None:
+def _compose_views(
+    frame: np.ndarray,
+    state: HsvTuneState,
+    config_path: Path,
+) -> tuple[np.ndarray, HsvRange, float]:
     rng = state.sync_from_trackbars()
     ipm = load_metric_ipm(config_path)
     origin = draw_crop_overlay(frame, ipm)
@@ -221,16 +321,15 @@ def _show_frame(frame: np.ndarray, state: HsvTuneState, config_path: Path) -> No
     cov = 100.0 * float(np.count_nonzero(mask)) / float(mask.size)
     label = (
         f'{state.channel}  H[{rng.h_min},{rng.h_max}] '
-        f'S[{rng.s_min},{rng.s_max}] V[{rng.v_min},{rng.v_max}]  '
-        f'cov={cov:.1f}%'
+        f'S[{rng.s_min},{rng.s_max}] V[{rng.v_min},{rng.v_max}]  cov={cov:.1f}%'
     )
     for img in (origin, bev_ov, mask_bgr):
         cv2.putText(
             img,
             label,
-            (8, 20),
+            (8, 44),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
+            0.42,
             (0, 255, 255),
             1,
             cv2.LINE_AA,
@@ -239,17 +338,30 @@ def _show_frame(frame: np.ndarray, state: HsvTuneState, config_path: Path) -> No
         cv2.putText(
             bev_ov,
             state.last_sample,
-            (8, 40),
+            (8, 62),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
+            0.38,
             (0, 200, 255),
             1,
             cv2.LINE_AA,
         )
 
-    cv2.imshow(WIN_ORIGIN, _scale_to_preview(origin))
-    cv2.imshow(WIN_BEV, _scale_to_preview(bev_ov))
-    cv2.imshow(WIN_MASK, _scale_to_preview(mask_bgr))
+    left = _fit_panel(origin, PANEL_W, PANEL_H)
+    mid = _fit_panel(bev_ov, PANEL_W, PANEL_H)
+    right = _fit_panel(mask_bgr, PANEL_W, PANEL_H)
+    _label_panel(left, 'ORIGIN')
+    _label_panel(mid, 'BEV + mask')
+    _label_panel(right, 'MASK')
+    gap = np.full((PANEL_H, GAP, 3), 40, dtype=np.uint8)
+    mosaic = np.hstack([left, gap, mid, gap, right])
+    return mosaic, rng, cov
+
+
+def _show_frame(frame: np.ndarray, state: HsvTuneState, config_path: Path) -> HsvRange:
+    state.frame = frame
+    mosaic, rng, _cov = _compose_views(frame, state, config_path)
+    cv2.imshow(WIN_MAIN, mosaic)
+    return rng
 
 
 def _handle_key(key: int, state: HsvTuneState, config_path: Path) -> str | None:
@@ -264,6 +376,10 @@ def _handle_key(key: int, state: HsvTuneState, config_path: Path) -> str | None:
     if key == ord('d'):
         state.reset_active_default()
         print(f'Reset {state.channel} → Won Tae seed default')
+        return None
+    if key == ord('b'):
+        state.reset_active_board()
+        print(f'Reset {state.channel} → origin/board field baseline')
         return None
     if key in (ord('1'), ord('2'), ord('3'), ord('4')):
         state.set_channel(key - ord('1'))
@@ -280,26 +396,42 @@ def run_folder(folder: Path, state: HsvTuneState, config_path: Path) -> int:
     paths = _list_images(folder)
     if not paths:
         raise SystemExit(f'No images in {folder}')
-    frames = [cv2.imread(str(p)) for p in paths]
-    frames = [f for f in frames if f is not None]
+    frames = []
+    labels = []
+    for path in paths:
+        img = cv2.imread(str(path))
+        if img is not None:
+            frames.append(img)
+            labels.append(path.name)
     if not frames:
         raise SystemExit(f'Failed to load images from {folder}')
+    state.config_path = config_path
     _init_ui(state)
     idx = 0
-    print('Keys: 1-4 channel  d=default  s=save  n/p  q=quit  (click to sample)')
-    while True:
-        _show_frame(frames[idx], state, config_path)
-        key = cv2.waitKey(30) & 0xFF
-        action = _handle_key(key, state, config_path)
-        if action == 'quit':
-            break
-        if action == 'next' and len(frames) > 1:
-            idx = (idx + 1) % len(frames)
-            print(f'[{idx + 1}/{len(frames)}] {paths[idx].name}')
-        if action == 'prev' and len(frames) > 1:
-            idx = (idx - 1) % len(frames)
-            print(f'[{idx + 1}/{len(frames)}] {paths[idx].name}')
-    cv2.destroyAllWindows()
+    print(
+        f'Folder: {folder} ({len(frames)} images)\n'
+        f'Baseline: lane_vision.yaml hsv (origin/board field tune)\n'
+        f'Keys: 1-4 channel  b=board  d=seed  s=save  n/p  q=quit  (click ORIGIN/BEV)',
+        flush=True,
+    )
+    try:
+        while True:
+            _show_frame(frames[idx], state, config_path)
+            key = cv2.waitKey(16) & 0xFF
+            action = _handle_key(key, state, config_path)
+            if action == 'quit':
+                break
+            if action == 'next' and len(frames) > 1:
+                idx = (idx + 1) % len(frames)
+                print(f'[{idx + 1}/{len(frames)}] {labels[idx]}', flush=True)
+            if action == 'prev' and len(frames) > 1:
+                idx = (idx - 1) % len(frames)
+                print(f'[{idx + 1}/{len(frames)}] {labels[idx]}', flush=True)
+    except KeyboardInterrupt:
+        print('\ninterrupted', flush=True)
+    finally:
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)
     return 0
 
 
@@ -318,8 +450,7 @@ def run_topic(topic: str, state: HsvTuneState, config_path: Path) -> int:
 
     image_qos = QoSProfile(
         history=HistoryPolicy.KEEP_LAST,
-        # Newest frame only — a deeper queue shows stale frames (see tune_metric_ipm).
-        depth=1,
+        depth=10,
         reliability=ReliabilityPolicy.RELIABLE,
         durability=DurabilityPolicy.VOLATILE,
     )
@@ -338,10 +469,11 @@ def run_topic(topic: str, state: HsvTuneState, config_path: Path) -> int:
             if frame is not None:
                 self.frame = frame
 
+    state.config_path = config_path
     _init_ui(state)
     rclpy.init()
     node = HsvTuneNode()
-    print('Keys: 1-4 channel  d=default  s=save  q=quit  (click to sample)')
+    print('Live mode. Keys: 1-4  b=board  d=seed  s=save  q=quit  (click ORIGIN/BEV)')
     try:
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.02)
@@ -350,17 +482,45 @@ def run_topic(topic: str, state: HsvTuneState, config_path: Path) -> int:
             key = cv2.waitKey(1) & 0xFF
             if _handle_key(key, state, config_path) == 'quit':
                 break
+    except KeyboardInterrupt:
+        print('\ninterrupted', flush=True)
     finally:
         node.destroy_node()
         rclpy.shutdown()
         cv2.destroyAllWindows()
+        cv2.waitKey(1)
     return 0
+
+
+def _resolve_folder(args: argparse.Namespace) -> Path | None:
+    if args.from_bag is not None:
+        key = args.from_bag.strip().lower()
+        if key == 'both':
+            in_dir = FROM_BAG_DIRS['in']
+            out_dir = FROM_BAG_DIRS['out']
+            if not in_dir.is_dir() and not out_dir.is_dir():
+                raise SystemExit(f'No bag captures under {in_dir.parent}')
+            # Prefer in if both exist; user can pass --folder for merged review.
+            return in_dir if in_dir.is_dir() else out_dir
+        if key not in FROM_BAG_DIRS:
+            raise SystemExit(f'Unknown --from-bag {args.from_bag!r}; use in|out|both')
+        folder = FROM_BAG_DIRS[key]
+        if not folder.is_dir():
+            raise SystemExit(f'Missing captures: {folder} (run capture_from_bag.py first)')
+        return folder
+    return args.folder
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Tune lane/road HSV masks')
     parser.add_argument('--topic', default='/camera/image/compressed')
     parser.add_argument('--folder', type=Path, default=None)
+    parser.add_argument(
+        '--from-bag',
+        choices=('in', 'out', 'both'),
+        default=None,
+        help='Shortcut: data/captures/from_bag/<in|out>',
+    )
     parser.add_argument('--config', type=Path, default=default_config_path())
     parser.add_argument(
         '--channel',
@@ -373,8 +533,10 @@ def main(argv: list[str] | None = None) -> int:
     ranges = load_hsv_ranges(args.config)
     state = HsvTuneState(ranges)
     state.channel_idx = CHANNEL_NAMES.index(args.channel)
-    if args.folder is not None:
-        return run_folder(args.folder, state, args.config)
+
+    folder = _resolve_folder(args)
+    if folder is not None:
+        return run_folder(folder.expanduser().resolve(), state, args.config)
     return run_topic(args.topic, state, args.config)
 
 

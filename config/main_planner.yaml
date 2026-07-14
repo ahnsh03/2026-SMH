@@ -159,10 +159,11 @@ profiles:
 
   real:
     pure_pursuit:
-      # Measured on the real car 2026-07-12 (docs/vehicle-geometry.md).
-      # The sim LIMO is 0.24 m / 30 deg; copying it costs ~20% understeer.
+      # Measured on the real car (docs/vehicle-geometry.md).
+      # L=0.175 m, R_min SSOT=0.385 m → δ_max=atan(L/R)≈0.4266 rad (24.44°).
+      # Older 17.5° / 0.3054 archive (2026-07-12 circle) is not the control SSOT.
       wheelbase_m: 0.175
-      max_steer_angle_rad: 0.3054   # 17.5 deg tire angle
+      max_steer_angle_rad: 0.4266
       # Perception runs at ~2.2 Hz, so the nominal dt is the real frame period.
       nominal_control_dt_sec: 0.45
 
@@ -172,8 +173,10 @@ profiles:
       curve_throttle: 0.15
 
     path:
-      # rear axle -> camera = wheelbase + camera_ahead_front_axle
-      #            = 0.175 + 0.025 = 0.20 m  (sim value 0.265 assumes L=0.24)
+      # Camera longitudinal mount (실측 관계식, sim_interface camera.mount):
+      #   rear axle → camera = L + ahead_front_axle_m
+      #                      = 0.175 + 0.025 = 0.20 m
+      # Sim LIMO uses 0.24 + 0.025 = 0.265 m (base path.perception_to_rear_axle_x_m).
       perception_to_rear_axle_x_m: 0.20
       # Frame counts below are scaled to keep roughly the wall-clock behaviour
       # the sim values were tuned for. At 2.2 Hz one frame is already 0.45 s,

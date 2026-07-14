@@ -22,7 +22,7 @@
 | 외형 (대략) | ~255×140×215 mm | 322×220×251 mm | URDF 베이스 ~190×310×120 |
 | 최대 조향각 | **±17.5°** (팀 실측, PP SSOT) | \(R_\min=0.4\,\mathrm{m}\) 역산 ≈ **27°** | **±30°** (`0.5236` rad) |
 | 최소 선회반경 | **0.535 m** (지름 107 cm 실측) | **0.4 m** | ≈ **0.42 m** (\(0.24/\tan 30^\circ\)) |
-| 카메라 | **h=0.13 m, pitch↓10°** (시뮬과 동일 맞춤) | — | 동일 마운트 스펙 |
+| 카메라 | **h=0.13 m**, 전축+**0.025 m** → 후륜축까지 **0.20 m** (`perception_to_rear_axle_x_m`) | — | 동일 마운트 (시뮬 pitch 기본 10°) |
 | 최대 속도 | ESC·배터리 의존 (고속 RC) | **~1 m/s** | 브릿지 `max_linear_speed: 1.2` |
 | 질량 | 경량 RC (~1–2 kg대) | ~4.8 kg | URDF `base_mass` 4.34 kg |
 | `/control` 부호 | −1=좌 / +1=우 | — | 동일 규약 → Gazebo 좌(+)로 **부호 반전** |
@@ -33,7 +33,7 @@
 |----|------|
 | D-Racer \(L=175\) mm, \(T=120\) mm | 팀 실측 2026-07-12 (안승현) |
 | D-Racer \(\delta_{\max}=17.5°\), \(R_{\min}=0.535\) m (⌀107 cm) | 팀 실측 2026-07-12 — 교차검증 ~3.7% (아래 §4.1) |
-| D-Racer 카메라 h=0.13 m / pitch 10° | 시뮬과 동일하게 기구 맞춤 (IPM yaml 유지) |
+| D-Racer 카메라 h=0.13 m, rear→cam 0.20 m | 팀 마운트 (L=0.175 + ahead 0.025). BEV pitch는 lane_vision SSOT |
 | LIMO \(L=200\), \(T=175\), \(R_\min=0.4\) m | AgileX LIMO 사용자 매뉴얼 |
 | Gazebo \(L=0.24\), \(T=0.168\), \(\delta_\max=30^\circ\) | `vendor/limo_car/gazebo/ackermann.xacro`, `src/dracer_sim/config/control_bridge.yaml` |
 | D-Racer 액추에이터·PWM | [hardware-board.md](./hardware-board.md) §5 |
@@ -115,7 +115,7 @@ LIMO vendor URDF 기본값은 조향 revolute joint에 **`velocity="0.5"` rad/s*
 |------|------|-----|
 | 휠베이스 \(L\) | ✅ | **0.175 m** |
 | 트레드 \(T\) | ✅ (바퀴 중심 간) | **0.120 m** |
-| 카메라 높이·피치 | ✅ 시뮬과 동일 | **0.13 m / 10° down** |
+| 카메라 높이·후륜축 거리 | ✅ | **h=0.13 m**, rear→cam **0.20 m** (=L 0.175+0.025) |
 | \(\delta_{\max}\) | ✅ 타이어각 직접 | **17.5°** → `max_steer_angle_rad ≈ 0.3054` |
 | \(R_{\min}\) | ✅ 원 지름 107 cm | **0.535 m** (반지름) |
 | `steering=±1` ↔ 타이어각 | ✅ 풀락 = \(\delta_{\max}\) | ±1 ↔ ±17.5° |
