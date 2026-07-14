@@ -30,7 +30,7 @@ class ControlBridge(Node):
     self.declare_parameter('cmd_vel_topic', '/cmd_vel')
     self.declare_parameter('joystick_topic', 'joystick')
     self.declare_parameter('max_linear_speed', 1.2)
-    self.declare_parameter('max_steer_angle_rad', 0.5236)
+    self.declare_parameter('max_steer_angle_rad', 0.5574)
     self.declare_parameter('cmd_mode', CMD_MODE_ACKERMANN)
     self.declare_parameter('wheelbase_m', 0.24)
     # If inference dies without a final stop, zero cmd_vel after this gap.

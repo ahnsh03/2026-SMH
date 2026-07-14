@@ -332,6 +332,7 @@ def run_one_lap(
     lap_min_distance_m: float,
     start_radius_m: float,
     settle_sec: float,
+    viz: str = 'control',
 ) -> dict[str, Any]:
     import rclpy
     from control_msgs.msg import Control
@@ -340,13 +341,15 @@ def run_one_lap(
     from rclpy.node import Node
     from sensor_msgs.msg import CompressedImage, Image
 
+    from viz_util import apply_lane_viz
+
     run_dir = _ensure(out_dir / f'{family}_t{trial:02d}')
     csv_path = run_dir / 'drive.csv'
     events: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
 
     planner = build_planner(overrides)
-    ld.VISUALIZE = False
+    apply_lane_viz(viz)
     ld._apply_detect_tune_from_yaml()
 
     # Start at first checkpoint.
@@ -608,6 +611,11 @@ def main() -> int:
     parser.add_argument('--settle', type=float, default=1.0)
     parser.add_argument('--camera-topic', default='/camera/image/compressed')
     parser.add_argument(
+        '--viz',
+        default='control',
+        help='Perception windows: off|control|on (default control = Lane drive)',
+    )
+    parser.add_argument(
         '--stop-on-first-lap',
         action='store_true',
         help='Within a family, stop param trials after first successful lap',
@@ -630,6 +638,7 @@ def main() -> int:
         'checkpoints': OUT_CHECKPOINTS,
         'max_param_trials': args.max_param_trials,
         'max_lap_sec': args.max_lap_sec,
+        'viz': args.viz,
         'note': 'sim-auto OFF; this script owns /control',
     }
     (out_root / 'META.json').write_text(
@@ -656,6 +665,7 @@ def main() -> int:
                     lap_min_distance_m=args.lap_min_distance_m,
                     start_radius_m=args.start_radius_m,
                     settle_sec=args.settle,
+                    viz=args.viz,
                 )
             except Exception as exc:  # noqa: BLE001
                 summary = {

@@ -336,6 +336,7 @@ def run_segment(
     settle_sec: float,
     catalog: dict[str, tuple[float, float]],
     force_fsm_normal: bool,
+    viz: str = 'control',
 ) -> dict[str, Any]:
     import rclpy
     from control_msgs.msg import Control
@@ -344,11 +345,13 @@ def run_segment(
     from rclpy.node import Node
     from sensor_msgs.msg import CompressedImage, Image
 
+    from viz_util import apply_lane_viz
+
     _teleport(segment)
     time.sleep(settle_sec)
 
     planner = build_planner(overrides)
-    ld.VISUALIZE = False
+    apply_lane_viz(viz)
     ld._apply_detect_tune_from_yaml()
 
     rclpy.init()
@@ -527,6 +530,7 @@ def run_recovery_lap(
     fail_cte_m: float,
     lap_min_distance_m: float,
     settle_sec: float,
+    viz: str = 'control',
 ) -> dict[str, Any]:
     """Short OUT ring lap with teleport recovery (same contract as out_lap_bench)."""
     import rclpy
@@ -536,13 +540,15 @@ def run_recovery_lap(
     from rclpy.node import Node
     from sensor_msgs.msg import CompressedImage, Image
 
+    from viz_util import apply_lane_viz
+
     run_dir = _ensure(out_dir / 'laps' / policy)
     csv_path = run_dir / 'drive.csv'
     rows: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
 
     planner = build_planner(overrides)
-    ld.VISUALIZE = False
+    apply_lane_viz(viz)
     ld._apply_detect_tune_from_yaml()
 
     active_idx = 0
@@ -810,6 +816,11 @@ def main() -> int:
     parser.add_argument('--lost-hold-sec', type=float, default=1.2)
     parser.add_argument('--max-retries', type=int, default=2)
     parser.add_argument('--lap-min-distance-m', type=float, default=10.0)
+    parser.add_argument(
+        '--viz',
+        default='control',
+        help='Perception windows: off|control|on (default control = Lane drive)',
+    )
     parser.add_argument('--out', type=Path, default=None)
     args = parser.parse_args()
 
@@ -830,6 +841,7 @@ def main() -> int:
         'repeat': args.repeat,
         'fail_cte_m': args.fail_cte_m,
         'force_fsm_normal': args.force_fsm_normal,
+        'viz': args.viz,
         'scoring': {
             'primary': [
                 'distance_m',
@@ -871,6 +883,7 @@ def main() -> int:
                         settle_sec=args.settle,
                         catalog=catalog,
                         force_fsm_normal=args.force_fsm_normal,
+                        viz=args.viz,
                     )
                     summary['base_policy'] = policy
                     summary['rep'] = rep
@@ -940,6 +953,7 @@ def main() -> int:
                 fail_cte_m=args.fail_cte_m,
                 lap_min_distance_m=args.lap_min_distance_m,
                 settle_sec=args.settle,
+                viz=args.viz,
             )
             lap_results.append(lap)
         lap_results.sort(key=lambda r: float(r['score']), reverse=True)

@@ -14,7 +14,8 @@ route:
   out_fork_require_sign: true
   out_fork_sign_hold_sec: 3.0
   # Keep false: forced_turn:= only chooses L/R rank, does not arm forks all lap.
-  # Set true only for sign-less fork unit tests.
+  # Set true only for sign-less fork unit tests / rail review.
+  # Production: camera signs (or require_sign=false) arm forks — keeps NORMAL white-only stable.
   out_fork_forced_turn_arms: false
   # Keep the last selected branch through short fork-detection flicker.
   fork_path_hold_frames: 3
@@ -25,67 +26,69 @@ route:
   # IN  — default True: when yellow is available prefer it; else white
   #       (approach → roundabout yellow → merge white). Not a yellow ladder.
 pure_pursuit:
-  # Adaptive LD: long on straights, shorter on curves for earlier turn-in.
+  # Trusted geometry (R_min SSOT) — soft gains for low-speed lap follow.
   lookahead_m: 0.70
-  curve_lookahead_m: 0.38
+  curve_lookahead_m: 0.50
   curvature_full_scale: 0.8
   lookahead_shrink_rate_m: 0.20
   lookahead_grow_rate_m: 0.08
   curvature_near_m: 0.30
   curvature_mid_m: 0.60
   curvature_far_m: 0.90
-  # Camera blind zone: locally fit the nearest path and extend it back to the
-  # front axle. This keeps short curve/roundabout LD geometrically meaningful.
   near_path_fit_span_m: 0.30
   near_path_extrapolation_max_m: 0.35
   wheelbase_m: 0.24
-  max_steer_angle_rad: 0.5236
+  # Team R_min=0.385 m on LIMO Gazebo L=0.24 → δ=atan(L/R)≈31.94°.
+  max_steer_angle_rad: 0.5574
   max_steering_command: 1.0
-  # Time-based limits: behavior no longer changes with camera FPS.
-  # Faster reversal reduces entry/exit lag while remaining time-based.
   steering_rate_limit_per_sec: 12.0
   path_lost_steering_return_rate_per_sec: 4.0
   nominal_control_dt_sec: 0.10
-  # PP handles curve feed-forward; this bounded Stanley-shaped term restores
-  # the front axle toward the closest centerline segment.
   cte_gain: 0.10
   cte_softening_m: 0.20
   cte_deadband_m: 0.02
   max_cte_steering: 0.22
-  # Relative path heading in the same rear-axle frame; no IMU is required.
   heading_gain: 0.30
   heading_preview_m: 0.45
   heading_sample_span_m: 0.15
   max_heading_steering: 0.25
+  steer_command_deadband: 0.02
 
 speed:
-  # Trusted out-lap 20260714_120800: mask_p t1 lap_ok @ cruise≈0.33 (steer joint 4 rad/s).
-  cruise_throttle: 0.33
+  # Low-speed recover pack (mask_hard_wide lap winner baseline, slower cruise).
+  cruise_throttle: 0.28
   curve_throttle: 0.18
-  curve_steering_threshold: 0.50  # legacy; curvature ratio is authoritative
+  curve_steering_threshold: 0.35
   default_throttle: 0.0
+  error_speed_cte_full_m: 0.22
+  error_speed_steer_full: 0.65
+  error_speed_min_scale: 0.75
 
-# NORMAL / roundabout-circle tracker. Fork / exit stay on Pure Pursuit.
-# normal: pp | mask_p  (mask_p ≈ limo_sim_code_v2 BEV road-COM + P + EMA)
+# NORMAL SSOT: mask_p + white hard corridor (mask_policy 20260714_132840 winner).
+# Fork / exit: color branch Pure Pursuit after turn sign.
 tracker:
   normal: mask_p
 
 mask_pursuit:
-  # Match limo_sim_code_v2: steer_k=2.0, alpha=0.4, wide BEV COM (anticipation).
+  # mask_hard_wide (trusted OUT lap) at reduced cruise for board freeze.
   steer_k: 2.0
   steer_alpha: 0.40
   near_band_ratio: 0.85
+  far_band_ratio: 0.90
+  far_blend: 0.0
+  use_path_correction: false
+  error_deadband: 0.08
+  blend_error_lo: 0.12
+  blend_error_hi: 0.50
+  blend_curvature_lo: 0.35
+  blend_curvature_hi: 1.00
+  hybrid_steer_alpha: 0.28
   min_area_px: 100.0
-  curve_steer_threshold: 0.50
+  curve_steer_threshold: 0.35
   curve_speed_scale: 0.80
-  # Course-color guard (OUT=white / IN=yellow priority via color_path).
-  # off | hard (AND corridor) | soft (distance-weighted COM).
-  # Bench 20260714_132840: hard+wide(0.38)+fork_force won full lap;
-  # fork_force alone won stress segments. Keep both for production default.
   corridor_mode: hard
   corridor_half_width_m: 0.38
   path_weight_sigma_m: 0.20
-  # Fork/branch≥2 → PP on color path (do not COM-average both roads).
   fork_force_pp: true
   require_color_path: true
 

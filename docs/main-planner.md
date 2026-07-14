@@ -45,20 +45,20 @@ Pure Pursuit / mask_p + mission state → ControlCommand → /control
 
 | `tracker.normal` | 의미 |
 |------------------|------|
-| `pp` | 색 센터라인 Pure Pursuit (기본 대조용) |
-| `mask_p` | Metric IPM `drivable_area` COM + P + EMA + rate (limo_sim 스타일) |
+| `mask_p` | **보드 SSOT.** hard white corridor COM (mask_hard_wide, cruise≈0.28) |
+| `pp` / `hybrid` | 실험용 |
 
-**`mask_p` 가드 (OUT/IN 끌어당김 방지)** — `config/main_planner.yaml` `mask_pursuit`:
+**OUT NORMAL:** 흰 hard corridor `mask_p` + 표지 후 fork는 **branch PP**.  
+저속 동결: cruise **0.28** / curve **0.18** (`mask_policy` 랩 승자 + 감속).
 
-| 키 | 역할 |
-|----|------|
-| `corridor_mode` | `off` / `hard`(색 센터라인 코리도 AND) / `soft`(거리 가중 COM) |
-| `corridor_half_width_m` | hard 코리도 반폭 (랩 승자 ~0.38) |
-| `fork_force_pp` | `fork_active`·branch≥2면 COM 끄고 색 경로 PP |
-| `require_color_path` | hard/soft일 때 색 경로 없으면 mask 실패 → PP fallback |
+갈림 L/R 확인:
 
-벤치: `scripts/drive_test/mask_policy_bench.py`, `course_mode_bench.py`  
-([drive_test/README.md](../scripts/drive_test/README.md)).
+```bash
+PYTHONUNBUFFERED=1 python3 scripts/drive_test/fork_spawn_unit.py \
+  --mode live --scenario all --duration 8 --viz control --drive
+```
+
+창: `Lane drive`, `Fork select`. 로그: `data/captures/fork_drive_logs/<stamp>/`.
 
 ## 코스 선택과 설정
 

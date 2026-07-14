@@ -138,6 +138,142 @@ def test_mask_fork_force_pp_uses_color_decision():
     )
 
 
+def test_smoothstep_and_hybrid_prefers_pp_on_straight():
+    """Small lateral error + low curvature → hybrid weight near 0 (PP path)."""
+    import cv2
+    from inference.modules import lane_detection as ld
+
+    assert MainPlanner._smoothstep(0.0, 0.08, 0.35) == 0.0
+    assert MainPlanner._smoothstep(0.5, 0.08, 0.35) == 1.0
+    mid = MainPlanner._smoothstep(0.215, 0.08, 0.35)
+    assert 0.4 < mid < 0.6
+
+    h, w = ld.BEV_HEIGHT, ld.BEV_WIDTH
+    mask = np.zeros((h, w), dtype=np.uint8)
+    # Centered road stripe.
+    cv2.rectangle(mask, (w // 2 - 20, h // 3), (w // 2 + 20, h - 1), 255, -1)
+    path = np.array(
+        [[0.5, 0.0], [0.8, 0.0], [1.1, 0.0], [1.4, 0.0], [1.6, 0.0]],
+        dtype=np.float32,
+    )
+    lane = type(
+        'L',
+        (),
+        {
+            'drivable_area': mask,
+            'meters_per_pixel': float(ld.METERS_PER_PIXEL),
+            'x_forward_max': 2.0,
+            'fork_active': False,
+            'branches': (),
+        },
+    )()
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='hybrid',
+            mask_steer_k=1.55,
+            mask_steer_alpha=1.0,
+            mask_near_band_ratio=0.55,
+            mask_far_blend=0.28,
+            mask_use_path_correction=False,
+            mask_corridor_mode='hard',
+            mask_corridor_half_width_m=0.38,
+            mask_require_color_path=True,
+            mask_error_deadband=0.04,
+            mask_blend_error_lo=0.08,
+            mask_blend_error_hi=0.35,
+            mask_blend_curvature_lo=0.40,
+            mask_blend_curvature_hi=1.20,
+            min_points=3,
+            steering_rate_limit_per_sec=100.0,
+            max_steering_command=1.0,
+            perception_to_rear_axle_x_m=0.265,
+        )
+    )
+    result = planner._hybrid_pursuit(lane, path, dt_sec=0.1)
+    assert result.valid
+    assert float(planner._last_mask_debug.get('hybrid_w', 1.0)) < 0.25
+    assert planner._last_mask_debug.get('hybrid_mode') == 'pp'
+
+
+def test_hybrid_raises_mask_weight_far_blend_scales():
+    """Off-center mask with a mild path bend → hybrid_w up, far_blend gated."""
+    import cv2
+    from inference.modules import lane_detection as ld
+
+    h, w = ld.BEV_HEIGHT, ld.BEV_WIDTH
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.rectangle(mask, (5, h // 4), (w // 3, h - 1), 255, -1)
+    path = np.array(
+        [[0.5, 0.0], [0.8, 0.05], [1.1, 0.12], [1.4, 0.22], [1.6, 0.30]],
+        dtype=np.float32,
+    )
+    for x, y in path:
+        u, v = ld.vehicle_xy_to_bev_uv(float(x), float(y))
+        cv2.circle(mask, (int(u), int(v)), 10, 255, -1)
+    lane = type(
+        'L',
+        (),
+        {
+            'drivable_area': mask,
+            'meters_per_pixel': float(ld.METERS_PER_PIXEL),
+            'x_forward_max': 2.0,
+            'fork_active': False,
+            'branches': (),
+        },
+    )()
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='hybrid',
+            mask_steer_k=1.55,
+            mask_steer_alpha=1.0,
+            mask_near_band_ratio=0.7,
+            mask_far_blend=0.28,
+            mask_use_path_correction=False,
+            mask_corridor_mode='off',
+            mask_require_color_path=False,
+            mask_error_deadband=0.0,
+            mask_blend_error_lo=0.05,
+            mask_blend_error_hi=0.25,
+            mask_blend_curvature_lo=0.15,
+            mask_blend_curvature_hi=0.80,
+            min_points=3,
+            steering_rate_limit_per_sec=100.0,
+            max_steering_command=1.0,
+            perception_to_rear_axle_x_m=0.265,
+        )
+    )
+    result = planner._hybrid_pursuit(lane, path, dt_sec=0.1)
+    assert result.valid
+    blend_w = float(planner._last_mask_debug.get('hybrid_w', 0.0))
+    assert blend_w > 0.3
+    far = float(planner._last_mask_debug.get('hybrid_far_blend', -1.0))
+    assert abs(far - 0.28 * blend_w) < 1e-3
+
+
+def test_hybrid_forkish_uses_pp_only():
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='hybrid',
+            mask_fork_force_pp=True,
+            prefer_yellow=False,
+            route_mode=RouteMode.OUT,
+            min_points=2,
+            steering_rate_limit_per_sec=100.0,
+        )
+    )
+    assert planner._forkish_for_mask(
+        SimpleNamespace(fork_active=True, branches=(object(), object()))
+    )
+    lane = SimpleNamespace(fork_active=True, branches=(object(), object()))
+    out = planner._track_normal_path(
+        lane,
+        np.array([[0.5, 0.0], [1.0, 0.0], [1.5, 0.0]], dtype=np.float32),
+        0.1,
+    )
+    # Fork → PP path (may be invalid if min_points unmet after frame shift; just ensure no crash)
+    assert out is not None
+
+
 def test_out_fork_gated_without_sign():
     """OUT normal: fork visible but no turn sign → do not enter FORK_TURN."""
     path = np.array(

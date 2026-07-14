@@ -319,24 +319,11 @@ def run_one_lap(
     rows: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
 
+    from viz_util import apply_lane_viz
+
     planner = build_planner(mode, overrides)
     # Perception windows: off | control (Lane drive) | on/all (+ HSV masks).
-    viz = str(overrides.get('_viz_mode') or 'off').strip().lower()
-    if viz in ('on', 'all', 'debug', '1', 'true'):
-        ld.VISUALIZE_MODE = ld.VISUALIZE_ON
-        ld.VISUALIZE = True
-    elif viz in ('control', 'ctrl', 'drive', 'lane'):
-        ld.VISUALIZE_MODE = ld.VISUALIZE_CONTROL
-        ld.VISUALIZE = True
-    else:
-        ld.VISUALIZE_MODE = ld.VISUALIZE_OFF
-        ld.VISUALIZE = False
-    try:
-        cv2.destroyWindow('lane_control')
-        cv2.destroyWindow('road_branches')
-        cv2.destroyWindow('drivable_area')
-    except Exception:
-        pass
+    apply_lane_viz(str(overrides.get('_viz_mode') or 'control'))
     ld._apply_detect_tune_from_yaml()
 
     farthest_idx = 0

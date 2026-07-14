@@ -208,6 +208,7 @@ def run_live(
     camera_topic: str,
     fail_cte_m: float,
     settle_sec: float,
+    viz: str = 'control',
 ) -> dict[str, Any]:
     import rclpy
     from cv_bridge import CvBridge
@@ -216,11 +217,13 @@ def run_live(
     from rclpy.node import Node
     from sensor_msgs.msg import CompressedImage, Image
 
+    from viz_util import apply_lane_viz
+
     _teleport(segment)
     time.sleep(settle_sec)
 
     planner = build_planner(variant, route)
-    ld.VISUALIZE = False
+    apply_lane_viz(viz)
     ld._apply_detect_tune_from_yaml()
 
     rclpy.init()
@@ -361,6 +364,11 @@ def main() -> int:
     parser.add_argument('--settle', type=float, default=0.9)
     parser.add_argument('--fail-cte-m', type=float, default=0.22)
     parser.add_argument('--camera-topic', default='/camera/image/compressed')
+    parser.add_argument(
+        '--viz',
+        default='control',
+        help='Perception windows: off|control|on (default control = Lane drive)',
+    )
     args = parser.parse_args()
 
     segments = [s.strip() for s in args.segments.split(',') if s.strip()]
@@ -382,6 +390,7 @@ def main() -> int:
         'route': args.route,
         'duration_sec': args.duration,
         'repeat': args.repeat,
+        'viz': args.viz,
         'fail_cte_m': args.fail_cte_m,
         'note': 'inference_node / sim-auto must be OFF; this script publishes /control',
     }
@@ -404,6 +413,7 @@ def main() -> int:
                         camera_topic=args.camera_topic,
                         fail_cte_m=args.fail_cte_m,
                         settle_sec=args.settle,
+                        viz=args.viz,
                     )
                 except Exception as exc:  # noqa: BLE001 — log and continue sweep
                     summary = {
