@@ -140,7 +140,7 @@ Launch: `sim_bringup.launch.py` (또는 `sim_auto_driving`이 이를 include).
 | `sim_control_bridge` | 필수 | `/control` → `/cmd_vel` (실차 `control_node` 대용) |
 | `sim_camera_republish` | 필수 | 시뮬 카메라 → D-Racer와 같은 `/camera/image/compressed` |
 | `sim_battery_stub` | 권장 | 배터리 토픽 스텁 |
-| `sim_camera_preview` | 선택 | OpenCV/Qt 프리뷰 창 (`use_camera_view:=false`로 끔) |
+| `sim_camera_preview` | 선택 | OpenCV 창 — bringup **`view:=none` 기본 OFF** (`view:=cam`으로 켬) |
 | `monitor_node` | **불필요(기본 OFF)** | 아래 §2.5 |
 
 실차 하드웨어 노드(`camera_node`, `control_node`, `battery_node`)를  
@@ -234,6 +234,9 @@ y = ((width - 1) / 2 - col) * meters_per_pixel
 현재 임시 planner(`lane_planner`, 레거시)는 **흰 L/R polyline**만 사용했다.  
 `MainPlanner`는 `fork_active` / `branches` / centerline / drivable를 **이미 소비**한다 — 필드 이름·단위를 바꾸지 말 것.
 
+**코스 ↔ 색:** Out → `white_centerline` / 흰 fork · In → `yellow_centerline` / 노란 fork.  
+SSOT: [lane-occlusion-fork-strategy.md §0](./lane-occlusion-fork-strategy.md).
+
 ---
 
 ## 5. Launch · 실행 방법
@@ -319,8 +322,14 @@ LANE_VISUALIZE=on ros2 launch dracer_sim sim_auto_driving.launch.py
 | 값 | 의미 |
 |----|------|
 | `off` / 미설정 | 창 없음 (기본) |
-| `control` | 경계·분기 등 주행 관련 창 (`white_boundaries`, `yellow_boundaries`, `road_branches`) |
-| `on` / `1` | 전체 창 |
+| `control` | 주행 확인 **1창** `Lane drive` (흰/노란 코스 + road; 갈림은 fork 활성 때만 우측 오버레이) |
+| `on` / `all` | `Lane drive` + `HSV masks` 2창 (구 개별 HSV/보간/`road_branches` 창은 제거) |
+
+**용어:** 면적 코리도 중심선 = `build_road_branches_cells` → `RoadBranch`(폴백).  
+갈림 SSOT = 마킹 `ForkLanePair` → `RoadBranch`. 상시 “lane branch” 패널은 두지 않는다.
+
+시뮬 권장: bringup `view:=both`(카메라+BEV) 또는 fork만 `view:=none` + sim-auto `viz:=lane`.  
+`LANE_VISUALIZE=control|on`은 `viz:=debug|all`과 동급 (inference 자체 창).
 
 보드/SSH에서는 **켜지 마세요** (OpenCV 창·성능). 순차 검증은 **§6.2**.
 
@@ -363,6 +372,10 @@ camera frame
 **담당:** **안승현(임시)** — 갈림길·곡선·한쪽선 L/R. **조향·MainPlanner FSM은 건드리지 않음.**  
 장원태 복귀 후 공동 소유·핸드오프. Metric IPM 계약·msg 필드 삭제/개명은 팀장과 합의.
 
+**개발 전략 SSOT (소실·갈림·중심선):**  
+[lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md) — **4선→2+2 매칭→갈래 중앙**이 본게임; 점선 정밀 연결은 커터/힌트.  
+핵심: 단일 차로 2선은 유지하고, 분기 시 경계 4가닥을 잡아 `RoadBranch[]`로 넘긴다. 선택은 MainPlanner.
+
 ### 6.2 모드 튜너 순차 검증 (`tune_lane_detect.py`)
 
 구현·버그픽스 **전에** 모드별로 관측 로그를 남긴다. DISPLAY가 있는 PC에서, **sim-bringup만** 켠 뒤 튜너 실행.
@@ -373,8 +386,8 @@ camera frame
 | 2 | `yellow` (`2`) | 노란 경계·점선 연결이 합리적인가 |
 | 3 | `dash` (`3`) | 분기/합류 점선(노랑·흰)이 분리·연결되는가 |
 | 4 | `dash_left` / `dash_right` (`4`/`5`) | 선택한 갈래 쪽 점선만 남고 반대 고어 선은 빠지는가 |
-| 5 | `fork` (`6`) | 갈림길에서 branch 2개가 안정적인가 |
-| 6 | `fork_left` / `fork_right` (`7`/`8`) | 좌·우 갈래를 따로 구분할 수 있는가 |
+| 5 | `fork` (`6`) | **Out 갈림** `src=road_split_marks`/`white_*` · **In 탈출** `src=yellow_alt_marks` (pairs=2, rank 0/1) |
+| 6 | `fork_left` / `fork_right` (`7`/`8`) | 한쪽 쌍만 강조했을 때 의도한 갈래인가 |
 | 7 | `red` (`9`) | 동적 장애물 빨간 차로 커버리지가 뜨는가 |
 | 8 | `crossing` (`0`) | 가로 정지선/진입선이 경계를 오염시키지 않는가 |
 
@@ -385,6 +398,9 @@ python3 scripts/vision_tune/tune_lane_detect.py --mode white
 ```
 
 트랙바는 모드별 HSV·`detect_tune` 스칼라. `s` → `config/lane_vision.yaml` (`hsv:` + `detect_tune:`).
+
+**단계:** Phase A(`2`/`3` 점선 연결 → 4가닥) 완료 후에만 Phase C(`6`–`8` 갈래 분리).  
+**피드백 캡처:** `c` / `SPACE` → `data/captures/lane_tune_logs/<stamp>_<mode>/` (+ `LATEST.txt`).
 
 버그픽스는 `feature/seunghyun-lane-fork-audit` 등에서 모드 1→6 검증 후 진행.
 

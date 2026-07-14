@@ -23,6 +23,7 @@
 | [main-planner.md](./main-planner.md) | MainPlanner·PP·In/Out·디버깅 ★ |
 | [roles.md](./roles.md) | 역할 분담 (인지 임시 합류 포함) |
 | [lane-drive-strategy.md](./lane-drive-strategy.md) | Metric IPM·인지 설계 배경 (제어 SSOT는 main-planner) |
+| [lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md) | **소실·Out 갈림·In 탈출** 인지 전략 + **용어 SSOT** (승현) ★ |
 | [../scripts/vision_tune/README.md](../scripts/vision_tune/README.md) | **`tune_bev`** · **`tune_hsv`** · **`tune_lane_control`** · 캡처 |
 | [../config/lane_vision.yaml](../config/lane_vision.yaml) | `metric_ipm:` 잠정 파라미터 (`y_half=0.77`) |
 | [../config/lane_control.yaml](../config/lane_control.yaml) | planner P/EMA/rate/look-ahead (시뮬·실차 공용) |

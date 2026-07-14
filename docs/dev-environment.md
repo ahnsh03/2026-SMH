@@ -174,17 +174,54 @@ docker exec -it 2026-smh-sim bash
 
 | 터미널 | 할 일 |
 |--------|--------|
-| **1** | `./scripts/dev_container.sh sim-bringup` — Gazebo·브리지·카메라 (Ctrl+C로 launch만 중지) |
-| **2** | `docker exec -it 2026-smh-sim bash` — `modules/` 수정 후 inference 빌드·실행 |
+| **1** | `./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork view:=none` — Gazebo만 (카메라/BEV 창 OFF) |
+| **2** | `./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=left viz:=lane` — 갈림 프리뷰 1창 |
 | 호스트 | `./scripts/dev_container.sh verify-sim` — 토픽 검증 (bringup 실행 중) |
+
+**시각화 옵션**
+
+| 어디에 | 인자 | 창 |
+|--------|------|-----|
+| bringup | `view:=none` (기본) | 없음 |
+| bringup | `view:=cam` / `bev` / `both` | 카메라 / BEV / 둘 다 |
+| sim-auto | `viz:=lane` (기본) | `Lane / Fork Perception`만 |
+| sim-auto | `viz:=off` | 없음 |
+| sim-auto | `viz:=debug` | lane + `lane_control` 통합 1창 |
+| sim-auto | `viz:=all` | lane + inference 디버그 전부 (비권장) |
+
+`forced_turn:=left|right` 이면 카메라 표지 인식은 **무시**됩니다 (로그에 `sign_ignored(forced=…)`).
+
+**구간별 테스트 (spawn · viz · forced_turn · 합격 기준):** [fork-test-pipeline.md](./fork-test-pipeline.md)
+
+**코드 고친 뒤 뭘 다시 하나**
+
+| 바뀐 것 | 필요 작업 |
+|---------|-----------|
+| `src/inference/**/*.py` (symlink-install 후) | `sim-auto`만 **끄고 다시** (보통 별도 source 불필요). 새 파일/`setup.py` entry면 `build-inference` 1회 |
+| `*.launch.py` / `control_bridge.py` (bringup 쪽) | **`colcon` 1회** + **T1 bringup 재시작** (떠 있는 프로세스는 옛 코드) |
+| `forced_turn` / 종료 정지 | bringup을 예전에 켠 채면 정지 워치독이 없음 → T1 Ctrl+C 후 `sim-bringup` 다시 |
+
+```bash
+./scripts/dev_container.sh build-sim   # launch / bridge 변경 시
+# T1 재시작 (view:=none → 카메라/BEV 창 안 뜸)
+./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork view:=none
+# T2 — Out 갈림, 표지 무시, 프리뷰 1창
+./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=left viz:=lane
+./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=right viz:=lane
+# In
+./scripts/dev_container.sh sim-bringup spawn_pose:=in_roundabout_exit view:=none
+./scripts/dev_container.sh sim-auto route_mode:=in forced_turn:=left viz:=lane   # 탈출
+./scripts/dev_container.sh sim-auto route_mode:=in forced_turn:=right viz:=lane  # 원 유지
+# 시작 로그에 `*** FORCED_TURN=LEFT/RIGHT active ***` 이 보여야 함
+```
 
 ```bash
 ./scripts/dev_container.sh sim-up          # 컨테이너 없을 때만
 ./scripts/dev_container.sh sim-bringup     # 터미널1
 
-docker exec -it 2026-smh-sim bash          # 터미널2
+docker exec -it 2026-smh-sim bash          # 터미널2 (직접 디버그 시)
 source /opt/ros/humble/setup.bash && source install/setup.bash
-ros2 run inference inference_node --ros-args -p use_sim_time:=true
+ros2 run inference inference_node --ros-args -p use_sim_time:=true -p route_mode:=in -p forced_turn:=left
 
 ./scripts/dev_container.sh sim-down        # 작업 끝
 ```
@@ -200,9 +237,10 @@ ros2 run inference inference_node --ros-args -p use_sim_time:=true
 
 **시뮬 기본 설정**
 
-- 카메라: **320×180** JPEG (`config/vehicle_config.yaml`)
-- 시각화: **OpenCV 카메라** (`sim_camera_preview`, 640×360) + **Metric IPM BEV** (`sim_bev_preview`, `lane_vision.yaml`)
-- 웹 모니터: **OFF** (`use_monitor:=true`로 선택 가능)
+- 카메라 토픽: **320×180** JPEG (`config/vehicle_config.yaml`) — bringup이 항상 republish
+- OpenCV 창: bringup 기본 **`view:=none`** (카메라/BEV OFF). 켤 때 `view:=cam|bev|both`
+- 자율 인지 창: sim-auto 기본 **`viz:=lane`** (`Lane / Fork Perception` 1개)
+- 웹 모니터: **OFF** (`use_monitor:=true`로 선택)
 
 상세 트러블슈팅: [simulation.md](./simulation.md)
 

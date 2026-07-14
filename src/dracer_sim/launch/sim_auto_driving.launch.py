@@ -1,41 +1,32 @@
+"""Full sim auto-driving: Gazebo bringup + auto stack (one command).
+
+For experiments that restart driving often without killing Gazebo, prefer::
+
+  # T1 — leave up
+  ros2 launch dracer_sim sim_bringup.launch.py spawn_pose:=out_fork
+  # T2 — toggle
+  ros2 launch dracer_sim sim_auto_stack.launch.py route_mode:=out
+"""
+
 import os
-from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
-
-
-def get_vehicle_config_path() -> str:
-  for base_path in Path(__file__).resolve().parents:
-    candidate = base_path / 'src' / 'config' / 'vehicle_config.yaml'
-    if candidate.exists():
-      return str(candidate)
-  return '/home/topst/2026-SMH/src/config/vehicle_config.yaml'
-
-
-def get_planner_config_path() -> str:
-  for base_path in Path(__file__).resolve().parents:
-    candidate = base_path / 'config' / 'main_planner.yaml'
-    if candidate.exists():
-      return str(candidate)
-  return '/home/topst/2026-SMH/config/main_planner.yaml'
 
 
 def generate_launch_description():
   pkg_share = get_package_share_directory('dracer_sim')
-  vehicle_config_path = get_vehicle_config_path()
-  planner_config_path = get_planner_config_path()
-  route_mode = LaunchConfiguration('route_mode')
   use_sim_time = LaunchConfiguration('use_sim_time')
+  route_mode = LaunchConfiguration('route_mode')
   spawn_pose = LaunchConfiguration('spawn_pose')
   spawn_x = LaunchConfiguration('spawn_x')
   spawn_y = LaunchConfiguration('spawn_y')
   spawn_z = LaunchConfiguration('spawn_z')
   spawn_yaw = LaunchConfiguration('spawn_yaw')
+  use_lane_view = LaunchConfiguration('use_lane_view')
 
   return LaunchDescription([
     DeclareLaunchArgument('use_sim_time', default_value='true'),
@@ -51,6 +42,17 @@ def generate_launch_description():
     DeclareLaunchArgument('spawn_y', default_value='-3.92'),
     DeclareLaunchArgument('spawn_z', default_value='0.15'),
     DeclareLaunchArgument('spawn_yaw', default_value='-3.14'),
+    DeclareLaunchArgument(
+      'use_lane_view',
+      default_value='true',
+      description='Open live lane/fork perception overlay',
+    ),
+    DeclareLaunchArgument(
+      'forced_turn',
+      default_value='',
+      choices=['', 'left', 'right'],
+      description='IN: left=exit, right=stay; OUT: left/right fork rank',
+    ),
 
     IncludeLaunchDescription(
       PythonLaunchDescriptionSource(
@@ -66,43 +68,15 @@ def generate_launch_description():
         'spawn_yaw': spawn_yaw,
       }.items(),
     ),
-
-    # Same stack as auto_driving.launch.py but without hardware camera/control/battery.
-    Node(
-      package='joystick',
-      executable='joystick_node',
-      name='gamepad_publisher',
-      output='screen',
-      parameters=[
-        {
-          'calibration_mode': False,
-          'vehicle_config_file': vehicle_config_path,
-          'use_sim_time': use_sim_time,
-        },
-      ],
-    ),
-    Node(
-      package='inference',
-      executable='inference_node',
-      name='inference_node',
-      output='screen',
-      parameters=[
-        {
-          'vehicle_config_file': vehicle_config_path,
-          'planner_config_file': planner_config_path,
-          'route_mode': route_mode,
-          # Gazebo LIMO. profiles.sim is empty: the base sections of
-          # main_planner.yaml are the sim values, so this is a no-op today. It
-          # is set explicitly so sim never silently inherits a real-car override.
-          'planner_profile': 'sim',
-          'aruco_debug_topic': '/debug/aruco',
-          'planner_debug_topic': '/debug/planner',
-          'aruco_debug_log': True,
-          # Gazebo steering=0 is mechanically centred; ignore real-car trim.
-          'use_vehicle_steer_trim': False,
-          'steer_trim': 0.0,
-          'use_sim_time': use_sim_time,
-        },
-      ],
+    IncludeLaunchDescription(
+      PythonLaunchDescriptionSource(
+        os.path.join(pkg_share, 'launch', 'sim_auto_stack.launch.py')
+      ),
+      launch_arguments={
+        'use_sim_time': use_sim_time,
+        'route_mode': route_mode,
+        'use_lane_view': use_lane_view,
+        'forced_turn': LaunchConfiguration('forced_turn'),
+      }.items(),
     ),
   ])

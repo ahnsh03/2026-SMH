@@ -66,6 +66,10 @@ class InferenceNode(Node):
             'planner_config_file', str(pipeline.default_planner_config_path())
         )
         self.declare_parameter('route_mode', '')
+        self.declare_parameter(
+            'forced_turn',
+            '',
+        )  # left|right|'' — sim test override (IN: left=exit, right=stay)
         # 'sim' | 'real' | '' — selects the profiles.<name> block in
         # main_planner.yaml. Empty keeps the sim-tuned base values.
         self.declare_parameter('planner_profile', '')
@@ -84,6 +88,7 @@ class InferenceNode(Node):
         planner_debug_topic = str(self.get_parameter('planner_debug_topic').value)
         planner_config_file = str(self.get_parameter('planner_config_file').value)
         route_mode = str(self.get_parameter('route_mode').value).strip() or None
+        forced_turn_raw = str(self.get_parameter('forced_turn').value).strip().lower()
         planner_profile = (
             str(self.get_parameter('planner_profile').value).strip() or None
         )
@@ -118,6 +123,22 @@ class InferenceNode(Node):
         self._last_planner_log_key: tuple | None = None
         self._last_planner_debug_publish_sec: float | None = None
         self.planner = MainPlanner(planner_config, steer_trim=self.steer_trim)
+        if forced_turn_raw in ('left', 'right'):
+            from inference.types import TurnSign
+
+            forced = (
+                TurnSign.LEFT if forced_turn_raw == 'left' else TurnSign.RIGHT
+            )
+            self.planner.apply_forced_turn(forced)
+            self.get_logger().info(
+                f'forced_turn={forced.value} '
+                f'(IN: left=roundabout exit, right=stay circulating)'
+            )
+        elif forced_turn_raw not in ('', 'none', 'auto'):
+            self.get_logger().warning(
+                f'Ignoring unknown forced_turn={forced_turn_raw!r}; '
+                f'use left|right|empty'
+            )
 
         self.create_subscription(
             CompressedImage,
@@ -135,6 +156,7 @@ class InferenceNode(Node):
             f'inference_node started: '
             f'image_topic={image_topic}, lane_topic={lane_topic}, '
             f'control_topic={control_topic}, route={planner_config.route_mode.value}, '
+            f'forced_turn={forced_turn_raw or "-"}, '
             f'planner_config={planner_config_file}'
         )
         # Which plant are we driving? Getting this wrong is silent and costly,
@@ -147,6 +169,31 @@ class InferenceNode(Node):
             f'watchdog={planner_config.command_watchdog_sec:.2f}s, '
             f'max_step_dt={planner_config.max_step_dt_sec:.2f}s'
         )
+        if forced_turn_raw in ('left', 'right'):
+            # One more loud line so experimental runs are easy to confirm.
+            self.get_logger().warn(
+                f'*** FORCED_TURN={forced_turn_raw.upper()} active '
+                f'(IN: LEFT=exit / RIGHT=stay circle) ***'
+            )
+
+    def publish_stop(self, *, bursts: int = 5) -> None:
+        """Publish neutral /control so Gazebo does not keep the last throttle."""
+        stop = pipeline.ControlCommand(steering=0.0, throttle=0.0)
+        self.latest_command = stop
+        self.planner.neutralize_steering()
+        for _ in range(max(1, int(bursts))):
+            self._publish_control_command(stop)
+
+    def destroy_node(self) -> None:
+        try:
+            self.publish_stop()
+            self.get_logger().info('Published stop /control on shutdown')
+        except Exception as exc:  # noqa: BLE001 — best-effort stop
+            try:
+                self.get_logger().warning(f'stop publish failed: {exc}')
+            except Exception:  # noqa: BLE001
+                pass
+        super().destroy_node()
 
     def image_callback(self, msg: CompressedImage):
         raw = np.frombuffer(msg.data, dtype=np.uint8)
@@ -228,14 +275,29 @@ class InferenceNode(Node):
         msg.data = (
             f"sign_seen={debug['turn_sign']} "
             f"candidate={debug['sign_candidate']}/{debug['sign_candidate_frames']} "
-            f"latched={debug['desired_turn']} locked={debug['fork_locked_turn']} | "
+            f"latched={debug['desired_turn']} locked={debug['fork_locked_turn']} "
+            f"forced={debug.get('forced_turn', 'unknown')} | "
             f"state={debug['state']} fork={int(debug['fork_active'])}/"
-            f"{debug['branch_count']} event={int(debug['branch_event'])} "
+            f"{debug['branch_count']} fork_on={int(bool(debug.get('fork_perception', True)))} "
+            f"event={int(debug['branch_event'])} "
             f"events={debug['branch_events']} | "
             f"choice={debug['branch_selection_reason']} rank={selected_rank_text} "
             f"path={debug['path_source']} decision={debug['decision']} | "
             f"steer={debug['steering']:+.3f} throttle={debug['throttle']:+.3f}"
         )
+        if str(debug.get('forced_turn', 'unknown')) in ('left', 'right'):
+            # 카메라 표지는 무시 중임이 로그에서 바로 보이게.
+            msg.data = (
+                f"sign_ignored(forced={debug['forced_turn']}) "
+                f"latched={debug['desired_turn']} locked={debug['fork_locked_turn']} | "
+                f"state={debug['state']} fork={int(debug['fork_active'])}/"
+                f"{debug['branch_count']} fork_on={int(bool(debug.get('fork_perception', True)))} "
+                f"event={int(debug['branch_event'])} "
+                f"events={debug['branch_events']} | "
+                f"choice={debug['branch_selection_reason']} rank={selected_rank_text} "
+                f"path={debug['path_source']} decision={debug['decision']} | "
+                f"steer={debug['steering']:+.3f} throttle={debug['throttle']:+.3f}"
+            )
         self.planner_debug_pub.publish(msg)
         self._last_planner_debug_publish_sec = now_sec
 
@@ -373,6 +435,10 @@ def main(args=None):
     except KeyboardInterrupt:
         node.get_logger().info('Shutting down inference_node')
     finally:
+        try:
+            node.publish_stop()
+        except Exception:  # noqa: BLE001
+            pass
         node.destroy_node()
         rclpy.shutdown()
 

@@ -28,6 +28,7 @@ setup(
         'console_scripts': [
             'inference_node = inference.inference_node:main',
             'lane_control_node = inference.lane_control_node:main',
+            'lane_preview_node = inference.lane_preview_node:main',
         ],
     },
 )

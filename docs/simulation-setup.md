@@ -17,10 +17,11 @@
 | 트랙 | CW 팀 트랙, 가로 **12 m** |
 | 미션 표지판 | 좌회전 · 우회전 · ArUco 정지 마커 (**3종**, 월드에 고정) |
 | 카메라 | C920e FOV, **320×180** JPEG (16:9) |
-| 시각화 | **Gazebo** (3D) + **카메라 프리뷰** (320×180, 16:9 창) |
-| 웹 모니터 | 시뮬 기본 **OFF** (실기용 D-Racer monitor — 자율주행에 필수 아님) |
-| **개발 방식** | **컨테이너 1개** (`2026-smh-sim`) + **터미널 2개** (시뮬 / 코드) |
+| 시각화 | **Gazebo** (3D). OpenCV 카메라/BEV는 **`view:=both` 기본 ON** (`none`/`cam`/`bev`로 변경). 자율 창은 **`viz:=lane`** |
+| 웹 모니터 | 시뮬 기본 **OFF** |
+| **개발 방식** | **컨테이너 1개** (`2026-smh-sim`) + **터미널 2개** (bringup / sim-auto) |
 | **노드 구분** | [lane-perception-topic.md §2](./lane-perception-topic.md) ★ 시뮬 vs 실차 인벤토리 |
+| **코스 색** | Out=**흰만** · In=**노란 우선** — [lane-occlusion-fork-strategy.md §0](./lane-occlusion-fork-strategy.md) |
 
 ```bash
 git clone https://github.com/ahnsh03/2026-SMH.git
@@ -29,8 +30,9 @@ cd 2026-SMH && chmod +x scripts/*.sh
 ./scripts/dev_container.sh install-gazebo   # 최초 1회
 ./scripts/dev_container.sh init
 ./scripts/dev_container.sh sim-up           # 컨테이너 생성 (1회)
-./scripts/dev_container.sh sim-bringup      # 터미널1: Gazebo
-# 터미널2: docker exec -it 2026-smh-sim bash
+# Out 갈림 실험
+./scripts/dev_container.sh sim-bringup spawn_pose:=out_fork view:=none
+./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=left viz:=lane
 ```
 
 ### 시뮬에서 쓰는 노드 / 쓰지 않는 노드
@@ -74,8 +76,8 @@ Gazebo (LIMO + CW 트랙 + 미션 표지판 3종 + C920e 카메라 640×360)
     │
     └─ /battery_status ← sim_battery_stub (80% 고정)
 
-카메라 프리뷰(`sim_camera_preview`): `/camera/image_raw` 320×180 → **640×360** 창 (16:9, 2배)  
-BEV 프리뷰(`sim_bev_preview`): 같은 토픽 → **Metric IPM** (`lane_vision.yaml` 잠정 SSOT, 가이드 오버레이). `use_bev_view:=false`로 끌 수 있음.
+카메라/BEV 프리뷰: bringup 기본 **`view:=both`**. 갈림 단위 실험만 끌 때 `view:=none`.  
+자율 인지 창: **`viz:=lane`** → `Lane / Fork Perception` 1개 (`viz:=off|debug|all`).
 
 현재 구조: [main-planner.md](./main-planner.md) · [lane-perception-topic.md](./lane-perception-topic.md) ★
 ```
@@ -168,10 +170,10 @@ chmod +x scripts/*.sh
 | 원칙 | 내용 |
 |------|------|
 | **컨테이너 1개** | 이름 고정 `2026-smh-sim`, `network_mode: host` |
-| **터미널 1** | Gazebo·브리지·카메라 프리뷰 (`sim-bringup`) |
-| **터미널 2** | inference 빌드·실행 (`docker exec`) |
+| **터미널 1** | Gazebo·브리지·카메라 프리뷰 (`sim-bringup`) — **유지** |
+| **터미널 2** | 자율 스택 (`sim-auto` / `sim_auto_stack`) + **인지 오버레이** — 껐다 켜기 |
 | **빌드·검증** | `sim-up` 중이면 `build-sim` / `check`도 **같은 컨테이너** (없을 때만 일회성 dev) |
-| **launch만 끔** | 터미널1에서 Ctrl+C → Gazebo 종료, **컨테이너는 유지** |
+| **launch만 끔** | T1 Ctrl+C → Gazebo 종료 / T2 Ctrl+C → 자율만 종료, **컨테이너 유지** |
 | **셸 진입** | `docker exec -it 2026-smh-sim bash` 한 줄이면 충분 (별도 sh 래퍼 없음) |
 
 ```
@@ -180,12 +182,12 @@ chmod +x scripts/*.sh
 │  network_mode: host  →  WSL과 같은 ROS 도메인               │
 ├──────────────────────────┬──────────────────────────────────┤
 │  터미널 1 (호스트 WSL)    │  터미널 2 (호스트 WSL)            │
-│  sim-bringup             │  docker exec -it 2026-smh-sim bash│
-│  ├ build-sim (자동)      │  ├ source ROS + workspace         │
-│  ├ Gazebo + 트랙         │  ├ colcon build (필요 시)         │
-│  ├ 토픽 브리지           │  └ ros2 run inference ...         │
+│  sim-bringup             │  sim-auto route_mode:=out       │
+│  ├ build-sim (자동)      │  ├ joystick + inference_node    │
+│  ├ Gazebo + 트랙         │  └ Lane/Fork Perception 창      │
+│  ├ 토픽 브리지           │  Ctrl+C → 자율만 종료 (Gazebo 유지)│
 │  └ 카메라 프리뷰 창      │                                   │
-│  Ctrl+C → launch만 종료  │  exit → 셸만 종료 (컨테이너 유지) │
+│  Ctrl+C → Gazebo만 종료  │  (또는 docker exec 셸에서 직접)  │
 └──────────────────────────┴──────────────────────────────────┘
          sim-down 으로 컨테이너 전체 삭제 (하루 작업 끝)
 ```
@@ -271,16 +273,34 @@ source /opt/ros/humble/setup.bash
 source /workspace/install/setup.bash    # 또는 cd /workspace && source install/setup.bash
 ```
 
-자율주행 (권장 — 인지+제어, trim=0, use_sim_time):
+자율주행 (**권장** — Gazebo는 T1에 두고 자율만 토글):
 
 ```bash
-ros2 launch dracer_sim sim_auto_driving.launch.py
+# 호스트에서
+./scripts/dev_container.sh sim-auto route_mode:=out forced_turn:=left viz:=lane
+# viz:=off|lane|debug|all  · forced_turn 시 표지 무시
+# 또는 컨테이너 안
+ros2 launch dracer_sim sim_auto_stack.launch.py route_mode:=out
+```
+
+`Lane / Fork Perception` 창이 같이 뜹니다. 오버레이가 페인트에 맞고 차만 늦게 따라가면 **제어 반응**, 오버레이가 이미 페인트에서 벗어나면 **인지** 이슈입니다. (키 `0`=all, `1`=left, `2`=right)
+
+올인원 (bringup+자율, **끄면 Gazebo도 같이 종료**):
+
+```bash
+ros2 launch dracer_sim sim_auto_driving.launch.py route_mode:=out spawn_pose:=out_fork
 ```
 
 인지 노드만 (토픽 디버그용 — **차는 안 움직임**):
 
 ```bash
 ros2 run inference inference_node --ros-args -p use_sim_time:=true
+```
+
+인지 오버레이만 (주행 중 별도 창):
+
+```bash
+ros2 run inference lane_preview_node --ros-args -p use_sim_time:=true
 ```
 
 또는 실차용 launch를 시뮬에서 쓸 때(하드웨어 노드 포함 — 보통 비권장):
@@ -363,8 +383,9 @@ ros2 topic pub /control control_msgs/msg/Control "{steering: 0.0, throttle: 0.3}
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
 | `headless` | `false` | `true`면 Gazebo 3D 창 끔 (물리·카메라는 동작) |
-| `use_camera_view` | `true` | OpenCV 카메라 프리뷰 (`/camera/image_raw`) |
-| `use_bev_view` | `true` | Metric IPM BEV 프리뷰 (`config/lane_vision.yaml`) |
+| `view` | `both` | OpenCV 창: `both`(기본) \| `none` \| `cam` \| `bev` (우선) |
+| `use_camera_view` | `false` | 레거시 — `view:=` 없을 때만 |
+| `use_bev_view` | `false` | 레거시 — `view:=` 없을 때만 |
 | `bev_view_scale` | `2.0` | BEV 창 배율 |
 | `camera_view_width` | `640` | 프리뷰 창 가로 (16:9) |
 | `camera_view_height` | `360` | 프리뷰 창 세로 |
@@ -504,7 +525,8 @@ launch 파일 위치: `src/dracer_sim/launch/`
 | launch 파일 | 용도 |
 |-------------|------|
 | `sim_bringup.launch.py` | Gazebo + 트랙 + 브리지 + 카메라 프리뷰 (**기본**) |
-| `sim_auto_driving.launch.py` | bringup + **inference_node**(MainPlanner) 자율주행 |
+| `sim_auto_stack.launch.py` | **bringup 없이** joystick + inference + 인지 오버레이 (실험 토글용) |
+| `sim_auto_driving.launch.py` | bringup + auto stack 올인원 |
 | `sim_manual_driving.launch.py` | bringup + 조이스틱 수동주행 |
 
 **기본 시뮬** (터미널 1 — 이 셸은 launch 전용으로 두는 것을 권장):
@@ -617,16 +639,29 @@ SSOT: [`src/dracer_sim/config/spawn_poses.yaml`](../src/dracer_sim/config/spawn_
 | `start` | 출발점 (**기본**) | 2.6 | −3.92 | −π |
 | `inout_fork` | In/Out 코스 분기 | −0.3 | −3.92 | −π |
 | `in_roundabout_entry` | In · 회전교차로 진입 직전 | −1.97 | −2.15 | π/2 |
-| `in_roundabout_exit` | In · 회전교차로 탈출 분기 | −0.9 | 1.39 | 0.15 |
+| `in_roundabout_exit` | In · **탈출 분기** (유지 vs 탈출) | −0.9 | 1.39 | 0.15 |
 | `in_out_merge` | In → Out 합류 | 0.45 | 2.45 | π/2 |
-| `out_fork` | Out · 갈림길 분기 | −4.4 | 3.72 | 0 |
-| `out_fork_merge_left` | Out 갈림 합류 (왼쪽 경로) | −1.14 | 4.05 | 0 |
-| `out_fork_merge_right` | Out 갈림 합류 (오른쪽 경로) | −1.14 | 3.38 | 0 |
+| `out_fork` | Out · **갈림** (유도선 없는 진짜 갈림) | −4.4 | 3.72 | 0 |
+| `out_fork_merge_left` | Out 갈림 합류 (왼쪽 갈래) | −1.14 | 4.05 | 0 |
+| `out_fork_merge_right` | Out 갈림 합류 (오른쪽 갈래) | −1.14 | 3.38 | 0 |
 | `out_in_merge` | Out → In 합류 | 0 | 3.71 | 0 |
 | `obstacle` | 동적 장애물 구간 | 4.7 | 2.97 | −1.13 |
 | `custom` | 수동 | `spawn_x/y/z/yaw` | | |
 
 좌표·yaw를 고치면 **yaml만** 수정한 뒤 `sim-bringup`을 다시 실행하면 된다 (월드 파일 수정 불필요).
+
+**런타임 텔레포트 (Gazebo 재기동 없이):** bringup이 떠 있는 동안 다른 터미널에서 프리셋으로 옮긴다.
+
+```bash
+./scripts/dev_container.sh teleport --list
+./scripts/dev_container.sh teleport in_roundabout_exit
+./scripts/dev_container.sh teleport out_fork
+./scripts/dev_container.sh teleport custom --x 0.0 --y -3.6 --yaw 1.57
+# 컨테이너 안:
+#   python3 scripts/teleport_spawn_pose.py in_roundabout_exit
+```
+
+`/set_entity_state`로 `limo`(기본) 모델 pose·twist를 설정한다. `robot:=dracer`면 `--entity dracer_sim`.
 
 ### 5.1 무엇이 배치되나
 
@@ -780,8 +815,9 @@ GPU 확인 (렉이 심할 때):
 | `check` | CI와 동일 import 검증 (같은 컨테이너 우선) |
 | `sim-up` | `2026-smh-sim` 생성·시작 (백그라운드) |
 | `sim-down` | 시뮬 컨테이너 삭제 |
-| `sim-bringup` | **터미널1**: build-sim + Gazebo launch |
-| `sim` | bringup + inference (한 터미널 통합 테스트) |
+| `sim-bringup` | **터미널1**: build-sim + Gazebo only |
+| `sim-auto` | **터미널2**: 자율 스택+인지창 (bringup 위에서 토글) |
+| `sim` | bringup + auto stack 올인원 |
 | `sim-manual` | bringup + 조이스틱 수동주행 |
 | `check-gpu` | OpenGL 렌더러 확인 (`2026-smh-sim` 우선) |
 | `verify-sim` | 토픽 검증 (bringup 실행 중, 호스트에서) |

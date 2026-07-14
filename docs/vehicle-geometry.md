@@ -68,6 +68,22 @@
 LIMO는 무겁고 저속(~1 m/s), D-Racer는 가볍고 ESC 기반이라 가속·오버슈트·서보 지연이 다르다.  
 시뮬에서 안정이어도 실차에서 진동·과조향이 날 수 있다.
 
+### 2.4 Gazebo 조향 조인트 속도 한도 (2026-07-14)
+
+LIMO vendor URDF 기본값은 조향 revolute joint에 **`velocity="0.5"` rad/s** (~30°/s)와 높은 `damping`/`friction`이 걸려 있었다.  
+풀 락(±0.52 rad)까지 **약 1초**가 걸려 D-Racer 실차의 빠른 서보와 다르게 **조향이 늦고 커브를 놓치는** 것처럼 보였다.
+
+| | 기본(vendor) | 팀 패치 후 (`2026-SMH`) |
+|--|--------------|-------------------------|
+| steer joint `velocity` | **0.5 rad/s** | **4.0 rad/s** |
+| `damping` / `friction` | 1.0 / 2.0 | 0.05 / 0.05 |
+| 풀 락 근사 시간 | ~1.0 s | ~0.13 s |
+
+패치 위치: `vendor/limo_car/gazebo/ackermann.xacro`, `vendor/limo_car/urdf/limo_steering_hinge.xacro`.  
+**URDF 변경은 Gazebo 리스폰/ bringup 재실행 후에만 적용**된다. `sim_control_bridge`에는 조향 rate limit이 없고, planner YAML의 `steering_rate_limit_per_sec`만 소프트웨어 제한이다.
+
+실차(D-Racer)는 PWM 서보라 **Gazebo 0.5 rad/s 한도를 복제하면 안 된다**. 고속 차선추종 튜닝은 패치된 시뮬(≥4 rad/s) 또는 실차에서 할 것.
+
 ---
 
 ## 3. 시뮬 내부 주의

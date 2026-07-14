@@ -118,8 +118,22 @@ def launch_setup(context, *args, **kwargs):
   robot = LaunchConfiguration('robot').perform(context)
   use_sim_time = LaunchConfiguration('use_sim_time')
   use_monitor = LaunchConfiguration('use_monitor').perform(context)
+  view = LaunchConfiguration('view').perform(context).strip().lower()
   use_camera_view = LaunchConfiguration('use_camera_view').perform(context)
   use_bev_view = LaunchConfiguration('use_bev_view').perform(context)
+  # view= presets win over individual flags (sim fork: none = 카메라/BEV 끔).
+  if view in ('none', 'off', '0'):
+    use_camera_view = 'false'
+    use_bev_view = 'false'
+  elif view in ('cam', 'camera'):
+    use_camera_view = 'true'
+    use_bev_view = 'false'
+  elif view in ('bev',):
+    use_camera_view = 'false'
+    use_bev_view = 'true'
+  elif view in ('both', 'all'):
+    use_camera_view = 'true'
+    use_bev_view = 'true'
   camera_view_topic = LaunchConfiguration('camera_view_topic').perform(context)
   camera_view_width = int(LaunchConfiguration('camera_view_width').perform(context))
   camera_view_height = int(LaunchConfiguration('camera_view_height').perform(context))
@@ -332,12 +346,21 @@ def generate_launch_description():
       description='D-Racer 웹 모니터 (시뮬 기본 OFF — OpenCV 카메라 프리뷰 사용, 실기는 manual/auto launch)',
     ),
     DeclareLaunchArgument(
+      'view',
+      default_value='both',
+      choices=['none', 'cam', 'bev', 'both'],
+      description=(
+        'OpenCV windows: both=카메라+BEV (기본) | '
+        'none | cam | bev. use_camera_view/use_bev_view보다 우선.'
+      ),
+    ),
+    DeclareLaunchArgument(
       'use_camera_view', default_value='true',
-      description='OpenCV 카메라 프리뷰 창 (/camera/image_raw, 16:9)',
+      description='OpenCV 카메라 프리뷰 (view:= 없을 때만; 보통 view:= 사용)',
     ),
     DeclareLaunchArgument(
       'use_bev_view', default_value='true',
-      description='Metric IPM BEV 프리뷰 창 (config/lane_vision.yaml SSOT)',
+      description='Metric IPM BEV 프리뷰 (view:= 없을 때만)',
     ),
     DeclareLaunchArgument(
       'camera_view_topic', default_value='/camera/image_raw',

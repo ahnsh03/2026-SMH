@@ -10,15 +10,55 @@
 /camera/image/compressed
         ▼
 MainPlanner.step(frame)
-  ├─ lane_detection.detect()   → LaneDetections
-  ├─ traffic_sign.detect()     → TrafficResult
-  └─ aruco_detection.detect()  → ArucoResult
+  ├─ traffic_sign.detect()     → TrafficResult   # Out fork arm 전에 표지 먼저
+  ├─ aruco_detection.detect()  → ArucoResult
+  └─ lane_detection.detect(enable_fork=…) → LaneDetections
         ▼
-Pure Pursuit + mission state → ControlCommand → /control
+Pure Pursuit / mask_p + mission state → ControlCommand → /control
 ```
 
-기존 `modules/roundabout.py` override는 제거했다. 일반 주행, Out 코스
-갈림길, In 코스 회전교차로의 상태와 최종 제어권은 `MainPlanner`가 소유한다.
+기존 `modules/roundabout.py` override는 제거했다. 일반 주행, **Out 갈림**,
+**In 회전교차로(유지·탈출 분기)** 의 상태와 최종 제어권은 `MainPlanner`가 소유한다.
+
+용어(갈림·갈래·보조 코스 등): [lane-occlusion-fork-strategy.md §0](./lane-occlusion-fork-strategy.md).
+코드의 `branches` / `fork_active` / `*_alt_*`는 **와이어 식별자**로 유지한다.
+
+### 코스 ↔ 차선 색
+
+| `route.mode` | 코스 | **추종 차선 색** | 비고 |
+|--------------|------|------------------|------|
+| `out` | Out (S자·**Out 갈림**) | **흰색** | `white_centerline` / 흰 갈래(`branches`) |
+| `in` | In (회전·**In 탈출 분기**) | **노란색** | `yellow_centerline` / 노란 갈래(`branches`) |
+
+인지는 흰·노란을 동시에 내보낸다. 플래너가 코스에 맞는 색을 경로로 고른다.
+
+| 코스 | 추종 | 금지/폴백 |
+|------|------|-----------|
+| **Out** | **흰만** (`white_centerline` / 흰·`road_split` 갈래) | 노란 경로·노란 갈래 **금지** (`prefer_yellow` Out에서 강제 False) |
+| **In** | **노란이 있으면 노란 우선**, 없으면 흰 | 미션: 흰(진입) → 노란(원) → 흰(합류). “없으면 last resort 노란”이 아님 |
+
+표지 없이 방향 고정(시뮬): `forced_turn:=left|right` → 카메라 표지 **방향·rank만** 고정, 로그 `sign_ignored(forced=…)`.  
+**주의:** `forced_turn`은 기본적으로 OUT **갈림 인지(`enable_fork`)를 랩 내내 켜지 않는다.** 표지 없이 fork만 보고 싶으면 `route.out_fork_forced_turn_arms: true` 또는 `out_fork_require_sign: false`.  
+자세한 인지 계약: [lane-occlusion-fork-strategy.md §0](./lane-occlusion-fork-strategy.md).
+
+## NORMAL 추종기 (`tracker` / `mask_pursuit`)
+
+| `tracker.normal` | 의미 |
+|------------------|------|
+| `pp` | 색 센터라인 Pure Pursuit (기본 대조용) |
+| `mask_p` | Metric IPM `drivable_area` COM + P + EMA + rate (limo_sim 스타일) |
+
+**`mask_p` 가드 (OUT/IN 끌어당김 방지)** — `config/main_planner.yaml` `mask_pursuit`:
+
+| 키 | 역할 |
+|----|------|
+| `corridor_mode` | `off` / `hard`(색 센터라인 코리도 AND) / `soft`(거리 가중 COM) |
+| `corridor_half_width_m` | hard 코리도 반폭 (랩 승자 ~0.38) |
+| `fork_force_pp` | `fork_active`·branch≥2면 COM 끄고 색 경로 PP |
+| `require_color_path` | hard/soft일 때 색 경로 없으면 mask 실패 → PP fallback |
+
+벤치: `scripts/drive_test/mask_policy_bench.py`, `course_mode_bench.py`  
+([drive_test/README.md](../scripts/drive_test/README.md)).
 
 ## 코스 선택과 설정
 
@@ -27,26 +67,31 @@ Pure Pursuit + mission state → ControlCommand → /control
 ```yaml
 route:
   mode: out          # out | in
-  prefer_yellow: false
+  # prefer_yellow omitted: OUT=항상 흰 전용(강제). IN=기본 True.
+  sign_confirm_frames: 3
+  out_fork_require_sign: true   # OUT: 표지 후에만 갈림 인지
+  out_fork_sign_hold_sec: 3.0   # 표지 소실 후 유지 시간
 ```
 
 launch에서 이번 실행만 덮어쓸 수도 있다. 인자를 생략하면 YAML 값을 쓴다.
 
 ```bash
-ros2 launch inference auto_driving.launch.py route_mode:=out
-ros2 launch inference auto_driving.launch.py route_mode:=in
+ros2 launch inference auto_driving.launch.py route_mode:=out   # 흰 차선
+ros2 launch inference auto_driving.launch.py route_mode:=in    # 노란 차선
 ```
 
-In 코스에서 노란 센터라인을 우선하려면 `prefer_yellow: true`로 설정한다.
-노란 경로가 confidence·점 개수 기준을 만족하지 못하면 흰색으로 fallback한다.
+- **`route_mode:=out`:** 흰 센터라인·흰/`road_split` 갈래만. 노란으로 끌려가지 않음.  
+- **`route_mode:=in`:** 노란이 안정적으로 보이면 노란 우선, 아니면 흰(진입·합류).
+- **`forced_turn:=left|right`:** 표지 무시하고 방향·rank 고정 (Out·In 공통).
 
 설정 영역:
 
-- `route`: In/Out, 표지판 확인, 분기 경로 유지·재진입 방지
+- `route`: In/Out, 표지판 확인, **Out 갈림 표지 게이트**, 분기 경로 유지·재진입 방지
 - `pure_pursuit`: look-ahead, wheelbase, 최대 조향각, 변화율 제한
 - `speed`: 직선/곡선 throttle과 곡선 판정 기준
+- `tracker` / `mask_pursuit`: NORMAL·원형 mask COM / fork→PP 가드
 - `path`: 최소 점 개수, 색상 confidence, 경로 소실 조건
-- `roundabout`: 최소 회전 시간, 탈출 branch, 이벤트 debounce/rearm
+- `roundabout`: 최소 회전 시간, 탈출 branch, debounce, **원형 fork-PP 억제**, throttle
 - `signals`: 시작 초록불 및 빨간불 정지 활성화
 - `safety`: 카메라 프레임 watchdog
 - `debug`: 상태·판단 변경 로그
@@ -58,21 +103,24 @@ In 코스에서 노란 센터라인을 우선하려면 `prefer_yellow: true`로 
 | 상태 | 의미 | 제어 경로 |
 |---|---|---|
 | `WAIT_GREEN` | 초록불 대기(설정 시) | 정지 |
-| `NORMAL` | 기본 주행 | 흰색/노란색 센터라인 |
-| `FORK_TURN` | Out 코스 표지판 갈림길 | 선택한 좌/우 branch |
-| `ROUNDABOUT_CIRCLE` | In 코스 회전 중 | 색상 센터라인 |
-| `ROUNDABOUT_EXIT_READY` | 한 바퀴 완료, branch 대기 | 색상 센터라인 |
-| `ROUNDABOUT_EXIT` | 회전교차로 탈출 | 설정된 branch |
+| `NORMAL` | 기본 주행 | `tracker.normal`: PP(색 센터) 또는 `mask_p`(코리도 가드) |
+| `FORK_TURN` | **Out 갈림** (표지 잠금) | 선택 갈래 (`branches[rank]`) — 마스크 COM 미사용 |
+| `ROUNDABOUT_CIRCLE` | In · 회전 **유지** | 색상 센터라인 / mask 설정 시 동일 가드 |
+| `ROUNDABOUT_EXIT_READY` | 한 바퀴 후 · 탈출 갈래 대기 | 색상 센터라인 |
+| `ROUNDABOUT_EXIT` | **In 탈출 분기** · 선택 갈래 추종 | 설정된 갈래 |
 
 ArUco 정지는 상태를 바꾸지 않는 최우선 인터럽트다. 해제되면 기존 상태에서
 다시 주행한다.
 
 Out 코스는 같은 표지판을 `sign_confirm_frames` 동안 연속 확인한 뒤 방향을
-래치한다. `fork_active`도 `branch_on_frames`만큼 연속 검출되어 rising event가
-발생해야 `FORK_TURN`으로 진입한다. 진입 순간 방향과 branch rank를 잠그므로
-회전 중 다른 표지판이 오검출되어도 선택이 바뀌지 않는다. LEFT는 가장 왼쪽,
-RIGHT는 가장 오른쪽 branch를 선택한다. `UNKNOWN`이면 설정의
-`default_out_branch_rank`를 즉시 사용한다.
+래치한다. **갈림 인지(`enable_fork`)는 표지가 보인 뒤에만 켜진다**
+(`route.out_fork_require_sign`, hold=`out_fork_sign_hold_sec`). 평소·갈림
+완료 후(`FORK_TURN`→`NORMAL`)에는 다시 **흰 센터라인/마스크만** 본다 — 상시
+branch 패널로 옆 코스에 끌리지 않게 한다. `fork_active`도 `branch_on_frames`만큼
+연속 검출되어 rising event가 발생해야 `FORK_TURN`으로 진입한다. 진입 순간
+방향과 branch rank를 잠그므로 회전 중 다른 표지판이 오검출되어도 선택이
+바뀌지 않는다. **LEFT → rank 0, RIGHT → rank 1** (두 레이어). `UNKNOWN`이면
+설정의 `default_out_branch_rank`를 즉시 사용한다. PP는 **선택한 레이어만** 본다.
 
 분기 인지가 잠시 끊기면 마지막 선택 경로를 `fork_path_hold_frames` 동안
 유지하고, 이후 색상 센터라인으로 fallback한다. `fork_active`가
@@ -82,8 +130,10 @@ RIGHT는 가장 오른쪽 branch를 선택한다. `UNKNOWN`이면 설정의
 ONNX 모델/runtime이 있으면 학습 모델을 우선 사용하고, 없으면 파란 원 내부
 흰색 화살표의 OpenCV fallback으로 LEFT/RIGHT를 판별한다.
 
-In 코스 회전 중에는 branch가 보여도 색상 센터라인을 계속 사용한다. branch와
-노란 가로선은 독립적인 debounce/rearm 카운터로 등장 이벤트만 센다.
+In 코스 **회전 유지**(`ROUNDABOUT_CIRCLE`)에서는 `circle_ignore_fork_for_control`이면
+branch가 보여도 mask/센터라인으로 계속 추종하고(포크 PP로 깜빡이지 않음),
+branch·노란 가로선은 debounce/rearm 카운터로 등장 이벤트만 센다.
+탈출 ready/exit에서는 선택 갈래 PP를 사용한다.
 
 ```text
 최소 회전 시간 충족

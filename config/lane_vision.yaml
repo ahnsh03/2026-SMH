@@ -1,36 +1,20 @@
-# Lane vision parameters (Phase 0+)
-# Team lock (2026-07-12): Metric IPM is the provisional BEV / planner SSOT.
-# Trapezoid tune remains a visual reference only (tune_bev_roi.py).
-# Metric IPM: scripts/vision_tune/tune_metric_ipm.py
-# Gazebo: crop 39% ↔ x_max 1.5 m, y_half 0.77 m, track_width 0.35 m.
-
 image:
   width: 320
   height: 180
-
 bev_roi:
   crop_top_ratio: 0.39
-  # Bottom trapezoid half-width / (W/2). Trackbar 635 → ratio 6.35.
   bottom_half_width_ratio: 6.35
-  # Pixel resolution only (not meters). Visual reference only.
   bev_width: 500
   bev_height: 370
-
 bev_scale:
-  # Fixed competition track width between L/R lane markings.
   track_width_m: 0.35
   guide_half_width_px: 44
-  # 0.35 / (2 * 44) when green guides align to lane markings.
   meters_per_pixel_lateral: 0.0039772727
   meters_per_pixel_longitudinal: null
   forward_range_m_approx: 1.5
-  note: >
-    Trapezoid reference only. Prefer metric_ipm for runtime / planner.
+  note: 'Trapezoid reference only. Prefer metric_ipm for runtime / planner.
 
-# Metric IPM — team provisional SSOT (isotropic m/px).
-# Geometric check (320×180, h=0.13 m, pitch=10°, HFoV=70.42°):
-#   x=1.50 m → image row ≈ 0.389·H  (= crop_top 0.39)
-#   image bottom → x ≈ 0.22 m
+    '
 metric_ipm:
   camera:
     hfov_deg: 70.42
@@ -39,7 +23,6 @@ metric_ipm:
   range:
     x_min_m: 0.22
     x_max_m: 1.5
-    # false → use y_half_width_m as locked (0.77 m). true would expand to ~±1.05 m.
     full_image_width: false
     y_half_width_m: 0.77
   # Ground resolution of one BEV pixel (isotropic: same for forward & lateral).
@@ -70,10 +53,7 @@ metric_ipm:
     (that is x_max_m). The board is CPU-bound at 0.004: perception runs at ~2.2 Hz
     against a 30 Hz camera, so control sees lane data ~450 ms stale. Coarsening
     this is the cheapest lever — tune it against a recorded bag.
-
 hsv:
-  # OpenCV HSV (H 0-179). Tool: scripts/vision_tune/tune_hsv.py
-  # Seed = Won Tae feature/wontae-lane defaults; refine on sim/real then save.
   white:
     h_min: 0
     h_max: 179
@@ -102,19 +82,25 @@ hsv:
     s_max: 192
     v_min: 161
     v_max: 229
-  note: >
-    Sim/real shared via tune_hsv.py / tune_lane_detect.py.
-    Won Tae may refine final competition values.
-
-# Optional scalars for scripts/vision_tune/tune_lane_detect.py (also applied at import).
+  note: OpenCV HSV (H 0-179). Tuned with scripts/vision_tune/tune_hsv.py. Sim/real
+    shared; Won Tae may refine final competition values.
 detect_tune:
-  crossing_coverage_ratio: 0.40
+  crossing_coverage_ratio: 0.4
   crossing_min_rows: 3
   min_branch_separation_m: 0.15
-  dash_max_lateral_error_m: 0.05
-  dash_max_forward_gap_m: 0.30
-  dash_max_heading_diff_deg: 30
+  dash_max_lateral_error_m: 0.04
+  dash_max_forward_gap_m: 0.3
+  dash_max_heading_diff_deg: 27.0
   dash_min_component_area_px: 12
   dash_branch_assoc_m: 0.22
   red_h_low_wrap: 0
-  note: Tuned with scripts/vision_tune/tune_lane_detect.py
+  fork_track_assoc_m: 0.05
+  fork_track_min_rows: 14
+  fork_pair_width_m: 0.35
+  fork_far_zone_ratio: 0.45
+  fork_track_max_row_gap: 8
+  fork_near_zone_ratio: 0.35
+  note: 'parallel-rail (11자) 2026-07-14: width=0.35 SSOT; stem shared mid until fork apex;
+    center=outer±half_w; assoc=0.05 far=0.45 near=0.35 gap=8.
+    LOCKED: out_fork verify/current.png accepted 2026-07-14.
+    '

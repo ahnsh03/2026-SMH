@@ -6,7 +6,12 @@
 #   ros2 launch dracer_sim sim_bringup.launch.py spawn_pose:=obstacle
 #   spawn_pose:=custom spawn_x:=… spawn_y:=… spawn_yaw:=…   # manual override
 #
-# SSOT for launch: this file. Docs: docs/simulation-setup.md §5.1
+# Runtime teleport (Gazebo already running — no relaunch):
+#   ./scripts/dev_container.sh teleport --list
+#   ./scripts/dev_container.sh teleport in_roundabout_exit
+#   python3 scripts/teleport_spawn_pose.py out_fork
+#
+# SSOT for launch + teleport: this file. Docs: docs/simulation-setup.md §5.0
 
 default: start
 
