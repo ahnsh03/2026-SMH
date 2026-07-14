@@ -327,7 +327,7 @@ def _load_hsv_thresholds() -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """lane_vision.yaml hsv 블록을 OpenCV inRange 하한/상한으로 읽는다."""
 
     defaults = {
-        "white": ((0, 0, 174), (179, 29, 255)),
+        "white": ((0, 0, 180), (179, 29, 255)),
         "yellow": ((0, 32, 79), (55, 255, 255)),
         "black_road": ((0, 0, 0), (179, 255, 30)),
         "red_road": ((170, 125, 161), (179, 192, 229)),

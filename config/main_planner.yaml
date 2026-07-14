@@ -166,6 +166,11 @@ profiles:
       # Perception runs at ~2.2 Hz, so the nominal dt is the real frame period.
       nominal_control_dt_sec: 0.45
 
+    # Board D3-G field tune (2026-07-14). Sim base keeps trusted 0.33 lap.
+    speed:
+      cruise_throttle: 0.24
+      curve_throttle: 0.15
+
     path:
       # rear axle -> camera = wheelbase + camera_ahead_front_axle
       #            = 0.175 + 0.025 = 0.20 m  (sim value 0.265 assumes L=0.24)

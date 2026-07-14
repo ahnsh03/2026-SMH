@@ -15,16 +15,16 @@
 | **브랜치에서만 개발** | `main`에서 바로 코딩하지 않음 — 반드시 feature 브랜치 생성 |
 | **작은 PR** | 한 PR = 한 기능 또는 한 버그 수정 (담당 영역 단위). 통합·문서 SSOT는 팀장 협의 예외 |
 | **merge 후 정리** | merge 완료 후 로컬 feature 브랜치 삭제, `main` pull |
-| **보드는 `main`만** | D3-G 배포·주행 테스트는 merge된 `main`만 사용 |
+| **보드는 `board`만** | D3-G push/pull·주행은 공유 브랜치 `board` (`main` 직접 push 금지) |
 
 ```
-main (안정 — 보드 deploy)
-  └── feature/<이름>-<기능>   ← 여기서만 개발
-         ├── 코드 수정 · 커밋
-         ├── push
-         ├── Pull Request 생성
-         ├── (팀) 리뷰 · CI
-         └── merge → main  →  보드에서 board_sync.sh
+main (안정 — PC PR merge 목적지)
+  └── feature/<이름>-<기능>   ← PC에서만 개발
+         ├── 코드 수정 · 커밋 · PR
+         └── merge → main  →  (필요 시) board에 반영
+
+board (D3-G 공유 — 보드에서 push/pull)
+  └── board_sync.sh → launch · 실차 튜닝
 ```
 
 > **요약**: `브랜치 생성 → 작업 → commit → push → PR → (리뷰) → merge`  
@@ -405,7 +405,7 @@ ros2 launch inference auto_driving.launch.py
 # inference_node(MainPlanner → /control) + camera/control 하드웨어
 ```
 
-보드에서는 **feature 브랜치로 주행 테스트하지 않습니다.** PR merge 후 `main`을 pull해서 확인합니다.  
+보드에서는 **개인 feature 브랜치로 주행 테스트하지 않습니다.** PR merge 후 공유 브랜치 `board`에 반영하고 `board_sync.sh`로 확인합니다.  
 구조: [main-planner.md](./main-planner.md) · [lane-perception-topic.md](./lane-perception-topic.md)
 
 ---

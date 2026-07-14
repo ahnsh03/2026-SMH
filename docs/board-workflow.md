@@ -7,13 +7,17 @@
 
 ## 한 줄 요약
 
+보드 공유 브랜치는 **`board`** 입니다 (`snapshot/wonjung-board-*` 에서 개명).  
+팀원이 보드에서 push/pull·주행 테스트할 때 이 브랜치를 씁니다.
+
 ```bash
 cd ~/2026-SMH
-./scripts/board_sync.sh
+./scripts/board_sync.sh          # origin/board checkout + pull + build
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py
 # = camera + control_node + inference_node(MainPlanner → /control)
 #   + battery + joystick + monitor(웹 관측)
+# launch는 planner_profile:=real → PDC fork 판단 + 실차 프로파일
 ```
 
 ### 실차 launch에 올라가는 노드
@@ -127,14 +131,16 @@ ros2 launch inference auto_driving.launch.py
 
 ## 3. 팀원 개발 흐름 (표준)
 
-팀 표준은 **PC에서 PR → 보드에서 `main` 테스트**입니다.
+팀 표준은 **PC에서 PR → `main` merge → 보드 `board`에 반영 후 테스트**입니다.
 
 ```
-PC (Docker)                    GitHub                    D3-G 보드
-───────────                    ──────                    ─────────
-feature 브랜치 개발    →    PR 생성·merge    →    board_sync.sh → launch
-modules/ 수정                  main 반영                  주행 테스트
+PC (Docker)                    GitHub                         D3-G 보드
+───────────                    ──────                         ─────────
+feature 브랜치 개발    →    PR → merge → main    →    board에 merge/반영
+modules/ 수정                                          board_sync.sh → launch
 ```
+
+보드에서 바로 고칠 때도 **`board` 브랜치에서만** push/pull 합니다 (`main` 직접 push 금지).
 
 ### 3.1 PC에서 개발 (권장)
 
@@ -165,7 +171,7 @@ source install/setup.bash
 ros2 launch inference auto_driving.launch.py
 ```
 
-보드에서는 **feature 브랜치로 주행 테스트하지 않습니다.** merge된 `main`만 사용합니다.
+보드에서는 **개인 feature 브랜치로 주행 테스트하지 않습니다.** 공유 브랜치 `board`만 사용합니다.
 
 ### 3.3 ArUco 보드 테스트 (검증됨)
 
@@ -264,7 +270,7 @@ Claude·Cursor·Codex에게 지시할 때는 **담당 `modules/` 파일만** 수
 
 | 단계 | 내용 |
 |------|------|
-| `git pull --ff-only` | 최신 `main` 반영 (`--no-pull`이면 생략) |
+| `git fetch` + `checkout board` + `pull --ff-only` | 최신 공유 브랜치 `board` 반영 (`--no-pull`이면 생략) |
 | `init_workspace.sh` | `external/D-Racer-Kit/src/*`에서 `src/*`로 심볼릭 링크 |
 | `colcon build` | 팀 `inference` + 공식 패키지 한 번에 빌드 |
 
