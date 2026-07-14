@@ -173,6 +173,22 @@ ros2 launch inference auto_driving.launch.py
 
 보드에서는 **개인 feature 브랜치로 주행 테스트하지 않습니다.** 공유 브랜치 `board`만 사용합니다.
 
+### 3.4 HSV 마스크 모니터 확인 (저지연)
+
+전체 `detect`/주행 없이 bag HSV만 보려면:
+
+```bash
+cd ~/2026-SMH
+./scripts/board_sync.sh --no-pull   # 또는 pull 포함
+source install/setup.bash
+ros2 launch inference mask_check.launch.py
+# 브라우저: http://<보드IP>:5000
+#   grayscale = white · blur = yellow · edge = 2x2(white|yellow / black|red)
+```
+
+`inference_node`는 실행하지 않습니다. 마스크 노드 ≤1.5 Hz·JPEG quality 55라 Wi‑Fi 부담이 작습니다.  
+주행 때는 `auto_driving.launch.py`만 쓰고 (`OPENCV_DEBUG_MODE` false) 이 launch는 끄세요.
+
 ### 3.3 ArUco 보드 테스트 (검증됨)
 
 인쇄 크기(10 cm / 15 cm)는 **거리 계산에 쓰지 않습니다.**  
