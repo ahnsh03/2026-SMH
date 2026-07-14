@@ -1,0 +1,59 @@
+diff --git a/src/control/control/control_node.py b/src/control/control/control_node.py
+index 69c972d..347e2cd 100644
+--- a/src/control/control/control_node.py
++++ b/src/control/control/control_node.py
+@@ -49,6 +49,7 @@ class ControlNode(Node):
+ 
+         self.command_hz = command_hz
+         self.steer_trim = self.load_steer_trim()
++        self.steer_invert = self.load_steer_invert()
+ 
+         self.d3_racer = D3Racer(
+             i2c_bus=i2c_bus,
+@@ -64,6 +65,7 @@ class ControlNode(Node):
+             f'  steering_channel={steering_channel}\n'
+             f'  throttle_channel={throttle_channel}\n'
+             f'  steer_trim={self.steer_trim}\n'
++            f'  steer_invert={self.steer_invert}\n'
+             f'  use_joystick_control={self.use_joystick_control}\n'
+             f'  joystick_topic={joystick_topic}\n'
+             f'  control_topic={control_topic}\n'
+@@ -118,7 +120,15 @@ class ControlNode(Node):
+         if self.e_stop_active or self.use_joystick_control:
+             return
+ 
+-        self.steering = float(msg.steering)
++        steering = float(msg.steering)
++        if self.steer_invert:
++            # 실차 조향 서보가 SSOT(+steering=우)와 반대로 배선되어 +명령이
++            # 물리적으로 좌로 꺾인다. 방향만 뒤집되 기계 중립(STEER_TRIM)은
++            # 보존하도록 trim 중심으로 반사한다: 직진 명령은 그대로 중립,
++            # 좌/우 회전만 반대로. (msg.steering 은 상류에서 이미 STEER_TRIM 이
++            # 더해진 값이고, 여기 self.steer_trim 과 동일하다고 가정.)
++            steering = 2.0 * self.steer_trim - steering
++        self.steering = steering
+         self.throttle = float(msg.throttle)
+ 
+     def engage_e_stop(self):
+@@ -145,6 +155,21 @@ class ControlNode(Node):
+ 
+         return float(config_data.get('STEER_TRIM', 0.0))
+ 
++    def load_steer_invert(self):
++        if not os.path.exists(self.vehicle_config_file):
++            return False
++
++        try:
++            with open(self.vehicle_config_file, 'r', encoding='utf-8') as config_stream:
++                config_data = yaml.safe_load(config_stream) or {}
++        except Exception as exc:
++            self.get_logger().warning(
++                f'Failed to read vehicle config file {self.vehicle_config_file}: {exc}'
++            )
++            return False
++
++        return bool(config_data.get('STEER_INVERT', False))
++
+     def destroy_node(self):
+         try:
+             if hasattr(self, 'd3_racer') and self.d3_racer is not None:

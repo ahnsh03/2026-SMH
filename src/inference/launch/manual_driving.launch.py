@@ -48,7 +48,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {
-                    'calibration_mode': False,
+                    'calibration_mode': True,
                     'vehicle_config_file': vehicle_config_path,
                 },
             ],

@@ -1,0 +1,79 @@
+diff --git a/src/camera/camera/camera_node.py b/src/camera/camera/camera_node.py
+--- a/src/camera/camera/camera_node.py
++++ b/src/camera/camera/camera_node.py
+@@ -31,6 +31,19 @@
+         self.declare_parameter('flip_method', 'rotate-180')
+         self.declare_parameter('jpeg_quality', 90)
+         self.declare_parameter('debug_log', True)
++        # V4L2 controls applied to the USB camera at pipeline start. Comma-separated
++        # "name=value"; empty string leaves the camera in its stock (all-auto) state.
++        #
++        # exposure_absolute is deliberately absent: the C920e on this board rejects
++        # every value (EILSEQ), so exposure cannot be chosen, only frozen where the
++        # camera's own AE left it. Use gain to trim brightness instead.
++        self.declare_parameter(
++            'v4l2_extra_controls',
++            'exposure_auto=1,'
++            'exposure_auto_priority=0,'
++            'white_balance_temperature_auto=0,'
++            'focus_auto=0',
++        )
+ 
+         self.vehicle_config_file = os.path.expanduser(
+             str(self.get_parameter('vehicle_config_file').value)
+@@ -43,6 +56,9 @@
+         usb_camera_device = str(self.get_parameter('usb_camera_device').value)
+         mipi_camera_device = str(self.get_parameter('mipi_camera_device').value)
+         flip_method = str(self.get_parameter('flip_method').value)
++        self.v4l2_extra_controls = str(
++            self.get_parameter('v4l2_extra_controls').value
++        ).strip()
+         jpeg_quality = int(self.get_parameter('jpeg_quality').value)
+         if not 0 <= jpeg_quality <= 100:
+             raise ValueError('jpeg_quality must be in range [0, 100]')
+@@ -140,6 +156,18 @@
+ 
+         return usb_cam, mipi_cam
+ 
++    def build_v4l2_source(self, camera_device):
++        """v4l2src with the configured V4L2 controls applied at pipeline start.
++
++        The controls must ride on the element: this node opens the camera through
++        cv2.CAP_GSTREAMER, and OpenCV's cap.set(cv2.CAP_PROP_*) is a silent no-op
++        on the GStreamer backend.
++        """
++        source = f"v4l2src device={camera_device} io-mode=2"
++        if self.v4l2_extra_controls:
++            source += f' extra-controls="c,{self.v4l2_extra_controls}"'
++        return source
++
+     def build_candidate_pipelines(self, camera_device, flip_method):
+         if self.usb_cam_enabled:
+             # Ask the camera for the target size directly. Without width/height in
+@@ -148,7 +176,7 @@
+             # CPU-downscales it on every frame. The C920e offers 320x180 MJPG
+             # natively, which skips both.
+             mjpg_native_pipeline = (
+-                f"v4l2src device={camera_device} io-mode=2 ! "
++                f"{self.build_v4l2_source(camera_device)} ! "
+                 f"image/jpeg,width={self.image_width},height={self.image_height},framerate=30/1 ! "
+                 "jpegdec ! videoconvert ! "
+                 f"video/x-raw,format=BGR,width={self.image_width},height={self.image_height},framerate=30/1 ! "
+@@ -159,7 +187,7 @@
+             # 4:3 and the target is 16:9, videoscale squashes the aspect ratio,
+             # which breaks the IPM (metric_ipm assumes square pixels, fy == fx).
+             mjpg_pipeline = (
+-                f"v4l2src device={camera_device} io-mode=2 ! "
++                f"{self.build_v4l2_source(camera_device)} ! "
+                 "image/jpeg,framerate=30/1 ! jpegdec ! "
+                 "videoconvert ! videoscale ! "
+                 f"video/x-raw,format=BGR,width={self.image_width},height={self.image_height},framerate=30/1 ! "
+@@ -167,7 +195,7 @@
+             )
+             # Fallback for raw USB camera modes.
+             raw_pipeline = (
+-                f"v4l2src device={camera_device} io-mode=2 ! "
++                f"{self.build_v4l2_source(camera_device)} ! "
+                 "videoconvert ! videoscale ! "
+                 f"video/x-raw,format=BGR,width={self.image_width},height={self.image_height},framerate=30/1 ! "
+                 "appsink sync=false drop=true max-buffers=1"
