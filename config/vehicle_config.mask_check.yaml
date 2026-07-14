@@ -1,0 +1,25 @@
+# Monitor mask-check overlay — identical to vehicle_config.yaml except debug panels.
+# Used only by mask_check.launch.py so driving launch keeps OPENCV_DEBUG_MODE false.
+
+USB_CAM: true
+MIPI_CAM: false
+USB_CAM_DEVICE: /dev/video1
+IMAGE_WIDTH: 320
+IMAGE_HEIGHT: 180
+ROI_TOP: 50
+ROI_LEFT: 0
+STEER_TRIM: 0.18000000000000002
+STEER_INVERT: true
+WEB_HOST: 0.0.0.0
+WEB_PORT: 5000
+BATTERY_TOPIC: /battery_status
+IMAGE_TOPIC: /camera/image/compressed
+CONTROL_TOPIC: /control
+JOYSTICK_TOPIC: /joystick
+STORAGE_PATH: /
+IMAGE_DISPLAY_WIDTH: 640
+IMAGE_DISPLAY_HEIGHT: 360
+# Mask-check only: show Grayscale/Blur/Edge panels (HSV white/yellow/2x2).
+# Driving: keep config/vehicle_config.yaml OPENCV_DEBUG_MODE false.
+OPENCV_DEBUG_MODE: true
+CAPTURE_DIR: ~/2026-SMH/data/captures/real
