@@ -771,7 +771,8 @@ def run_topic(
 
     image_qos = QoSProfile(
         history=HistoryPolicy.KEEP_LAST,
-        depth=10,
+        # Newest frame only — a deeper queue shows stale frames (see tune_metric_ipm).
+        depth=1,
         reliability=ReliabilityPolicy.RELIABLE,
         durability=DurabilityPolicy.VOLATILE,
     )

@@ -318,7 +318,8 @@ def run_topic(topic: str, state: HsvTuneState, config_path: Path) -> int:
 
     image_qos = QoSProfile(
         history=HistoryPolicy.KEEP_LAST,
-        depth=10,
+        # Newest frame only — a deeper queue shows stale frames (see tune_metric_ipm).
+        depth=1,
         reliability=ReliabilityPolicy.RELIABLE,
         durability=DurabilityPolicy.VOLATILE,
     )

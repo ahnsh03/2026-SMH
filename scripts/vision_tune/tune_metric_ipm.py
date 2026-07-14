@@ -239,7 +239,10 @@ def run_topic(
 
     image_qos = QoSProfile(
         history=HistoryPolicy.KEEP_LAST,
-        depth=10,
+        # Newest frame only. The GUI consumes slower than the 30 Hz camera, so a
+        # deeper queue just backs up: at depth=10 the displayed frame was ~320 ms
+        # stale (measured), against ~25 ms here. Same throughput either way.
+        depth=1,
         reliability=ReliabilityPolicy.RELIABLE,
         durability=DurabilityPolicy.VOLATILE,
     )

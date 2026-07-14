@@ -93,7 +93,9 @@ class CaptureNode(Node):
         self.frame_count = 0
         qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
-            depth=10,
+            # Hotkey capture wants the newest frame, not a backlog. Revisit if
+            # burst capture is ever added.
+            depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
