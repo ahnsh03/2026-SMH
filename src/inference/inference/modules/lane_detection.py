@@ -4650,6 +4650,13 @@ def detect_with_debug(
     if frame is None or frame.size == 0:
         return LaneDetections(), LaneDebugFrame()
 
+    # Alt DP is needed for marking-fork pairs; otherwise only pay for it when viz
+    # wants opposing-path overlays (main latency gate).
+    find_alternate = bool(enable_fork) or VISUALIZE_MODE in (
+        VISUALIZE_CONTROL,
+        VISUALIZE_ON,
+    )
+
     original_h, original_w = frame.shape[:2]
     current_shape = (original_w, original_h)
 
@@ -4778,7 +4785,7 @@ def detect_with_debug(
         boundary_segments_by_row=white_segments_by_row,
         opposite_segments_by_row=yellow_segments_by_row,
         road_segments_by_row=road_segments_by_row,
-        find_alternate=True,
+        find_alternate=find_alternate,
     )
     white_centerline = centerline_from_boundaries(white_left, white_right)
 
@@ -4842,7 +4849,7 @@ def detect_with_debug(
         boundary_segments_by_row=yellow_segments_by_row,
         opposite_segments_by_row=white_segments_by_row,
         road_segments_by_row=road_segments_by_row,
-        find_alternate=True,
+        find_alternate=find_alternate,
     )
 
     yellow_left = temporally_smooth_boundary(

@@ -70,6 +70,9 @@ class InferenceNode(Node):
             'forced_turn',
             '',
         )  # left|right|'' — sim test override (IN: left=exit, right=stay)
+        # 'sim' | 'real' | '' — selects the profiles.<name> block in
+        # main_planner.yaml. Empty keeps the sim-tuned base values.
+        self.declare_parameter('planner_profile', '')
         self.declare_parameter('aruco_debug_log', True)
         self.declare_parameter('publish_hz', 10.0)
         self.declare_parameter('steer_trim', 0.0)
@@ -86,6 +89,9 @@ class InferenceNode(Node):
         planner_config_file = str(self.get_parameter('planner_config_file').value)
         route_mode = str(self.get_parameter('route_mode').value).strip() or None
         forced_turn_raw = str(self.get_parameter('forced_turn').value).strip().lower()
+        planner_profile = (
+            str(self.get_parameter('planner_profile').value).strip() or None
+        )
         self.aruco_debug_log = bool(self.get_parameter('aruco_debug_log').value)
         publish_hz = float(self.get_parameter('publish_hz').value)
         self.steer_trim = float(self.load_steer_trim())
@@ -105,6 +111,7 @@ class InferenceNode(Node):
         planner_config = load_planner_config(
             planner_config_file,
             route_mode=route_mode,
+            profile=planner_profile,
         )
         self.latest_frame: np.ndarray | None = None
         self.latest_command = pipeline.ControlCommand(
@@ -151,6 +158,16 @@ class InferenceNode(Node):
             f'control_topic={control_topic}, route={planner_config.route_mode.value}, '
             f'forced_turn={forced_turn_raw or "-"}, '
             f'planner_config={planner_config_file}'
+        )
+        # Which plant are we driving? Getting this wrong is silent and costly,
+        # so print the values the profile actually resolved to.
+        self.get_logger().info(
+            f'planner_profile={planner_profile or "(base/sim)"}: '
+            f'wheelbase={planner_config.wheelbase_m:.3f}m, '
+            f'max_steer={planner_config.max_steer_angle_rad:.4f}rad, '
+            f'rear_axle_offset={planner_config.perception_to_rear_axle_x_m:.3f}m, '
+            f'watchdog={planner_config.command_watchdog_sec:.2f}s, '
+            f'max_step_dt={planner_config.max_step_dt_sec:.2f}s'
         )
         if forced_turn_raw in ('left', 'right'):
             # One more loud line so experimental runs are easy to confirm.

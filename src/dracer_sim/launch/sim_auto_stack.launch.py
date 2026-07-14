@@ -103,6 +103,9 @@ def _launch_setup(context, *args, **kwargs):
           'planner_config_file': planner_config_path,
           'route_mode': route_mode,
           'forced_turn': LaunchConfiguration('forced_turn'),
+          # Gazebo LIMO. profiles.sim is empty today (base = sim values), but set
+          # explicitly so sim never silently inherits a real-car override.
+          'planner_profile': 'sim',
           'aruco_debug_topic': '/debug/aruco',
           'planner_debug_topic': '/debug/planner',
           'aruco_debug_log': True,
