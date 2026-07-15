@@ -20,8 +20,18 @@ import cv2
 import numpy as np
 import yaml
 
-CHANNEL_NAMES = ('white', 'yellow', 'black_road', 'red_road')
+CHANNEL_NAMES = ('white', 'yellow', 'black_road', 'red_road', 'black_cyan')
 PROFILE_NAMES = ('sim', 'real_car')
+
+# OUT scoreboard glare → cyan wash on asphalt (tuned out_glare 2026-07-15).
+_BLACK_CYAN_DEFAULT: dict[str, int] = {
+    'h_min': 90,
+    'h_max': 100,
+    's_min': 190,
+    's_max': 220,
+    'v_min': 200,
+    'v_max': 230,
+}
 
 # Gazebo / Won Tae seed (OpenCV HSV).
 _SIM_DEFAULTS: dict[str, dict[str, int]] = {
@@ -57,6 +67,7 @@ _SIM_DEFAULTS: dict[str, dict[str, int]] = {
         'v_min': 161,
         'v_max': 229,
     },
+    'black_cyan': dict(_BLACK_CYAN_DEFAULT),
 }
 
 # origin/board field tune (bag_20260711_144948, D3-G 2026-07-14).
@@ -93,6 +104,7 @@ _BOARD_DEFAULTS: dict[str, dict[str, int]] = {
         'v_min': 120,
         'v_max': 250,
     },
+    'black_cyan': dict(_BLACK_CYAN_DEFAULT),
 }
 
 # Real-car field tune from bag replay captures (2026-07-15, commits 0191811 + 35ba99e).
@@ -129,6 +141,8 @@ _REAL_CAR_DEFAULTS: dict[str, dict[str, int]] = {
         'v_min': 120,
         'v_max': 255,
     },
+    # OUT LED billboard floor wash (from_bag/out_glare, 2026-07-15).
+    'black_cyan': dict(_BLACK_CYAN_DEFAULT),
 }
 
 _DEFAULTS = _SIM_DEFAULTS

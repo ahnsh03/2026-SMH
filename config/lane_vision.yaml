@@ -70,6 +70,13 @@ hsv:
         s_max: 192
         v_min: 161
         v_max: 229
+      black_cyan:
+        h_min: 72
+        h_max: 110
+        s_min: 40
+        s_max: 255
+        v_min: 80
+        v_max: 230
     real_car:
       meta:
         environment: D3-G field (C920e 320x180)
@@ -78,62 +85,46 @@ hsv:
         tuned: '2026-07-15'
         tool: scripts/vision_tune/tune_hsv.py --from-bag
         commits: 0191811, 35ba99e
-      white:
+      white: &id001
         h_min: 0
         h_max: 179
         s_min: 0
         s_max: 20
         v_min: 210
         v_max: 255
-      yellow:
+      yellow: &id002
         h_min: 15
         h_max: 50
         s_min: 50
         s_max: 150
         v_min: 160
         v_max: 255
-      black_road:
+      black_road: &id003
         h_min: 17
         h_max: 70
         s_min: 0
         s_max: 255
         v_min: 50
         v_max: 140
-      red_road:
+      red_road: &id004
         h_min: 0
         h_max: 9
         s_min: 155
         s_max: 255
         v_min: 120
         v_max: 255
-  white:
-    h_min: 0
-    h_max: 179
-    s_min: 0
-    s_max: 20
-    v_min: 210
-    v_max: 255
-  yellow:
-    h_min: 15
-    h_max: 50
-    s_min: 50
-    s_max: 150
-    v_min: 160
-    v_max: 255
-  black_road:
-    h_min: 17
-    h_max: 70
-    s_min: 0
-    s_max: 255
-    v_min: 50
-    v_max: 140
-  red_road:
-    h_min: 0
-    h_max: 9
-    s_min: 155
-    s_max: 255
-    v_min: 120
-    v_max: 255
+      black_cyan: &id005
+        h_min: 90
+        h_max: 100
+        s_min: 190
+        s_max: 220
+        v_min: 200
+        v_max: 230
+  white: *id001
+  yellow: *id002
+  black_road: *id003
+  red_road: *id004
+  black_cyan: *id005
   note: OpenCV HSV (H 0-179). Runtime reads flattened channels (= profiles[active]).
     See docs/hsv-profiles.md. Tuned with scripts/vision_tune/tune_hsv.py.
 perception:

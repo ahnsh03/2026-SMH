@@ -222,6 +222,7 @@ python3 scripts/vision_tune/hsv.py --apply-profile real_car
 # 실차 bag 캡처로 튜닝
 python3 scripts/vision_tune/tune_hsv.py --from-bag in
 python3 scripts/vision_tune/tune_hsv.py --folder data/captures/from_bag/out
+python3 scripts/vision_tune/tune_hsv.py --from-bag out_glare --channel black_cyan
 python3 scripts/vision_tune/tune_hsv.py --channel yellow
 ```
 
@@ -234,7 +235,7 @@ python3 scripts/vision_tune/tune_hsv.py --channel yellow
 
 | 키 | 동작 |
 |----|------|
-| `1`–`4` | white / yellow / black_road / red_road |
+| `1`–`5` | white / yellow / black_road / red_road / **black_cyan** |
 | `d` | 활성 채널 → **sim** (Gazebo / 원태 시드) |
 | `b` | 활성 채널 → origin/board 1차 실차 (레거시) |
 | 클릭 | ORIGIN/BEV 패널에서 해당 픽셀 HSV로 범위 **확장** |

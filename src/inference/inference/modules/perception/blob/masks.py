@@ -91,6 +91,8 @@ def _load_hsv_bounds() -> dict[str, tuple[np.ndarray, np.ndarray]]:
         'yellow': ((0, 32, 79), (55, 255, 255)),
         'black_road': ((0, 0, 0), (179, 255, 30)),
         'red_road': ((170, 125, 161), (179, 192, 229)),
+        # OUT LED billboard cyan wash on asphalt
+        'black_cyan': ((90, 190, 200), (100, 220, 230)),
     }
     DEFAULT_CONFIG_PATH, _, _, _ = _metric_ipm()
     try:
@@ -150,7 +152,7 @@ def _red_inrange(hsv: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
 
 
 def extract_bev_masks(frame: np.ndarray) -> dict[str, np.ndarray]:
-    """Return BEV uint8 masks: white, yellow, black, red, road_raw, bev."""
+    """Return BEV uint8 masks: white, yellow, black, red, cyan, road_raw, bev."""
 
     if frame is None or frame.size == 0:
         empty = np.empty((0, 0), dtype=np.uint8)
@@ -160,6 +162,7 @@ def extract_bev_masks(frame: np.ndarray) -> dict[str, np.ndarray]:
             'yellow': empty,
             'black': empty,
             'red': empty,
+            'cyan': empty,
             'road_raw': empty,
         }
 
@@ -172,12 +175,22 @@ def extract_bev_masks(frame: np.ndarray) -> dict[str, np.ndarray]:
     yellow_src = cv2.inRange(hsv, bounds['yellow'][0], bounds['yellow'][1])
     black_src = cv2.inRange(hsv, bounds['black_road'][0], bounds['black_road'][1])
     red_src = _red_inrange(hsv, bounds['red_road'][0], bounds['red_road'][1])
+    cyan_lo, cyan_hi = bounds.get(
+        'black_cyan',
+        (
+            np.array([72, 40, 80], dtype=np.uint8),
+            np.array([110, 255, 230], dtype=np.uint8),
+        ),
+    )
+    cyan_src = cv2.inRange(hsv, cyan_lo, cyan_hi)
 
     white = warp_mask(white_src)
     yellow = warp_mask(yellow_src)
     black = warp_mask(black_src)
     red = warp_mask(red_src)
+    cyan = warp_mask(cyan_src)
     road_raw = cv2.bitwise_or(black, red)
+    road_raw = cv2.bitwise_or(road_raw, cyan)
     bev = warp_bgr(frame)
     return {
         'bev': bev,
@@ -185,5 +198,6 @@ def extract_bev_masks(frame: np.ndarray) -> dict[str, np.ndarray]:
         'yellow': yellow,
         'black': black,
         'red': red,
+        'cyan': cyan,
         'road_raw': road_raw,
     }

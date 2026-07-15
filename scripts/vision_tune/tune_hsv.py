@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Sim / real-car HSV mask tuner (shared YAML for Won Tae + runtime).
 
-Tune white / yellow / black_road / red_road ranges on Metric IPM BEV (or
-camera view). Click a pixel to expand the active range around that sample.
-Saves ``config/lane_vision.yaml`` → ``hsv:``.
+Tune white / yellow / black_road / red_road / black_cyan ranges on Metric
+IPM BEV (or camera view). Click a pixel to expand the active range around
+that sample. Saves ``config/lane_vision.yaml`` → ``hsv:``.
 
 Examples (inside 2026-smh-sim after source /opt/ros/humble/setup.bash):
 
-  python3 scripts/vision_tune/tune_hsv.py --from-bag in
-  python3 scripts/vision_tune/tune_hsv.py --folder data/captures/from_bag/out
-  python3 scripts/vision_tune/tune_hsv.py --topic /camera/image/compressed
+  python3 scripts/vision_tune/tune_hsv.py --from-bag out_glare
+  python3 scripts/vision_tune/tune_hsv.py --folder data/captures/from_bag/out_glare
+  python3 scripts/vision_tune/tune_hsv.py --channel black_cyan
 
 Keys:
-  1–4   select channel (white/yellow/black/red)
+  1–5   select channel (white/yellow/black/red/black_cyan)
   b     reset active channel → origin/board field baseline
   d     reset active channel → Won Tae seed defaults
   s     save all channels to lane_vision.yaml
@@ -69,11 +69,14 @@ CHANNEL_COLORS = {
     'yellow': (0, 255, 255),
     'black_road': (80, 80, 80),
     'red_road': (0, 0, 255),
+    'black_cyan': (255, 220, 0),  # cyan-ish in BGR preview
 }
 
 FROM_BAG_DIRS = {
     'in': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'in',
     'out': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out',
+    # OUT LED billboard floor-wash frames only (7 captures, 2026-07-15).
+    'out_glare': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out_glare',
 }
 
 
@@ -286,7 +289,7 @@ def _init_ui(state: HsvTuneState) -> None:
     place_window(WIN_MAIN, 48, 48)
 
     cb = state.on_trackbar
-    cv2.createTrackbar('channel', WIN_CTRL, state.channel_idx, 3, cb)
+    cv2.createTrackbar('channel', WIN_CTRL, state.channel_idx, len(CHANNEL_NAMES) - 1, cb)
     for key, vmax in (
         ('h_min', 179),
         ('h_max', 179),
@@ -381,7 +384,7 @@ def _handle_key(key: int, state: HsvTuneState, config_path: Path) -> str | None:
         state.reset_active_board()
         print(f'Reset {state.channel} → origin/board field baseline')
         return None
-    if key in (ord('1'), ord('2'), ord('3'), ord('4')):
+    if key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
         state.set_channel(key - ord('1'))
         print(f'Channel → {state.channel}')
         return None
@@ -411,7 +414,7 @@ def run_folder(folder: Path, state: HsvTuneState, config_path: Path) -> int:
     print(
         f'Folder: {folder} ({len(frames)} images)\n'
         f'Baseline: lane_vision.yaml hsv (origin/board field tune)\n'
-        f'Keys: 1-4 channel  b=board  d=seed  s=save  n/p  q=quit  (click ORIGIN/BEV)',
+        f'Keys: 1-5 channel  b=board  d=seed  s=save  n/p  q=quit  (click ORIGIN/BEV)',
         flush=True,
     )
     try:
@@ -473,7 +476,7 @@ def run_topic(topic: str, state: HsvTuneState, config_path: Path) -> int:
     _init_ui(state)
     rclpy.init()
     node = HsvTuneNode()
-    print('Live mode. Keys: 1-4  b=board  d=seed  s=save  q=quit  (click ORIGIN/BEV)')
+    print('Live mode. Keys: 1-5  b=board  d=seed  s=save  q=quit  (click ORIGIN/BEV)')
     try:
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.02)
@@ -503,7 +506,7 @@ def _resolve_folder(args: argparse.Namespace) -> Path | None:
             # Prefer in if both exist; user can pass --folder for merged review.
             return in_dir if in_dir.is_dir() else out_dir
         if key not in FROM_BAG_DIRS:
-            raise SystemExit(f'Unknown --from-bag {args.from_bag!r}; use in|out|both')
+            raise SystemExit(f'Unknown --from-bag {args.from_bag!r}; use in|out|out_glare|both')
         folder = FROM_BAG_DIRS[key]
         if not folder.is_dir():
             raise SystemExit(f'Missing captures: {folder} (run capture_from_bag.py first)')
@@ -517,9 +520,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--folder', type=Path, default=None)
     parser.add_argument(
         '--from-bag',
-        choices=('in', 'out', 'both'),
+        choices=('in', 'out', 'out_glare', 'both'),
         default=None,
-        help='Shortcut: data/captures/from_bag/<in|out>',
+        help='Shortcut: data/captures/from_bag/<in|out|out_glare>',
     )
     parser.add_argument('--config', type=Path, default=default_config_path())
     parser.add_argument(
