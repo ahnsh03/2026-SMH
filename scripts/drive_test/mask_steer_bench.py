@@ -113,6 +113,112 @@ VARIANTS: dict[str, dict[str, Any]] = {
         'mask_curve_speed_scale': 0.72,
         'steering_rate_limit_per_sec': 4.0,
     },
+    'mask_p_hard_wide': {
+        # limo_sim_code_v2-style road COM (sim_v2) on road_clean.
+        'normal_tracker': 'mask_p',
+        'cruise_throttle': 0.32,
+        'curve_throttle': 0.20,
+        'mask_steer_law': 'sim_v2',
+        'mask_steer_k': 2.0,
+        'mask_steer_alpha': 0.40,
+        'mask_near_band_ratio': 0.85,
+        'mask_far_blend': 0.0,
+        'mask_curve_speed_scale': 0.80,
+        'mask_corridor_mode': 'off',
+        'mask_use_path_correction': False,
+        'mask_min_area_px': 100.0,
+        'mask_center_mode': 'area',
+        'mask_erode_px': 0,
+        'mask_lane_width_m': 0.35,
+        'mask_require_color_path': False,
+        'mask_occlusion_hold_frames': 5,
+        'steering_rate_limit_per_sec': 12.0,
+        'error_speed_steer_full': 0.55,
+        'error_speed_min_scale': 0.55,
+    },
+    'mask_p_sim_v2': {
+        'normal_tracker': 'mask_p',
+        'cruise_throttle': 0.32,
+        'curve_throttle': 0.20,
+        'mask_steer_law': 'sim_v2',
+        'mask_steer_k': 2.0,
+        'mask_steer_alpha': 0.40,
+        'mask_near_band_ratio': 0.85,
+        'mask_far_blend': 0.0,
+        'mask_curve_speed_scale': 0.80,
+        'mask_corridor_mode': 'off',
+        'mask_use_path_correction': False,
+        'mask_min_area_px': 100.0,
+        'mask_center_mode': 'area',
+        'mask_erode_px': 0,
+        'mask_require_color_path': False,
+        'mask_occlusion_hold_frames': 5,
+        'steering_rate_limit_per_sec': 12.0,
+    },
+    'mask_p_area_com': {
+        # Same soft gains, old area COM (corner-cut baseline).
+        'normal_tracker': 'mask_p',
+        'cruise_throttle': 0.26,
+        'curve_throttle': 0.16,
+        'mask_steer_k': 1.55,
+        'mask_steer_alpha': 0.28,
+        'mask_near_band_ratio': 0.80,
+        'mask_far_blend': 0.12,
+        'mask_curve_speed_scale': 0.55,
+        'mask_corridor_mode': 'hard',
+        'mask_corridor_half_width_m': 0.42,
+        'mask_use_path_correction': False,
+        'mask_min_area_px': 80.0,
+        'mask_center_mode': 'area',
+        'mask_erode_px': 0,
+        'steering_rate_limit_per_sec': 8.0,
+        'error_speed_steer_full': 0.55,
+        'error_speed_min_scale': 0.55,
+    },
+    'mask_p_dist_ridge': {
+        'normal_tracker': 'mask_p',
+        'cruise_throttle': 0.26,
+        'curve_throttle': 0.16,
+        'mask_steer_k': 1.55,
+        'mask_steer_alpha': 0.28,
+        'mask_near_band_ratio': 0.80,
+        'mask_far_blend': 0.12,
+        'mask_curve_speed_scale': 0.55,
+        'mask_corridor_mode': 'hard',
+        'mask_corridor_half_width_m': 0.42,
+        'mask_use_path_correction': False,
+        'mask_min_area_px': 80.0,
+        'mask_center_mode': 'dist_ridge',
+        'mask_erode_px': 2,
+        'steering_rate_limit_per_sec': 8.0,
+        'error_speed_steer_full': 0.55,
+        'error_speed_min_scale': 0.55,
+    },
+    'mask_p_legacy_stiff': {
+        # Previous stiff freeze (A/B baseline).
+        'normal_tracker': 'mask_p',
+        'cruise_throttle': 0.28,
+        'curve_throttle': 0.18,
+        'mask_steer_k': 2.0,
+        'mask_steer_alpha': 0.40,
+        'mask_near_band_ratio': 0.85,
+        'mask_corridor_mode': 'hard',
+        'mask_corridor_half_width_m': 0.38,
+        'mask_far_blend': 0.0,
+        'mask_use_path_correction': False,
+        'steering_rate_limit_per_sec': 12.0,
+    },
+    'stanley_soft': {
+        'normal_tracker': 'stanley',
+        'cruise_throttle': 0.28,
+        'curve_throttle': 0.18,
+        'stanley_k_cte': 1.20,
+        'stanley_k_yaw': 1.0,
+        'stanley_v_soft': 0.18,
+        'stanley_curvature_ff_gain': 0.35,
+        'stanley_steer_alpha': 0.35,
+        'steering_rate_limit_per_sec': 12.0,
+    },
 }
 
 
@@ -170,22 +276,43 @@ def summarize_rows(
     cte_abs_p95 = float(np.percentile(np.abs(ctes), 95)) if ctes.size else float('nan')
     steer_rms = float(np.sqrt(np.mean(steers**2)))
     steer_jerk = float(np.mean(jerks))
+    # Straight-ish samples: low |cte| and low |curve_ratio| → hunting metric.
+    straight_steers = []
+    for r in rows:
+        cte_v = r.get('cte_m')
+        cr = r.get('curve_ratio')
+        if cte_v is None or cr is None:
+            continue
+        if abs(float(cte_v)) < 0.06 and abs(float(cr)) < 0.25:
+            straight_steers.append(float(r['steering']))
+    if straight_steers:
+        ss = np.asarray(straight_steers, dtype=np.float64)
+        steer_rms_straight = float(np.sqrt(np.mean(ss**2)))
+    else:
+        steer_rms_straight = float('nan')
     fail_ratio = fail / len(rows)
     mask_valid_ratio = (mask_ok / len(rows)) if rows else 0.0
 
     # Higher score is better: reward distance, penalize fail/jerk/CTE.
+    straight_pen = (
+        steer_rms_straight if math.isfinite(steer_rms_straight) else steer_rms
+    )
     score = (
         3.0 * dist
         - 8.0 * fail_ratio
         - 2.5 * (cte_abs_mean if math.isfinite(cte_abs_mean) else 1.0)
         - 4.0 * steer_jerk
         - 1.0 * steer_rms
+        - 1.5 * straight_pen
         + 0.5 * mask_valid_ratio
     )
     return {
         'n_rows': len(rows),
         'distance_m': round(dist, 3),
         'steer_rms': round(steer_rms, 4),
+        'steer_rms_straight': (
+            None if not math.isfinite(steer_rms_straight) else round(steer_rms_straight, 4)
+        ),
         'steer_jerk_mean': round(steer_jerk, 4),
         'cte_abs_mean': None if not math.isfinite(cte_abs_mean) else round(cte_abs_mean, 4),
         'cte_abs_p95': None if not math.isfinite(cte_abs_p95) else round(cte_abs_p95, 4),
@@ -208,6 +335,7 @@ def run_live(
     camera_topic: str,
     fail_cte_m: float,
     settle_sec: float,
+    viz: str = 'control',
 ) -> dict[str, Any]:
     import rclpy
     from cv_bridge import CvBridge
@@ -216,11 +344,13 @@ def run_live(
     from rclpy.node import Node
     from sensor_msgs.msg import CompressedImage, Image
 
+    from viz_util import apply_lane_viz
+
     _teleport(segment)
     time.sleep(settle_sec)
 
     planner = build_planner(variant, route)
-    ld.VISUALIZE = False
+    apply_lane_viz(viz)
     ld._apply_detect_tune_from_yaml()
 
     rclpy.init()
@@ -361,6 +491,11 @@ def main() -> int:
     parser.add_argument('--settle', type=float, default=0.9)
     parser.add_argument('--fail-cte-m', type=float, default=0.22)
     parser.add_argument('--camera-topic', default='/camera/image/compressed')
+    parser.add_argument(
+        '--viz',
+        default='control',
+        help='Perception windows: off|control|on (default control = Lane drive)',
+    )
     args = parser.parse_args()
 
     segments = [s.strip() for s in args.segments.split(',') if s.strip()]
@@ -382,6 +517,7 @@ def main() -> int:
         'route': args.route,
         'duration_sec': args.duration,
         'repeat': args.repeat,
+        'viz': args.viz,
         'fail_cte_m': args.fail_cte_m,
         'note': 'inference_node / sim-auto must be OFF; this script publishes /control',
     }
@@ -404,6 +540,7 @@ def main() -> int:
                         camera_topic=args.camera_topic,
                         fail_cte_m=args.fail_cte_m,
                         settle_sec=args.settle,
+                        viz=args.viz,
                     )
                 except Exception as exc:  # noqa: BLE001 — log and continue sweep
                     summary = {

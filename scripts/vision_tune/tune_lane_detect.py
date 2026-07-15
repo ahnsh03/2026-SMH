@@ -390,6 +390,9 @@ def _import_lane_detection():
                 '  source /opt/ros/humble/setup.bash && source install/setup.bash\n'
                 f'Original: {exc}'
             ) from exc
+    # This tuner is polyfit/fork reference only — never use blob here.
+    if hasattr(ld, 'set_perception_backend'):
+        ld.set_perception_backend('legacy')
     return ld
 
 

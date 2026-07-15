@@ -21,7 +21,7 @@ from inference.types import LaneDetections, LaneMarking, LaneResult
 
 # LIMO Gazebo Ackermann (sim SSOT). Do NOT copy blindly to D-Racer.
 _SIM_WHEELBASE_M = 0.24
-_SIM_MAX_STEER_RAD = 0.5236  # ±30°
+_SIM_MAX_STEER_RAD = 0.5574  # ±atan(0.24/0.385) — team R_min on LIMO Gazebo
 
 
 def _normalize_follow_color(color: str | None) -> str:

@@ -45,20 +45,24 @@ Pure Pursuit / mask_p + mission state → ControlCommand → /control
 
 | `tracker.normal` | 의미 |
 |------------------|------|
-| `pp` | 색 센터라인 Pure Pursuit (기본 대조용) |
-| `mask_p` | Metric IPM `drivable_area` COM + P + EMA + rate (limo_sim 스타일) |
+| `mask_p` | **실차 1순위.** ego-blob COM (`sim_v2`) + `track_state` — **corridor 기본 off** (T1–T2) |
+| `pp` / `hybrid` / `stanley` | 실험·A/B — flip 전 [`control-hybrid-strategy.md`](./control-hybrid-strategy.md) |
 
-**`mask_p` 가드 (OUT/IN 끌어당김 방지)** — `config/main_planner.yaml` `mask_pursuit`:
+**역할 분리 (요지):** NORMAL = **mask 주 / paint 보조**. 갈림·원형 = **paint·갈래 PP 주 / mask 끔**.  
+OUT arm = **표지 ∧ capture** · IN = moment **우 유지→좌 탈출**. 상세·실차 T0–T7:  
+[`control-hybrid-strategy.md`](./control-hybrid-strategy.md) · 보드: [`board-freeze-control.md`](./board-freeze-control.md).
 
-| 키 | 역할 |
-|----|------|
-| `corridor_mode` | `off` / `hard`(색 센터라인 코리도 AND) / `soft`(거리 가중 COM) |
-| `corridor_half_width_m` | hard 코리도 반폭 (랩 승자 ~0.38) |
-| `fork_force_pp` | `fork_active`·branch≥2면 COM 끄고 색 경로 PP |
-| `require_color_path` | hard/soft일 때 색 경로 없으면 mask 실패 → PP fallback |
+**OUT NORMAL:** mask_p + 표지∧capture 후 fork는 **branch PP**.  
+속도: 보드에서는 cruise **0.18–0.22**부터 ([`main_planner.real_car.yaml`](../config/main_planner.real_car.yaml)).
 
-벤치: `scripts/drive_test/mask_policy_bench.py`, `course_mode_bench.py`  
-([drive_test/README.md](../scripts/drive_test/README.md)).
+갈림 L/R 확인:
+
+```bash
+PYTHONUNBUFFERED=1 python3 scripts/drive_test/fork_spawn_unit.py \
+  --mode live --scenario all --duration 8 --viz control --drive
+```
+
+창: `Lane drive`, `Fork select`. 로그: `data/captures/fork_drive_logs/<stamp>/`.
 
 ## 코스 선택과 설정
 
@@ -143,8 +147,10 @@ AND (branch 이벤트 2회 OR 가로선 이벤트 2회)
 
 ## Pure Pursuit
 
-인지가 출력하는 Metric IPM 점열은 `(x 전방, y 왼쪽)` 미터 단위다. 현재
-카메라 원점에서 rear axle까지의 `0.265 m`를 planner 경계에서 한 번만 더해
+인지가 출력하는 Metric IPM 점열은 `(x 전방, y 왼쪽)` 미터 단위이고, **원점은 카메라**다.  
+후차축→카메라 종거리 \(d_{\mathrm{rc}} = L + d_{\mathrm{cf}}\)  
+(시뮬 **0.265 m**, 실차 **0.200 m** — [vehicle-geometry.md §4.1.1](./vehicle-geometry.md))을  
+`path.perception_to_rear_axle_x_m`로 planner 경계에서 한 번만 더해  
 PP, heading, CTE가 모두 같은 rear-axle 좌표를 사용한다. 경로 점 하나를
 고르는 대신 경로 선분과 차량 중심 LD 원의 교점을 계산하므로 센터라인 점
 개수가 바뀌어도 `target_distance`가 현재 LD에 유지된다.
@@ -161,6 +167,16 @@ D-Racer 규약은 음수 조향이 왼쪽, 양수 조향이 오른쪽이다. 최
 ```text
 raw_steering = pp_steering + heading_steering + cte_steering
 ```
+
+### NORMAL tracker
+
+- `mask_p` (**실차 우선**): ego-blob COM + `track_state` — corridor는 T1–T2에서 **off** ([`control-hybrid-strategy.md`](./control-hybrid-strategy.md))
+- `stanley` (A/B): 색 센터라인 Stanley-lite; fork 시 branch PP. **bench 전 flip 금지**
+- `hybrid` / `pp`: 실험용
+
+`track_state`는 COM/경로 근거리 y를 시계열로 고정하고, `|y|`가 half-width를
+크게 넘으면 가상 센터(single-rail prior)로 살짝 끌어온다. 실차 지연 보정이
+필요하면 `delay_pred_sec`만 켠다 (`config/main_planner.real_car.yaml`).
 
 조향 포화와 초당 변화율 제한을 적용하므로 카메라 FPS가 바뀌어도 반전 속도가
 유지된다. 경로가 잠깐 사라지면 직전 조향을 유지하고, 계속 유실되면 설정된

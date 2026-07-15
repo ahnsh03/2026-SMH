@@ -18,6 +18,7 @@ from inference.pipeline import (  # noqa: E402
     MainPlanner,
     PlannerConfig,
     RisingEventCounter,
+    load_planner_config,
 )
 from inference.types import (  # noqa: E402
     ArucoResult,
@@ -43,10 +44,14 @@ def test_mask_com_pursuit_steers_toward_road_center():
     planner = MainPlanner(
         PlannerConfig(
             normal_tracker='mask_p',
+            mask_steer_law='sim_v2',
             mask_steer_k=2.0,
             mask_steer_alpha=1.0,
             mask_near_band_ratio=1.0,
+            mask_center_mode='area',
+            mask_corridor_mode='off',
             mask_min_area_px=10.0,
+            mask_erode_px=0,
             steering_rate_limit_per_sec=100.0,
             max_steering_command=1.0,
         )
@@ -138,6 +143,224 @@ def test_mask_fork_force_pp_uses_color_decision():
     )
 
 
+def test_effective_corridor_near_fork_out_only_when_armed():
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.OUT,
+            mask_corridor_mode='off',
+            mask_corridor_near_fork=True,
+        )
+    )
+    planner.state = DrivingState.NORMAL
+    lane = SimpleNamespace(fork_active=False, branches=())
+    planner._fork_perception_enabled = True
+    mode, require_path = planner._effective_mask_corridor_mode(lane)
+    assert mode == 'hard'
+    assert require_path is True
+
+    planner._fork_perception_enabled = False
+    mode_off, _ = planner._effective_mask_corridor_mode(lane)
+    assert mode_off == 'off'
+
+    planner.config = replace(planner.config, route_mode=RouteMode.IN)
+    planner._fork_perception_enabled = True
+    mode_in, _ = planner._effective_mask_corridor_mode(lane)
+    assert mode_in == 'off'
+
+
+def test_roundabout_circle_uses_paint_pp_not_mask():
+    """NORMAL=mask_p but CIRCLE+circle_tracker=pp follows yellow centerline."""
+    import cv2
+    from inference.modules import lane_detection as ld
+
+    yellow = np.array(
+        [[0.3, 0.05], [0.55, 0.12], [0.8, 0.22], [1.05, 0.35], [1.3, 0.48]],
+        dtype=np.float32,
+    )
+    h, w = ld.BEV_HEIGHT, ld.BEV_WIDTH
+    # Bias mask hard left so mask COM would differ from yellow PP if used.
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.rectangle(mask, (2, h // 4), (w // 4, h - 1), 255, -1)
+    lane = SimpleNamespace(
+        white_centerline=np.empty((0, 2), dtype=np.float32),
+        yellow_centerline=yellow,
+        white_confidence=0.0,
+        yellow_confidence=0.9,
+        white_visible=False,
+        yellow_visible=True,
+        fork_active=False,
+        yellow_crossing_line=False,
+        branches=(),
+        drivable_area=mask,
+        meters_per_pixel=float(ld.METERS_PER_PIXEL),
+        x_forward_max=2.0,
+        lane_policy='explore',
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.IN,
+            prefer_yellow=True,
+            normal_tracker='mask_p',
+            circle_tracker='pp',
+            yellow_valid_on_frames=1,
+            min_points=5,
+            mask_require_color_path=False,
+            steering_rate_limit_per_sec=100.0,
+            stop_on_aruco=False,
+        )
+    )
+    planner.state = DrivingState.ROUNDABOUT_CIRCLE
+    planner._roundabout_started_at = 0.0
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        out = planner.step(frame, now_sec=1.0)
+    assert out.path_source is PathSource.YELLOW_CENTERLINE
+    assert out.decision == 'roundabout_circle_lane_pp'
+    assert 'mask' not in out.decision
+
+
+def test_smoothstep_and_hybrid_prefers_pp_on_straight():
+    """Small lateral error + low curvature → hybrid weight near 0 (PP path)."""
+    import cv2
+    from inference.modules import lane_detection as ld
+
+    assert MainPlanner._smoothstep(0.0, 0.08, 0.35) == 0.0
+    assert MainPlanner._smoothstep(0.5, 0.08, 0.35) == 1.0
+    mid = MainPlanner._smoothstep(0.215, 0.08, 0.35)
+    assert 0.4 < mid < 0.6
+
+    h, w = ld.BEV_HEIGHT, ld.BEV_WIDTH
+    mask = np.zeros((h, w), dtype=np.uint8)
+    # Centered road stripe.
+    cv2.rectangle(mask, (w // 2 - 20, h // 3), (w // 2 + 20, h - 1), 255, -1)
+    path = np.array(
+        [[0.5, 0.0], [0.8, 0.0], [1.1, 0.0], [1.4, 0.0], [1.6, 0.0]],
+        dtype=np.float32,
+    )
+    lane = type(
+        'L',
+        (),
+        {
+            'drivable_area': mask,
+            'meters_per_pixel': float(ld.METERS_PER_PIXEL),
+            'x_forward_max': 2.0,
+            'fork_active': False,
+            'branches': (),
+        },
+    )()
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='hybrid',
+            mask_steer_k=1.55,
+            mask_steer_alpha=1.0,
+            mask_near_band_ratio=0.55,
+            mask_far_blend=0.28,
+            mask_use_path_correction=False,
+            mask_corridor_mode='hard',
+            mask_corridor_half_width_m=0.38,
+            mask_require_color_path=True,
+            mask_error_deadband=0.04,
+            mask_blend_error_lo=0.08,
+            mask_blend_error_hi=0.35,
+            mask_blend_curvature_lo=0.40,
+            mask_blend_curvature_hi=1.20,
+            min_points=3,
+            steering_rate_limit_per_sec=100.0,
+            max_steering_command=1.0,
+            perception_to_rear_axle_x_m=0.265,
+        )
+    )
+    result = planner._hybrid_pursuit(lane, path, dt_sec=0.1)
+    assert result.valid
+    assert float(planner._last_mask_debug.get('hybrid_w', 1.0)) < 0.25
+    assert planner._last_mask_debug.get('hybrid_mode') == 'pp'
+
+
+def test_hybrid_raises_mask_weight_far_blend_scales():
+    """Off-center mask with a mild path bend → hybrid_w up, far_blend gated."""
+    import cv2
+    from inference.modules import lane_detection as ld
+
+    h, w = ld.BEV_HEIGHT, ld.BEV_WIDTH
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.rectangle(mask, (5, h // 4), (w // 3, h - 1), 255, -1)
+    path = np.array(
+        [[0.5, 0.0], [0.8, 0.05], [1.1, 0.12], [1.4, 0.22], [1.6, 0.30]],
+        dtype=np.float32,
+    )
+    for x, y in path:
+        u, v = ld.vehicle_xy_to_bev_uv(float(x), float(y))
+        cv2.circle(mask, (int(u), int(v)), 10, 255, -1)
+    lane = type(
+        'L',
+        (),
+        {
+            'drivable_area': mask,
+            'meters_per_pixel': float(ld.METERS_PER_PIXEL),
+            'x_forward_max': 2.0,
+            'fork_active': False,
+            'branches': (),
+        },
+    )()
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='hybrid',
+            mask_steer_k=1.55,
+            mask_steer_alpha=1.0,
+            mask_near_band_ratio=0.7,
+            mask_far_blend=0.28,
+            mask_use_path_correction=False,
+            mask_corridor_mode='off',
+            mask_require_color_path=False,
+            mask_error_deadband=0.0,
+            mask_blend_error_lo=0.05,
+            mask_blend_error_hi=0.25,
+            mask_blend_curvature_lo=0.15,
+            mask_blend_curvature_hi=0.80,
+            min_points=3,
+            steering_rate_limit_per_sec=100.0,
+            max_steering_command=1.0,
+            perception_to_rear_axle_x_m=0.265,
+        )
+    )
+    result = planner._hybrid_pursuit(lane, path, dt_sec=0.1)
+    assert result.valid
+    blend_w = float(planner._last_mask_debug.get('hybrid_w', 0.0))
+    assert blend_w > 0.3
+    far = float(planner._last_mask_debug.get('hybrid_far_blend', -1.0))
+    assert abs(far - 0.28 * blend_w) < 1e-3
+
+
+def test_hybrid_forkish_uses_pp_only():
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='hybrid',
+            mask_fork_force_pp=True,
+            prefer_yellow=False,
+            route_mode=RouteMode.OUT,
+            min_points=2,
+            steering_rate_limit_per_sec=100.0,
+        )
+    )
+    assert planner._forkish_for_mask(
+        SimpleNamespace(fork_active=True, branches=(object(), object()))
+    )
+    lane = SimpleNamespace(fork_active=True, branches=(object(), object()))
+    out = planner._track_normal_path(
+        lane,
+        np.array([[0.5, 0.0], [1.0, 0.0], [1.5, 0.0]], dtype=np.float32),
+        0.1,
+    )
+    # Fork → PP path (may be invalid if min_points unmet after frame shift; just ensure no crash)
+    assert out is not None
+
+
 def test_out_fork_gated_without_sign():
     """OUT normal: fork visible but no turn sign → do not enter FORK_TURN."""
     path = np.array(
@@ -162,6 +385,7 @@ def test_out_fork_gated_without_sign():
         PlannerConfig(
             route_mode=RouteMode.OUT,
             out_fork_require_sign=True,
+            out_fork_require_capture=True,
             out_fork_sign_hold_sec=3.0,
             branch_on_frames=1,
             branch_off_frames=1,
@@ -180,6 +404,54 @@ def test_out_fork_gated_without_sign():
         out = planner.step(frame, now_sec=0.0)
     assert out.state is DrivingState.NORMAL
     assert out.debug['fork_perception'] is False
+
+
+def test_aruco_detected_but_stop_on_aruco_false_keeps_lane_follow():
+    """ArUco may latch should_stop; with stop_on_aruco=false keep driving."""
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=np.empty((0, 2), dtype=np.float32),
+        white_confidence=0.9,
+        yellow_confidence=0.0,
+        white_visible=True,
+        yellow_visible=False,
+        fork_active=False,
+        yellow_crossing_line=False,
+        branches=(),
+        drivable_area=np.ones((40, 40), dtype=np.uint8) * 255,
+        meters_per_pixel=0.01,
+        x_forward_max=1.0,
+    )
+    aruco = ArucoResult(detected=True, should_stop=True, marker_id=3)
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.IN,
+            stop_on_aruco=False,
+            normal_tracker='mask_p',
+            mask_steer_law='sim_v2',
+            mask_corridor_mode='off',
+            mask_require_color_path=False,
+            mask_min_area_px=10.0,
+            min_points=5,
+        )
+    )
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=aruco
+    ):
+        out = planner.step(frame, now_sec=1.0)
+    assert out.decision != 'aruco_stop'
+    assert out.debug.get('aruco_should_stop') is True
+    assert out.debug.get('aruco_stop') is False
+    assert abs(float(out.command.throttle)) > 1e-3
 
 
 def test_forced_turn_does_not_arm_out_fork_by_default():
@@ -206,6 +478,7 @@ def test_forced_turn_does_not_arm_out_fork_by_default():
         PlannerConfig(
             route_mode=RouteMode.OUT,
             out_fork_require_sign=True,
+            out_fork_require_capture=True,
             out_fork_forced_turn_arms=False,
             out_fork_sign_hold_sec=3.0,
             branch_on_frames=1,
@@ -227,8 +500,8 @@ def test_forced_turn_does_not_arm_out_fork_by_default():
     assert out.state is DrivingState.NORMAL
 
 
-def test_out_fork_arms_after_sign_hold():
-    """OUT: turn sign arms fork window; fork then enters FORK_TURN."""
+def test_out_fork_arms_after_sign_and_capture():
+    """OUT: turn sign AND out_fork_capture arm fork window → FORK_TURN."""
     path = np.array(
         [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
         dtype=np.float32,
@@ -242,6 +515,8 @@ def test_out_fork_arms_after_sign_hold():
         yellow_visible=False,
         fork_active=False,
         yellow_crossing_line=False,
+        out_fork_capture=False,
+        in_circle_fork_moment=False,
         branches=(
             SimpleNamespace(points=path, confidence=0.9, lateral_rank=0),
             SimpleNamespace(points=path, confidence=0.9, lateral_rank=1),
@@ -251,6 +526,7 @@ def test_out_fork_arms_after_sign_hold():
         PlannerConfig(
             route_mode=RouteMode.OUT,
             out_fork_require_sign=True,
+            out_fork_require_capture=True,
             out_fork_sign_hold_sec=3.0,
             branch_on_frames=1,
             branch_off_frames=1,
@@ -267,10 +543,18 @@ def test_out_fork_arms_after_sign_hold():
     ), patch(
         'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
     ):
+        # Sign alone is not enough.
         first = planner.step(frame, now_sec=0.0)
-        assert first.debug['fork_perception'] is True
+        assert first.debug['fork_perception'] is False
+        # Next frame: capture true → latch → arm on following step.
+        lane.out_fork_capture = True
+        primed = planner.step(frame, now_sec=0.05)
+        assert primed.debug['out_fork_capture'] is True
+        # Latch now set; same sign still held → perception arms.
+        armed = planner.step(frame, now_sec=0.1)
+        assert armed.debug['fork_perception'] is True
         lane.fork_active = True
-        second = planner.step(frame, now_sec=0.1)
+        second = planner.step(frame, now_sec=0.2)
     assert second.state is DrivingState.FORK_TURN
     assert second.debug['desired_turn'] == 'left'
 
@@ -549,12 +833,14 @@ def test_curvature_reduces_lookahead_and_throttle():
     assert command.throttle < planner.config.cruise_throttle
 
 
-def test_in_course_exits_on_second_debounced_branch():
+def test_in_course_exits_on_second_moment_pass():
+    """IN: moment rising ×1 = keep(rank1); ×2 = exit(rank0)."""
     path = np.array(
         [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
         dtype=np.float32,
     )
-    branch = SimpleNamespace(points=path, confidence=0.9)
+    branch0 = SimpleNamespace(points=path, confidence=0.9, lateral_rank=0)
+    branch1 = SimpleNamespace(points=path, confidence=0.9, lateral_rank=1)
     lane = SimpleNamespace(
         white_centerline=path,
         yellow_centerline=path,
@@ -564,7 +850,9 @@ def test_in_course_exits_on_second_debounced_branch():
         yellow_visible=True,
         fork_active=False,
         yellow_crossing_line=False,
-        branches=(branch,),
+        out_fork_capture=False,
+        in_circle_fork_moment=False,
+        branches=(branch0,),
     )
     config = PlannerConfig(
         route_mode=RouteMode.IN,
@@ -572,7 +860,10 @@ def test_in_course_exits_on_second_debounced_branch():
         yellow_valid_on_frames=1,
         min_points=5,
         min_lap_time_sec=1.0,
-        branch_required_events=2,
+        in_exit_use_moment=True,
+        in_keep_passes=1,
+        in_keep_branch_rank=1,
+        exit_branch_rank=0,
         branch_on_frames=1,
         branch_off_frames=1,
         crossing_on_frames=1,
@@ -588,18 +879,21 @@ def test_in_course_exits_on_second_debounced_branch():
     ), patch(
         'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
     ):
-        planner.step(frame, now_sec=0.0)  # Enter roundabout and reset counters.
+        planner.step(frame, now_sec=0.0)  # Enter roundabout.
+        # Pass 1: keep right.
+        lane.in_circle_fork_moment = True
         lane.fork_active = True
-        lane.branches = (branch, branch)
+        lane.branches = (branch0, branch1)
         planner.step(frame, now_sec=0.1)
-        lane.fork_active = False
-        lane.branches = (branch,)
+        assert planner._in_fork_pass_count == 1
+        assert planner._fork_selected_rank == 1
+        lane.in_circle_fork_moment = False
         planner.step(frame, now_sec=0.2)
-        lane.fork_active = True
-        lane.branches = (branch, branch)
+        # Pass 2: exit left (≥ min_lap_time).
+        lane.in_circle_fork_moment = True
         output = planner.step(frame, now_sec=1.2)
 
-    assert planner.branch_counter.events == 2
+    assert planner._in_fork_pass_count == 2
     assert output.state is DrivingState.ROUNDABOUT_EXIT
     assert output.decision == 'roundabout_exit_rank0'
 
@@ -669,6 +963,7 @@ def test_forced_turn_right_stays_in_roundabout_circle():
             yellow_valid_on_frames=1,
             min_points=5,
             min_lap_time_sec=0.5,
+            in_exit_use_moment=False,
             branch_required_events=1,
             branch_on_frames=1,
             branch_off_frames=1,
@@ -723,6 +1018,7 @@ def test_forced_turn_left_arms_roundabout_exit():
             yellow_valid_on_frames=1,
             min_points=5,
             min_lap_time_sec=0.5,
+            in_exit_use_moment=False,
             branch_required_events=1,
             branch_on_frames=1,
             branch_off_frames=1,
@@ -825,14 +1121,24 @@ def test_sign_is_confirmed_then_locked_during_fork():
         yellow_visible=False,
         fork_active=False,
         yellow_crossing_line=False,
+        out_fork_capture=True,
+        in_circle_fork_moment=False,
         branches=(
             SimpleNamespace(points=left_path, confidence=0.9),
             SimpleNamespace(points=right_path, confidence=0.9),
         ),
     )
     planner = MainPlanner(
-        PlannerConfig(min_points=5, sign_confirm_frames=2, branch_on_frames=1)
+        PlannerConfig(
+            route_mode=RouteMode.OUT,
+            min_points=5,
+            sign_confirm_frames=2,
+            branch_on_frames=1,
+            out_fork_require_sign=True,
+            out_fork_require_capture=True,
+        )
     )
+    planner._out_capture_latched = True
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(
@@ -905,3 +1211,217 @@ def test_fork_uses_cached_branch_during_short_detection_flicker():
     assert output.path_source is PathSource.LEFT_BRANCH
     assert output.decision == 'out_fork_cached_branch'
     assert output.debug['selected_branch_rank'] == 0
+
+
+def test_ema_with_jump_rejects_spike():
+    filtered, jumped = MainPlanner._ema_with_jump(0.0, 0.8, alpha=0.5, max_jump=0.3)
+    assert jumped
+    assert abs(filtered - 0.0) < 1e-6
+    filtered2, jumped2 = MainPlanner._ema_with_jump(0.0, 0.1, alpha=0.5, max_jump=0.3)
+    assert not jumped2
+    assert 0.04 < filtered2 < 0.06
+
+
+def test_harden_path_holds_lateral_jump():
+    planner = MainPlanner(
+        PlannerConfig(
+            track_enable_path_hold=True,
+            track_path_y_alpha=0.5,
+            track_path_y_max_jump_m=0.08,
+            track_half_width_m=0.175,
+            perception_to_rear_axle_x_m=0.0,
+        )
+    )
+    path0 = np.array([[0.4, 0.02], [0.8, 0.02], [1.2, 0.02]], dtype=np.float32)
+    path1 = path0.copy()
+    path1[:, 1] = 0.35  # L/R-style flip spike
+    out0 = planner._harden_color_path(path0)
+    out1 = planner._harden_color_path(path1)
+    assert abs(float(np.mean(out0[:, 1])) - 0.02) < 0.05
+    # Jump rejected → stay near prior center, not at +0.35.
+    assert abs(float(np.mean(out1[:, 1]))) < 0.15
+
+
+def test_centerline_half_width_virtual_when_one_rail_missing():
+    from inference.modules import lane_detection as ld
+
+    left = np.full(20, np.nan, dtype=np.float32)
+    right = np.full(20, np.nan, dtype=np.float32)
+    left[5:15] = 40.0
+    center = ld.centerline_from_boundaries(
+        left, right, synthesize_missing=True, lane_width_m=0.35
+    )
+    half_px = 0.5 * 0.35 / ld.METERS_PER_PIXEL
+    assert abs(float(center[10]) - (40.0 + half_px)) < 1e-3
+
+
+def test_stanley_steers_left_for_path_left_cte():
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='stanley',
+            min_points=3,
+            stanley_k_cte=2.0,
+            stanley_k_yaw=0.5,
+            stanley_steer_alpha=1.0,
+            stanley_curvature_ff_gain=0.0,
+            steering_rate_limit_per_sec=100.0,
+            cte_deadband_m=0.0,
+            perception_to_rear_axle_x_m=0.0,
+            track_enable_path_hold=False,
+        )
+    )
+    # Path to the left of vehicle → need left (negative) steer.
+    path = np.array(
+        [[0.3, 0.15], [0.6, 0.15], [0.9, 0.15], [1.2, 0.15], [1.5, 0.15]],
+        dtype=np.float32,
+    )
+    result = planner._stanley_pursuit(path, dt_sec=0.1)
+    assert result.valid
+    assert result.steering < 0.0
+
+
+def test_stanley_fork_force_uses_pp_path():
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='stanley',
+            mask_fork_force_pp=True,
+            min_points=3,
+            steering_rate_limit_per_sec=100.0,
+        )
+    )
+    lane = SimpleNamespace(fork_active=True, branches=(object(), object()))
+    assert planner._forkish_for_mask(lane)
+    path = np.array(
+        [[0.3, 0.0], [0.6, 0.0], [0.9, 0.0], [1.2, 0.0], [1.5, 0.0]],
+        dtype=np.float32,
+    )
+    out = planner._track_normal_path(lane, path, 0.1)
+    assert out.valid
+    # Fork guard must not call stanley (no stanley_* debug from this path).
+    assert 'stanley_cte_m' not in (planner._last_mask_debug or {})
+
+
+def test_row_mid_rebuilds_center_when_left_fov_clipped():
+    """S-curve single-side: left FOV clip must not use truncated blob mid."""
+    import cv2
+    from inference.modules import lane_detection as ld
+
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='mask_p',
+            mask_center_mode='row_mid',
+            mask_erode_px=0,
+            mask_lane_width_m=0.35,
+            mask_steer_k=1.0,
+            mask_steer_alpha=1.0,
+            mask_near_band_ratio=1.0,
+            mask_corridor_mode='off',
+            mask_require_color_path=False,
+            mask_min_area_px=20.0,
+            mask_far_blend=0.0,
+            steering_rate_limit_per_sec=100.0,
+        )
+    )
+    h, w = ld.BEV_HEIGHT, ld.BEV_WIDTH
+    mpp = float(ld.METERS_PER_PIXEL)
+    expected_w = 0.35 / mpp
+    half = 0.5 * expected_w
+    # Only the right ~half of the lane remains (genuinely narrow + left FOV clip).
+    true_right = int(round(half * 0.95))
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.rectangle(mask, (0, h // 4), (max(3, true_right), h - 1), 255, -1)
+    lane = type(
+        'L',
+        (),
+        {
+            'drivable_area': mask,
+            'meters_per_pixel': mpp,
+            'x_forward_max': 1.5,
+        },
+    )()
+    result = planner._mask_com_pursuit(lane, dt_sec=0.1)
+    assert result.valid
+    cx = float(planner._last_mask_debug['mask_com_cx'])
+    naive = 0.5 * true_right
+    rebuilt = true_right - half
+    # Temporal blend pulls toward prior after first frame; use second step.
+    result2 = planner._mask_com_pursuit(lane, dt_sec=0.1)
+    cx2 = float(planner._last_mask_debug['mask_com_cx'])
+    assert planner._last_mask_debug.get('mask_single_side_rows', 0) > 0
+    assert abs(cx2 - rebuilt) < abs(naive - rebuilt) + 0.25 * expected_w
+    assert abs(cx2 - naive) > 1.0 or abs(cx2 - rebuilt) < abs(cx - naive)
+
+def test_mask_occlusion_hold_before_pp_fallback():
+    """Empty mask should reuse last COM steer for a few frames, not fail open."""
+    import cv2
+    from inference.modules import lane_detection as ld
+
+    planner = MainPlanner(
+        PlannerConfig(
+            normal_tracker='mask_p',
+            mask_center_mode='row_mid',
+            mask_erode_px=0,
+            mask_lane_width_m=0.35,
+            mask_steer_k=1.2,
+            mask_steer_alpha=1.0,
+            mask_near_band_ratio=1.0,
+            mask_corridor_mode='off',
+            mask_require_color_path=False,
+            mask_fork_force_pp=False,
+            mask_min_area_px=20.0,
+            mask_far_blend=0.0,
+            mask_occlusion_hold_frames=5,
+            steering_rate_limit_per_sec=100.0,
+        )
+    )
+    h, w = ld.BEV_HEIGHT, ld.BEV_WIDTH
+    mpp = float(ld.METERS_PER_PIXEL)
+    good = np.zeros((h, w), dtype=np.uint8)
+    cv2.rectangle(good, (w // 2 - 8, h // 3), (w // 2 + 8, h - 1), 255, -1)
+    empty = np.zeros((h, w), dtype=np.uint8)
+    path = np.array(
+        [[0.4, 0.25], [0.7, 0.35], [1.0, 0.45], [1.3, 0.55]],
+        dtype=np.float32,
+    )
+    lane_good = type(
+        'L',
+        (),
+        {
+            'drivable_area': good,
+            'meters_per_pixel': mpp,
+            'x_forward_max': 1.5,
+            'fork_active': False,
+            'branches': (),
+        },
+    )()
+    p1 = planner._mask_com_pursuit(lane_good, dt_sec=0.1)
+    assert p1.valid
+    seed_steer = float(planner._steer_f)
+    lane_empty = type(
+        'L',
+        (),
+        {
+            'drivable_area': empty,
+            'meters_per_pixel': mpp,
+            'x_forward_max': 1.5,
+            'fork_active': False,
+            'branches': (),
+        },
+    )()
+    out = planner._track_normal_path(lane_empty, path, 0.1)
+    assert out.valid
+    assert planner._last_mask_debug.get('mask_occlusion_hold') is True
+    assert abs(float(out.steering) - seed_steer) < 0.25
+
+
+def test_load_planner_config_has_track_and_stanley():
+    cfg = load_planner_config(route_mode='out')
+    assert cfg.track_half_width_m > 0.0
+    assert cfg.stanley_k_cte > 0.0
+    assert cfg.normal_tracker == 'stanley'
+    assert cfg.stanley_k_cte == 1.0
+    assert cfg.stanley_k_yaw == 1.2
+    assert cfg.stanley_steer_alpha == 0.25
+    assert cfg.circle_tracker == 'pp'
+    assert cfg.roundabout_lookahead_m == 0.45
+    assert cfg.steering_rate_limit_per_sec == 8.0

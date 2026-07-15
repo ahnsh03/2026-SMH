@@ -2,7 +2,8 @@
 # route.mode may also be overridden at launch: route_mode:=in|out
 
 route:
-  mode: OUT
+  # OUT forks/S-curve soft-corridor pack was unstable; IN + simple mask COM for now.
+  mode: IN
   # OUT/IN fork layers: 0 = left, 1 = right (direction sign selects).
   default_out_branch_rank: 0
   # Confirm the same direction before latching it. Once a fork starts, its
@@ -13,102 +14,142 @@ route:
   # normal driving is white centerline / mask only.
   out_fork_require_sign: true
   out_fork_sign_hold_sec: 3.0
+  # Also require tip+stretch capture (score_out_fork_capture) with the sign.
+  out_fork_require_capture: true
   # Keep false: forced_turn:= only chooses L/R rank, does not arm forks all lap.
-  # Set true only for sign-less fork unit tests.
+  # Set true only for sign-less fork unit tests / rail review.
+  # Production: camera signs (or require_sign=false) arm forks — keeps NORMAL white-only stable.
   out_fork_forced_turn_arms: false
   # Keep the last selected branch through short fork-detection flicker.
   fork_path_hold_frames: 3
   # Prevent the same junction from immediately retriggering after exit.
   fork_reentry_cooldown_sec: 2.0
-  # prefer_yellow: omit for code defaults.
-  # OUT — always white-only for detect/_color_path (YAML cannot enable yellow).
-  # IN  — default True: when yellow is available prefer it; else white
-  #       (approach → roundabout yellow → merge white). Not a yellow ladder.
+  # IN: yellow-first for roundabout paint. OUT forces white in code.
+  prefer_yellow: true
 pure_pursuit:
-  # Adaptive LD: long on straights, shorter on curves for earlier turn-in.
+  # Trusted geometry (R_min SSOT) — soft gains for low-speed lap follow.
   lookahead_m: 0.70
-  curve_lookahead_m: 0.38
+  curve_lookahead_m: 0.50
   curvature_full_scale: 0.8
   lookahead_shrink_rate_m: 0.20
   lookahead_grow_rate_m: 0.08
   curvature_near_m: 0.30
   curvature_mid_m: 0.60
   curvature_far_m: 0.90
-  # Camera blind zone: locally fit the nearest path and extend it back to the
-  # front axle. This keeps short curve/roundabout LD geometrically meaningful.
   near_path_fit_span_m: 0.30
   near_path_extrapolation_max_m: 0.35
   wheelbase_m: 0.24
-  max_steer_angle_rad: 0.5236
+  # Sim plant is LIMO L=0.24, NOT D-Racer L=0.175. Match shared R_min=0.385:
+  # δ_sim=atan(0.24/0.385)≈0.5574. Real car overlay: 0.175 / 0.4266
+  # (main_planner.real_car.yaml). Do NOT put 0.4266 on Gazebo — turns go soft.
+  max_steer_angle_rad: 0.5574
   max_steering_command: 1.0
-  # Time-based limits: behavior no longer changes with camera FPS.
-  # Faster reversal reduces entry/exit lag while remaining time-based.
-  steering_rate_limit_per_sec: 12.0
+  steering_rate_limit_per_sec: 8.0
   path_lost_steering_return_rate_per_sec: 4.0
   nominal_control_dt_sec: 0.10
-  # PP handles curve feed-forward; this bounded Stanley-shaped term restores
-  # the front axle toward the closest centerline segment.
   cte_gain: 0.10
   cte_softening_m: 0.20
   cte_deadband_m: 0.02
   max_cte_steering: 0.22
-  # Relative path heading in the same rear-axle frame; no IMU is required.
   heading_gain: 0.30
   heading_preview_m: 0.45
   heading_sample_span_m: 0.15
   max_heading_steering: 0.25
+  steer_command_deadband: 0.03
 
 speed:
-  # Trusted out-lap 20260714_120800: mask_p t1 lap_ok @ cruise≈0.33 (steer joint 4 rad/s).
-  cruise_throttle: 0.33
-  curve_throttle: 0.18
-  curve_steering_threshold: 0.50  # legacy; curvature ratio is authoritative
+  # Slow + robust IN finish (LIMO plant ≠ D-Racer — trade speed for continuity).
+  cruise_throttle: 0.22
+  curve_throttle: 0.14
+  curve_steering_threshold: 0.28
   default_throttle: 0.0
+  error_speed_cte_full_m: 0.20
+  error_speed_steer_full: 0.50
+  error_speed_min_scale: 0.50
 
-# NORMAL / roundabout-circle tracker. Fork / exit stay on Pure Pursuit.
-# normal: pp | mask_p  (mask_p ≈ limo_sim_code_v2 BEV road-COM + P + EMA)
+# NORMAL: free-space mask COM (sim_v2) on blob road_clean — no lane ribbon.
+# Switch to stanley|pp only for paint-path A/B. Fork still PP when forkish.
 tracker:
   normal: mask_p
 
+# Phase A: temporal lateral track + half-width path hold (shared by mask/stanley).
+track_state:
+  err_alpha: 0.30
+  err_max_jump: 0.32
+  path_y_alpha: 0.28
+  path_y_max_jump_m: 0.10
+  half_width_m: 0.175
+  enable_path_hold: true
+  # Phase C real-car: set 0.06–0.12 if hunting remains after trim/geometry.
+  delay_pred_sec: 0.0
+  throttle_speed_scale_mps: 1.0
+
+# Stanley-lite: yaw (lane angle) first, gentle CTE, EMA + rate-limit.
+stanley:
+  k_cte: 1.0
+  k_yaw: 1.2
+  v_soft: 0.18
+  curvature_ff_gain: 0.35
+  steer_alpha: 0.25
+
 mask_pursuit:
-  # Match limo_sim_code_v2: steer_k=2.0, alpha=0.4, wide BEV COM (anticipation).
+  # limo_sim_code_v2 recipe on road_clean: largest-blob area COM + simple P.
+  # No soft corridor / far_blend / temporal COM hold (those lagged corners).
+  # IMU not required — same as v2/minyong (vision lateral error only).
+  # steer_law: sim_v2 | image_p | lateral_atan
+  # center_mode: area | row_mid | dist_ridge
+  steer_law: sim_v2
   steer_k: 2.0
   steer_alpha: 0.40
   near_band_ratio: 0.85
+  far_band_ratio: 0.95
+  far_blend: 0.0
+  use_path_correction: false
+  center_mode: area
+  erode_px: 0
+  lane_width_m: 0.35
+  single_side_width_ratio: 0.72
+  occlusion_hold_frames: 5
+  error_deadband: 0.08
+  blend_error_lo: 0.12
+  blend_error_hi: 0.50
+  blend_curvature_lo: 0.35
+  blend_curvature_hi: 1.00
+  hybrid_steer_alpha: 0.28
   min_area_px: 100.0
-  curve_steer_threshold: 0.50
+  curve_steer_threshold: 0.35
   curve_speed_scale: 0.80
-  # Course-color guard (OUT=white / IN=yellow priority via color_path).
-  # off | hard (AND corridor) | soft (distance-weighted COM).
-  # Bench 20260714_132840: hard+wide(0.38)+fork_force won full lap;
-  # fork_force alone won stress segments. Keep both for production default.
-  corridor_mode: hard
-  corridor_half_width_m: 0.38
-  path_weight_sigma_m: 0.20
-  # Fork/branch≥2 → PP on color path (do not COM-average both roads).
+  corridor_mode: off
+  corridor_near_fork: true
+  corridor_half_width_m: 0.42
+  path_weight_sigma_m: 0.28
   fork_force_pp: true
   require_color_path: true
 
 path:
-  # Metric IPM x is measured from the camera. LIMO sim camera is 0.025 m
-  # ahead of the front axle: rear axle -> camera = 0.24 + 0.025 = 0.265 m.
-  # Positive means perception points are shifted forward into rear-axle frame.
+  # rear_axle_to_camera_m d_rc = wheelbase + ahead_front_axle
+  # LIMO Gazebo: 0.24 + 0.025 = 0.265 m  (SSOT: docs/vehicle-geometry.md §4.1.1)
+  # Positive: shift camera-frame path points into rear-axle frame for PP/CTE.
   perception_to_rear_axle_x_m: 0.265
   min_points: 5
   white_min_confidence: 0.15
-  yellow_min_confidence: 0.15
-  yellow_valid_on_frames: 3
+  yellow_min_confidence: 0.12
+  yellow_valid_on_frames: 2
   # Preserve a valid corner command across brief centerline flicker. Longer
   # loss still returns steering to neutral and eventually stops throttle.
-  path_lost_hold_frames: 2
-  path_lost_stop_frames: 10
+  path_lost_hold_frames: 4
+  path_lost_stop_frames: 12
   fork_exit_off_frames: 8
 
 roundabout:
   # Enter circle mode once a stable yellow path or a yellow crossing line appears.
   entry_on_yellow: true
   min_lap_time_sec: 5.0
+  # lateral_rank: 0=left(exit), 1=right(keep circle) — moment pass policy §5.1.4
   exit_branch_rank: 0
+  in_exit_use_moment: true
+  in_keep_passes: 1
+  in_keep_branch_rank: 1
   branch_required_events: 2
   crossing_required_events: 2
   # Stricter than NORMAL fork flicker — reduces false exit arms in-circle.
@@ -116,16 +157,20 @@ roundabout:
   branch_off_frames: 10
   crossing_on_frames: 3
   crossing_off_frames: 6
-  # While circulating, do not switch mask→fork PP (count events only).
+  # While circulating, do not switch mask→fork PP until moment selects a rank.
   circle_ignore_fork_for_control: true
-  # Tight circle: dedicated lookahead; keep below cruise but usable for lane review.
-  lookahead_m: 0.6
-  throttle: 0.18
+  # Circle: paint centerline PP (yellow), not road_clean COM.
+  circle_tracker: pp
+  # Tight circle: short look-ahead for ring curvature.
+  lookahead_m: 0.45
+  throttle: 0.14
 
 signals:
   # Keep false until start/finish signal context is validated on the real track.
   require_green_to_start: false
   stop_on_red: false
+  # Detect ArUco for /debug/aruco but do not stop — keep lane follow.
+  stop_on_aruco: false
 
 safety:
   command_watchdog_sec: 0.5

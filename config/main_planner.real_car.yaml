@@ -1,0 +1,35 @@
+# Board / D-Racer overlay — merge mentally with main_planner.yaml SSOT.
+# Do not replace fork / mask_hard_wide logic; only geometry, speed, delay, trim.
+#
+# Apply on the board by editing main_planner.yaml pure_pursuit + speed + track_state
+# to the values below (or copy-key overlay at deploy time).
+#
+# STEER_TRIM lives in config/vehicle_config.yaml (web/joystick), not here.
+
+pure_pursuit:
+  # Team R_min=0.385 m, D-Racer L=0.175 → δ_max=atan(L/R)≈0.4266 rad (24.44°).
+  wheelbase_m: 0.175
+  max_steer_angle_rad: 0.4266
+  # Slightly softer rate than sim if the servo hunts.
+  steering_rate_limit_per_sec: 10.0
+  steer_command_deadband: 0.03
+
+speed:
+  # Start slower than sim freeze (0.28); raise after straight is calm.
+  cruise_throttle: 0.22
+  curve_throttle: 0.14
+
+track_state:
+  # Enable only if left/right hunting remains after trim + geometry.
+  delay_pred_sec: 0.0
+  throttle_speed_scale_mps: 0.9
+
+# Keep NORMAL tracker at mask_p until live A/B beats it:
+# tracker.normal: mask_p
+# Optional A/B: stanley
+
+path:
+  # rear_axle_to_camera_m d_rc = wheelbase + ahead_front_axle
+  # D-Racer: 0.175 + 0.025 = 0.200 m  (SSOT: docs/vehicle-geometry.md §4.1.1)
+  # IPM x is from camera; add d_rc once at planner boundary → rear-axle frame.
+  perception_to_rear_axle_x_m: 0.200

@@ -124,6 +124,11 @@ def _ensure_dir(path: Path) -> Path:
 
 def build_planner(route: str) -> MainPlanner:
     cfg = load_planner_config(route_mode=route)
+    # Unit tests: arm fork without a camera sign at the spawn pose.
+    if route == 'out':
+        from dataclasses import replace
+
+        cfg = replace(cfg, out_fork_forced_turn_arms=True)
     return MainPlanner(cfg)
 
 
@@ -206,23 +211,39 @@ def run_live_once(
     duration_sec: float,
     out_dir: Path,
     camera_topic: str,
+    viz: str = 'control',
+    drive: bool = True,
+    rclpy_owned: bool = False,
 ) -> dict[str, Any]:
-    """Teleport, force fork choice, step planner on live camera, log CSV."""
+    """Teleport, force fork choice, step planner on live camera, log + viz.
+
+    Opens OpenCV ``Lane drive`` / fork pair preview when ``viz`` is not off.
+    With ``drive``, publishes ``/control`` so the vehicle follows the chosen branch.
+    """
     import rclpy
+    from control_msgs.msg import Control
     from cv_bridge import CvBridge
     from rclpy.node import Node
     from sensor_msgs.msg import CompressedImage, Image
+
+    _DRIVE = Path(__file__).resolve().parent
+    if str(_DRIVE) not in sys.path:
+        sys.path.insert(0, str(_DRIVE))
+    from viz_util import apply_lane_viz  # noqa: E402
 
     _teleport(scenario.spawn)
     time.sleep(0.8)
 
     planner = build_planner(scenario.route)
     planner.force_fork_choice(_turn(scenario.turn), state=_state(scenario.state))
-    ld.VISUALIZE = False
+    apply_lane_viz(viz)
     ld._apply_detect_tune_from_yaml()
 
-    rclpy.init()
-    node = Node('fork_spawn_unit')
+    own_rclpy = False
+    if not rclpy.ok():
+        rclpy.init()
+        own_rclpy = True
+    node = Node(f'fork_spawn_{scenario.name}')
     bridge = CvBridge()
     latest: dict[str, Any] = {'frame': None, 't': 0.0}
 
@@ -239,48 +260,110 @@ def run_live_once(
         node.create_subscription(CompressedImage, camera_topic, _cb_compressed, 10)
     else:
         node.create_subscription(Image, camera_topic, _cb_raw, 10)
+    control_pub = node.create_publisher(Control, '/control', 10) if drive else None
 
     run_dir = _ensure_dir(out_dir / scenario.name)
     csv_path = run_dir / 'drive.csv'
     rows: list[dict[str, Any]] = []
     t0 = time.time()
-    last_step = t0
     ok_frames = 0
-    while time.time() - t0 < duration_sec:
-        rclpy.spin_once(node, timeout_sec=0.05)
-        frame = latest['frame']
-        if frame is None:
-            continue
-        now = time.time()
-        dt = max(0.02, now - last_step)
-        last_step = now
-        # Keep forced choice; do not let signs overwrite during unit test.
-        planner.desired_turn = _turn(scenario.turn)
-        planner._fork_selected_rank = scenario.rank
-        planner.state = _state(scenario.state)
-        output = planner.step(frame, now_sec=now)
-        rank = output.debug.get('selected_branch_rank')
-        row = {
-            't': round(now - t0, 3),
-            'state': str(output.state),
-            'decision': output.decision,
-            'path_source': str(output.path_source),
-            'selected_rank': rank,
-            'fork_active': output.debug.get('fork_active'),
-            'steering': float(output.command.steering)
-            if output.command is not None
-            else None,
-            'throttle': float(output.command.throttle)
-            if output.command is not None
-            else None,
-        }
-        rows.append(row)
-        if rank == scenario.rank and output.path_source.value.endswith('branch'):
-            ok_frames += 1
-        time.sleep(0.02)
+    snap_i = 0
+    last_snap = 0.0
+    try:
+        while time.time() - t0 < duration_sec:
+            rclpy.spin_once(node, timeout_sec=0.05)
+            frame = latest['frame']
+            if frame is None:
+                continue
+            now = time.time()
+            planner.desired_turn = _turn(scenario.turn)
+            planner._fork_selected_rank = scenario.rank
+            planner.state = _state(scenario.state)
+            output = planner.step(frame, now_sec=now)
+            if control_pub is not None and output.command is not None:
+                msg = Control()
+                msg.header.stamp = node.get_clock().now().to_msg()
+                msg.header.frame_id = 'base_link'
+                msg.steering = float(output.command.steering)
+                msg.throttle = float(output.command.throttle)
+                control_pub.publish(msg)
 
-    node.destroy_node()
-    rclpy.shutdown()
+            rank = output.debug.get('selected_branch_rank')
+            path_src = str(output.path_source.value)
+            row = {
+                't': round(now - t0, 3),
+                'state': str(
+                    output.state.value if hasattr(output.state, 'value') else output.state
+                ),
+                'decision': output.decision,
+                'path_source': path_src,
+                'selected_rank': rank,
+                'fork_active': output.debug.get('fork_active'),
+                'steering': float(output.command.steering)
+                if output.command is not None
+                else None,
+                'throttle': float(output.command.throttle)
+                if output.command is not None
+                else None,
+            }
+            rows.append(row)
+            if rank == scenario.rank and path_src.endswith('branch'):
+                ok_frames += 1
+
+            if now - last_snap >= 1.0:
+                last_snap = now
+                try:
+                    prefer_yellow = scenario.route == 'in'
+                    _, dbg = ld.detect_with_debug(
+                        frame,
+                        prefer_yellow=prefer_yellow,
+                        enable_fork=True,
+                        active_branch_rank=scenario.rank,
+                    )
+                    focus = 'left' if scenario.rank == 0 else 'right'
+                    sheet = ld.make_fork_lane_pair_preview(dbg, focus=focus)
+                    if sheet is not None:
+                        label = (
+                            f'{scenario.name} rank={scenario.rank} '
+                            f'src={path_src} ste={row["steering"]}'
+                        )
+                        cv2.putText(
+                            sheet,
+                            label,
+                            (8, 24),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.55,
+                            (0, 255, 255),
+                            1,
+                            cv2.LINE_AA,
+                        )
+                        cv2.imwrite(
+                            str(run_dir / f'snap_{snap_i:02d}_{focus}.png'), sheet
+                        )
+                        cv2.imshow('Fork select', sheet)
+                        snap_i += 1
+                except Exception as exc:  # noqa: BLE001
+                    print(f'[viz] snap skip: {exc}', flush=True)
+                cv2.waitKey(1)
+            time.sleep(0.02)
+    finally:
+        if control_pub is not None:
+            for _ in range(6):
+                stop = Control()
+                stop.header.stamp = node.get_clock().now().to_msg()
+                stop.header.frame_id = 'base_link'
+                stop.steering = 0.0
+                stop.throttle = 0.0
+                control_pub.publish(stop)
+                rclpy.spin_once(node, timeout_sec=0.02)
+                time.sleep(0.02)
+        node.destroy_node()
+        if own_rclpy and not rclpy_owned and rclpy.ok():
+            try:
+                cv2.destroyWindow('Fork select')
+            except Exception:
+                pass
+            rclpy.shutdown()
 
     with csv_path.open('w', newline='', encoding='utf-8') as fh:
         if rows:
@@ -292,12 +375,17 @@ def run_live_once(
         'scenario': scenario.name,
         'spawn': scenario.spawn,
         'route': scenario.route,
+        'turn': scenario.turn,
         'expected_rank': scenario.rank,
         'duration_sec': duration_sec,
+        'viz': viz,
+        'drive': drive,
         'n_rows': len(rows),
         'ok_branch_frames': ok_frames,
         'ok_ratio': (ok_frames / len(rows)) if rows else 0.0,
+        'snaps': snap_i,
         'csv': str(csv_path),
+        'ok': bool(rows) and (ok_frames / max(len(rows), 1)) >= 0.3,
     }
     (run_dir / 'summary.json').write_text(
         json.dumps(summary, indent=2), encoding='utf-8'
@@ -333,6 +421,17 @@ def main() -> int:
         default=None,
         help='Override offline exit frame',
     )
+    parser.add_argument(
+        '--viz',
+        default='control',
+        help='off|control|on — Lane drive + Fork select (live)',
+    )
+    parser.add_argument(
+        '--drive',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Publish /control while live (default on)',
+    )
     args = parser.parse_args()
 
     names = (
@@ -354,11 +453,17 @@ def main() -> int:
         'exit': args.frame_exit or _DEFAULT_FRAMES['exit'],
     }
 
+    print(
+        f'=== fork_spawn_unit mode={args.mode} viz={args.viz} '
+        f'drive={args.drive} → {out_root}',
+        flush=True,
+    )
+
     for rep in range(args.repeat):
         for name in names:
             sc = SCENARIOS[name]
             rep_dir = _ensure_dir(out_root / f'r{rep:02d}_{name}')
-            print(f'=== [{args.mode}] rep={rep} {name} → {rep_dir}')
+            print(f'=== [{args.mode}] rep={rep} {name} → {rep_dir}', flush=True)
             if args.mode == 'offline':
                 frame = frames[sc.frame_key]
                 result = run_offline_once(sc, Path(frame), rep_dir)
@@ -368,21 +473,22 @@ def main() -> int:
                     duration_sec=args.duration,
                     out_dir=rep_dir,
                     camera_topic=args.camera_topic,
+                    viz=args.viz,
+                    drive=args.drive,
                 )
             index.append(result)
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(result, ensure_ascii=False), flush=True)
 
     (out_root / 'INDEX.json').write_text(
         json.dumps(index, indent=2, ensure_ascii=False), encoding='utf-8'
     )
-    # Markdown summary
     lines = [
         f'# Fork spawn unit {stamp}',
         '',
-        f'Mode: `{args.mode}` · repeat={args.repeat}',
+        f'Mode: `{args.mode}` · viz=`{args.viz}` · drive={args.drive} · repeat={args.repeat}',
         '',
-        '| scenario | rank_ok / layer_ok or ok_ratio | notes |',
-        '|----------|--------------------------------|-------|',
+        '| scenario | result | notes |',
+        '|----------|--------|-------|',
     ]
     for row in index:
         if 'rank_ok' in row:
@@ -392,11 +498,11 @@ def main() -> int:
             )
         else:
             lines.append(
-                f"| {row['scenario']} | ok_ratio={row.get('ok_ratio', 0):.2f} "
-                f"| rows={row.get('n_rows')} |"
+                f"| {row['scenario']} | ok={row.get('ok')} ratio={row.get('ok_ratio', 0):.2f} "
+                f"| rows={row.get('n_rows')} snaps={row.get('snaps')} |"
             )
     (out_root / 'INDEX.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    print(f'\nWrote {out_root}')
+    print(f'\nWrote {out_root}', flush=True)
     fails = [
         r
         for r in index

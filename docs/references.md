@@ -14,6 +14,7 @@
 |------|------|
 | 팀 GitHub | https://github.com/ahnsh03/2026-SMH |
 | PC 로컬 영상·트랙 자료 (`data/`, Git 밖) | WSL: `~/projects/2026-seame-hackathon/data/` |
+| OUT 직선·코너·S자 보조지표 | [out-route-reference.md](./out-route-reference.md) · `data/out_best_route/` |
 | PC Docker 개발 환경 | [dev-environment.md](./dev-environment.md) |
 | Notion 대시보드 | https://app.notion.com/p/55e1b0cdce9b8292a19d81c5b1605983 |
 | Notion 대회 정보 | https://app.notion.com/p/3901b0cdce9b81eaa6eff92ecd0f026b |

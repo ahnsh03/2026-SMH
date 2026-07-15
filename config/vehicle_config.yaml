@@ -11,6 +11,8 @@ ROI_TOP: 50
 ROI_LEFT: 0
 
 # Vehicle control parameters
+# Day0 board: set this so a straight corridor holds with near-zero planner steer.
+# Re-check after mounting / tire wear; do not compensate with mask_steer_k.
 STEER_TRIM: 0.10000000000000003
 
 # Web server configuration

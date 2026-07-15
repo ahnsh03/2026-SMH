@@ -6,7 +6,7 @@ from dracer_sim.control_mapping import CMD_MODE_DIFF, control_to_cmd_vel
 
 
 MAX_V = 1.2
-MAX_STEER = 0.5236
+MAX_STEER = 0.5574
 WHEELBASE = 0.24
 
 

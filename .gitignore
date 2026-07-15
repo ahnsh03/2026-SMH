@@ -21,6 +21,7 @@ datasets/
 runs/
 wandb/
 data/captures/
+bags/
 
 # IDE / OS
 .vscode/

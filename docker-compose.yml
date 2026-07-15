@@ -14,6 +14,8 @@ services:
     working_dir: /workspace
     volumes:
       - .:/workspace
+      # monorepo runtime bags / reference media (host ../data)
+      - ../data:/host_data:ro
     stdin_open: true
     tty: true
     environment:
@@ -30,6 +32,7 @@ services:
       - /dev/dxg
     volumes:
       - .:/workspace
+      - ../data:/host_data:ro
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - /mnt/wslg:/mnt/wslg
       - /usr/lib/wsl:/usr/lib/wsl:ro

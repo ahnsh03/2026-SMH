@@ -383,8 +383,12 @@ class InferenceNode(Node):
 
         from inference.modules import lane_detection
 
-        msg.meters_per_pixel = float(lane_detection.METERS_PER_PIXEL)
-        msg.x_forward_max = float(lane_detection.X_MAX_M)
+        msg.meters_per_pixel = float(
+            getattr(lane, 'meters_per_pixel', 0.0) or lane_detection.METERS_PER_PIXEL
+        )
+        msg.x_forward_max = float(
+            getattr(lane, 'x_forward_max', 0.0) or lane_detection.X_MAX_M
+        )
 
         self.lane_pub.publish(msg)
 

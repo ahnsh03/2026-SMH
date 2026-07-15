@@ -35,7 +35,8 @@ um die Erstellung von Steuerscharnier des Wagens zu ermöglichen. Durch Macrofun
             <axis xyz="0 0 1" />
             <!-- Default vendor 0.5 rad/s felt like slow servo lag; raise for responsive
                  lane following (~full lock ~0.13 s). -->
-            <limit lower="-0.523598767" upper="0.523598767" effort="20" velocity="4.0" />
+            <!-- R_min=0.385 m @ L=0.24 → ±atan(L/R)≈0.5574 rad; vel ≈ full-lock ~70 ms -->
+            <limit lower="-0.5574" upper="0.5574" effort="20" velocity="8.0" />
             <dynamics damping="0.05" friction="0.05"/>
         </joint>
 
@@ -94,7 +95,8 @@ um die Erstellung von Steuerscharnier des Wagens zu ermöglichen. Durch Macrofun
             <child link="${wheel_prefix}"/>
             <xacro:insert_block name="joint_pose"/>
             <axis xyz="0 0 -1"/>
-            <limit lower="-0.523598767" upper="0.523598767" effort="20" velocity="4.0" />
+            <!-- R_min=0.385 m @ L=0.24 → ±atan(L/R)≈0.5574 rad; vel ≈ full-lock ~70 ms -->
+            <limit lower="-0.5574" upper="0.5574" effort="20" velocity="8.0" />
             <dynamics damping="0.05" friction="0.05"/>
         </joint>
 

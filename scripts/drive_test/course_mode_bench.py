@@ -69,25 +69,46 @@ IN_CHECKPOINTS: list[str] = [
 ]
 
 _MASK_SPEED = {
-    'cruise_throttle': 0.33,
+    'cruise_throttle': 0.22,
+    'curve_throttle': 0.14,
+    'mask_steer_law': 'sim_v2',
     'mask_steer_k': 2.0,
     'mask_steer_alpha': 0.40,
     'mask_near_band_ratio': 0.85,
+    'mask_far_blend': 0.0,
     'mask_curve_speed_scale': 0.80,
+    'mask_center_mode': 'area',
+    'mask_erode_px': 0,
+    'mask_occlusion_hold_frames': 5,
     'steering_rate_limit_per_sec': 12.0,
+    'stop_on_aruco': False,
+    'stop_on_red': False,
+    'roundabout_throttle': 0.14,
+    'circle_tracker': 'pp',
+    'roundabout_lookahead_m': 0.45,
+    'prefer_yellow': True,
 }
 
 POLICIES: dict[str, dict[str, Any]] = {
+    # Primary: full FSM + sim_v2 mask, ArUco ignored, slow IN finish.
+    'mask_sim_v2_in': {
+        **_MASK_SPEED,
+        'normal_tracker': 'mask_p',
+        'mask_corridor_mode': 'off',
+        'mask_fork_force_pp': True,
+        'mask_require_color_path': False,
+    },
     'pp_ref': {
         'normal_tracker': 'pp',
-        'cruise_throttle': 0.31,
-        'curve_throttle': 0.16,
+        'cruise_throttle': 0.22,
+        'curve_throttle': 0.14,
         'lookahead_m': 0.70,
         'curve_lookahead_m': 0.38,
         'steering_rate_limit_per_sec': 12.0,
         'cte_gain': 0.10,
         'heading_gain': 0.30,
         'heading_preview_m': 0.45,
+        'stop_on_aruco': False,
     },
     'mask_raw': {
         **_MASK_SPEED,
@@ -319,24 +340,11 @@ def run_one_lap(
     rows: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
 
+    from viz_util import apply_lane_viz
+
     planner = build_planner(mode, overrides)
     # Perception windows: off | control (Lane drive) | on/all (+ HSV masks).
-    viz = str(overrides.get('_viz_mode') or 'off').strip().lower()
-    if viz in ('on', 'all', 'debug', '1', 'true'):
-        ld.VISUALIZE_MODE = ld.VISUALIZE_ON
-        ld.VISUALIZE = True
-    elif viz in ('control', 'ctrl', 'drive', 'lane'):
-        ld.VISUALIZE_MODE = ld.VISUALIZE_CONTROL
-        ld.VISUALIZE = True
-    else:
-        ld.VISUALIZE_MODE = ld.VISUALIZE_OFF
-        ld.VISUALIZE = False
-    try:
-        cv2.destroyWindow('lane_control')
-        cv2.destroyWindow('road_branches')
-        cv2.destroyWindow('drivable_area')
-    except Exception:
-        pass
+    apply_lane_viz(str(overrides.get('_viz_mode') or 'control'))
     ld._apply_detect_tune_from_yaml()
 
     farthest_idx = 0
@@ -669,7 +677,7 @@ def main() -> int:
     parser.add_argument('--modes', default='out,in')
     parser.add_argument(
         '--policies',
-        default='pp_ref,mask_fork_pp,mask_hard_wide,mask_soft_fork_pp,mask_hard_fork_pp,mask_raw',
+        default='mask_sim_v2_in',
     )
     parser.add_argument('--repeats', type=int, default=2)
     parser.add_argument('--max-lap-sec-out', type=float, default=180.0)

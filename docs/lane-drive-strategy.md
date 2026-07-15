@@ -6,8 +6,9 @@
 > `pipeline.MainPlanner`가 담당한다. 현재 구조와 튜닝값은
 > [main-planner.md](./main-planner.md)를 SSOT로 사용한다.
 
-> 작성: 2026-07-11 (안승현) · **개정: 2026-07-13** (MainPlanner SSOT · 차선 인지 합류)  
-> 목적: Metric IPM·인지 인터페이스 설계 배경. **런타임 제어 SSOT는 [main-planner.md](./main-planner.md).**
+> 런타임 제어 SSOT: [main-planner.md](./main-planner.md) ·  
+> **실차 하이브리드·T0–T7:** [control-hybrid-strategy.md](./control-hybrid-strategy.md) ·  
+> 보드 적용: [board-freeze-control.md](./board-freeze-control.md).
 
 관련: [roles.md](./roles.md) · [main-planner.md](./main-planner.md) · [lane-perception-topic.md](./lane-perception-topic.md) · [lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md) · [meetings/2026-07-10.md](./meetings/2026-07-10.md) · [hardware-camera.md](./hardware-camera.md) · [vehicle-geometry.md](./vehicle-geometry.md) · [collaboration.md](./collaboration.md)
 

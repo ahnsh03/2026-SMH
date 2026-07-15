@@ -20,9 +20,10 @@
 | 휠베이스 \(L\) | **175 mm** (팀 실측 2026-07-12) | **200 mm** | **240 mm** (`ackermann.xacro`) |
 | 트레드 \(T\) | **120 mm** (팀 실측, 좌·우 **바퀴 중심** 간) | **175 mm** | **168 mm** |
 | 외형 (대략) | ~255×140×215 mm | 322×220×251 mm | URDF 베이스 ~190×310×120 |
-| 최대 조향각 | **±17.5°** (팀 실측, PP SSOT) | \(R_\min=0.4\,\mathrm{m}\) 역산 ≈ **27°** | **±30°** (`0.5236` rad) |
-| 최소 선회반경 | **0.535 m** (지름 107 cm 실측) | **0.4 m** | ≈ **0.42 m** (\(0.24/\tan 30^\circ\)) |
-| 카메라 | **h=0.13 m, pitch↓10°** (시뮬과 동일 맞춤) | — | 동일 마운트 스펙 |
+| 최대 조향각 | **±24.44°** (`atan(L/R_min)`, 제어 SSOT) | \(R_\min=0.4\,\mathrm{m}\) 역산 ≈ **27°** | **±31.94°** (`0.5574` rad) |
+| 최소 선회반경 | **0.385 m** (팀 제어 SSOT) | **0.4 m** | **0.385 m** (\(L/\tan\delta\) 맞춤) |
+| 카메라 | **h / pitch**: yaml `metric_ipm` · **종배치**: 앞차축보다 **25 mm 앞** | — | `ahead_front_axle_m: 0.025` |
+| 후차축→카메라 \(d_{\mathrm{rc}}\) | **\(L + 0.025 = 0.200\,\mathrm{m}\)** | — | **\(0.24 + 0.025 = 0.265\,\mathrm{m}\)** |
 | 최대 속도 | ESC·배터리 의존 (고속 RC) | **~1 m/s** | 브릿지 `max_linear_speed: 1.2` |
 | 질량 | 경량 RC (~1–2 kg대) | ~4.8 kg | URDF `base_mass` 4.34 kg |
 | `/control` 부호 | −1=좌 / +1=우 | — | 동일 규약 → Gazebo 좌(+)로 **부호 반전** |
@@ -32,11 +33,15 @@
 | 값 | 출처 |
 |----|------|
 | D-Racer \(L=175\) mm, \(T=120\) mm | 팀 실측 2026-07-12 (안승현) |
-| D-Racer \(\delta_{\max}=17.5°\), \(R_{\min}=0.535\) m (⌀107 cm) | 팀 실측 2026-07-12 — 교차검증 ~3.7% (아래 §4.1) |
-| D-Racer 카메라 h=0.13 m / pitch 10° | 시뮬과 동일하게 기구 맞춤 (IPM yaml 유지) |
+| 팀 \(R_{\min}=0.385\) m (제어 SSOT) | 2026-07-15 — 시뮬도 같은 \(R_{\min}\)에 \(\delta=\arctan(L/R)\) 맞춤 |
+| D-Racer 카메라 h=0.13 m / pitch 10° | 시뮬과 동일하게 기구 맞춤 (IPM yaml; bag 재튜닝 시 yaml이 SSOT) |
+| 카메라가 앞차축보다 25 mm 앞 | `sim_interface.yaml` `mount.ahead_front_axle_m: 0.025` (실차 동일 마운트) |
+| 후차축→카메라 \(d_{\mathrm{rc}}=L+0.025\) | 실차 **0.200 m** · 시뮬 Gazebo **0.265 m** → `path.perception_to_rear_axle_x_m` |
 | LIMO \(L=200\), \(T=175\), \(R_\min=0.4\) m | AgileX LIMO 사용자 매뉴얼 |
-| Gazebo \(L=0.24\), \(T=0.168\), \(\delta_\max=30^\circ\) | `vendor/limo_car/gazebo/ackermann.xacro`, `src/dracer_sim/config/control_bridge.yaml` |
+| Gazebo \(L=0.24\), \(\delta_\max=0.5574\), joint `velocity=8` | `ackermann.xacro`, `control_bridge.yaml` |
 | D-Racer 액추에이터·PWM | [hardware-board.md](./hardware-board.md) §5 |
+
+> 2026-07-12 측정(\(\delta=17.5°\), \(R\approx0.535\) m)은 기록용. **현재 튜닝 SSOT는 \(R_{\min}=0.385\) m**.
 
 ---
 
@@ -59,7 +64,7 @@
 |--|--------------|-----------------------------------|
 | 입력 | `steering`, `throttle` ∈ [-1, 1] | 동일 |
 | 출력 | PCA9685 PWM (조향 CH0, 스로틀 CH1) | `/cmd_vel` — 조향각(rad) / 선속도 |
-| 스케일 | 중립 1500 µs, 조향 ±500 µs 스팬 | `max_steer_angle_rad: 0.5236`, `max_linear_speed: 1.2` |
+| 스케일 | 중립 1500 µs, 조향 ±500 µs 스팬 | `max_steer_angle_rad: 0.5574`, `max_linear_speed: 1.2` |
 
 인터페이스는 같고 **물리량 매핑은 다르다**.
 
@@ -68,21 +73,34 @@
 LIMO는 무겁고 저속(~1 m/s), D-Racer는 가볍고 ESC 기반이라 가속·오버슈트·서보 지연이 다르다.  
 시뮬에서 안정이어도 실차에서 진동·과조향이 날 수 있다.
 
-### 2.4 Gazebo 조향 조인트 속도 한도 (2026-07-14)
+### 2.4 Gazebo 조향 한계 · \(R_{\min}\) 맞춤 (2026-07-15)
 
-LIMO vendor URDF 기본값은 조향 revolute joint에 **`velocity="0.5"` rad/s** (~30°/s)와 높은 `damping`/`friction`이 걸려 있었다.  
-풀 락(±0.52 rad)까지 **약 1초**가 걸려 D-Racer 실차의 빠른 서보와 다르게 **조향이 늦고 커브를 놓치는** 것처럼 보였다.
+팀 제어 SSOT 최소 선회반경 \(R_{\min}=0.385\,\mathrm{m}\).  
+Gazebo LIMO 휠베이스 \(L=0.24\,\mathrm{m}\)에 맞추면
 
-| | 기본(vendor) | 팀 패치 후 (`2026-SMH`) |
-|--|--------------|-------------------------|
-| steer joint `velocity` | **0.5 rad/s** | **4.0 rad/s** |
+\[
+\delta_{\max} = \arctan(L / R_{\min}) \approx 0.5574\,\mathrm{rad}\ (31.94^\circ)
+\]
+
+→ joint `limit` / plugin `max_steer` / `control_bridge` / `main_planner` 모두 **0.5574**.  
+실차(\(\L=0.175\))는 같은 \(R_{\min}\)으로 \(\delta_{\max}\approx 0.4266\) rad (24.44°).
+
+| | vendor 기본 | 팀 패치 (현재) |
+|--|-------------|----------------|
+| steer joint `upper`/`lower` | ±0.5236 (30°) | **±0.5574 (31.94°)** |
+| plugin `max_steer` | 0.5236 | **0.5574** |
+| steer joint `velocity` | 0.5 rad/s | **8.0 rad/s** |
 | `damping` / `friction` | 1.0 / 2.0 | 0.05 / 0.05 |
-| 풀 락 근사 시간 | ~1.0 s | ~0.13 s |
+| 풀 락 근사 시간 | ~1.0 s | **~0.07 s** |
 
-패치 위치: `vendor/limo_car/gazebo/ackermann.xacro`, `vendor/limo_car/urdf/limo_steering_hinge.xacro`.  
-**URDF 변경은 Gazebo 리스폰/ bringup 재실행 후에만 적용**된다. `sim_control_bridge`에는 조향 rate limit이 없고, planner YAML의 `steering_rate_limit_per_sec`만 소프트웨어 제한이다.
+패치: `vendor/limo_car/gazebo/ackermann.xacro`, `limo_steering_hinge.xacro`,  
+`src/dracer_sim/config/control_bridge.yaml`, `config/main_planner.yaml`.  
+**URDF 변경은 Gazebo 리스폰 / `sim-bringup` 재실행 후에만 적용**된다.
 
-실차(D-Racer)는 PWM 서보라 **Gazebo 0.5 rad/s 한도를 복제하면 안 된다**. 고속 차선추종 튜닝은 패치된 시뮬(≥4 rad/s) 또는 실차에서 할 것.
+소프트웨어 조향 속도 한도는 `main_planner.yaml`의 `steering_rate_limit_per_sec`  
+(현재 **16.0** /s on [-1,1] ≈ 물리적 ~8.9 rad/s ≤ joint vel).
+
+실차(D-Racer)는 PWM 서보라 vendor 0.5 rad/s를 복제하지 말 것.
 
 ---
 
@@ -115,23 +133,51 @@ LIMO vendor URDF 기본값은 조향 revolute joint에 **`velocity="0.5"` rad/s*
 |------|------|-----|
 | 휠베이스 \(L\) | ✅ | **0.175 m** |
 | 트레드 \(T\) | ✅ (바퀴 중심 간) | **0.120 m** |
-| 카메라 높이·피치 | ✅ 시뮬과 동일 | **0.13 m / 10° down** |
-| \(\delta_{\max}\) | ✅ 타이어각 직접 | **17.5°** → `max_steer_angle_rad ≈ 0.3054` |
-| \(R_{\min}\) | ✅ 원 지름 107 cm | **0.535 m** (반지름) |
-| `steering=±1` ↔ 타이어각 | ✅ 풀락 = \(\delta_{\max}\) | ±1 ↔ ±17.5° |
+| 카메라 높이·피치 | ✅ 튜너 재측정 가능 | yaml `metric_ipm.camera` (문서 기본 0.13 m / 10°) |
+| 카메라 ↔ 앞차축 (종) | ✅ 마운트 | **\(d_{\mathrm{cf}} = 0.025\,\mathrm{m}\)** (카메라가 앞차축보다 앞) |
+| **후차축 → 카메라** \(d_{\mathrm{rc}}\) | ✅ \(L + d_{\mathrm{cf}}\) | **실차 0.200 m** · 시뮬 0.265 m |
+| 인지→후차축 오프셋 | ✅ = \(d_{\mathrm{rc}}\) | `path.perception_to_rear_axle_x_m` |
+| \(\delta_{\max}\) | ✅ \(R_{\min}\) 기준 SSOT | **24.44°** → `max_steer_angle_rad ≈ 0.4266` |
+| \(R_{\min}\) | ✅ 제어 SSOT | **0.385 m** |
+| `steering=±1` ↔ 타이어각 | ✅ 풀락 = \(\delta_{\max}\) | ±1 ↔ ±24.44° |
 
-**교차검증:** \(L/\tan 17.5° \approx 0.555\) m vs 실측 \(R_{\min}=0.535\) m (**약 3.7%**).  
-\(R\)에서 역산 \(\delta \approx 18.1°\). 슬립·내외륜 각 차·측정점(전/후축) 오차로 자연스러운 수준.  
-PP 정규화에는 **직접 잰 \(\delta_{\max}=17.5°\)** 를 쓴다.
+기록: 2026-07-12 직접 잰 \(\delta=17.5°\) / \(R\approx0.535\) m 은 archive.  
+**현재 PP·mask 정규화 SSOT는 \(R_{\min}=0.385\) → \(\delta=\arctan(L/R)\)**.
 
-`config/lane_control.yaml` 숫자 기본은 **시뮬(LIMO)** 유지. 실차 보드에서는:
+`config/lane_control.yaml` / `main_planner.yaml` 기본은 **시뮬(LIMO, δ=0.5574)**. 실차 보드:
 
 ```text
 wheelbase_m: 0.175
-max_steer_angle_rad: 0.3054   # 17.5°
+max_steer_angle_rad: 0.4266   # atan(0.175/0.385)
 ```
 
 **트레드:** 좌·우 바퀴 **중심** 사이 횡거리 (전폭 아님). 12 cm OK.
+
+### 4.1.1 종방향 기하 (후차축 · 앞차축 · 카메라)
+
+전방 \(+x\). Metric IPM 지면 \(x\)는 **카메라** 원점이다.
+
+```text
+후차축 (PP 원점) ---- L (wheelbase) ---- 앞차축 ---- d_cf ---- 카메라 (IPM 원점)
+                         ↑                              ↑
+                    실차 0.175 m                   0.025 m
+                    시뮬 0.240 m              (ahead_front_axle_m)
+```
+
+\[
+d_{\mathrm{rc}} = L + d_{\mathrm{cf}}
+\quad\text{(후차축 → 카메라 종거리)}
+\]
+
+| 플랫폼 | \(L\) | \(d_{\mathrm{cf}}\) | **\(d_{\mathrm{rc}}\)** | 플래너 키 |
+|--------|-------|---------------------|-------------------------|-----------|
+| **D-Racer 실차** | 0.175 | 0.025 | **0.200 m** | [`main_planner.real_car.yaml`](../config/main_planner.real_car.yaml) `path.perception_to_rear_axle_x_m` |
+| **LIMO Gazebo** | 0.240 | 0.025 | **0.265 m** | [`main_planner.yaml`](../config/main_planner.yaml) 동키 · [`sim_interface.yaml`](../src/dracer_sim/config/sim_interface.yaml) `mount.ahead_front_axle_m` |
+
+사용:
+
+- IPM path 점 \((x_{\mathrm{cam}}, y)\) → 후차축 프레임: \(x_{\mathrm{rear}} = x_{\mathrm{cam}} + d_{\mathrm{rc}}\) (`MainPlanner._path_in_rear_axle_frame`).
+- 앞차축은 카메라보다 \(d_{\mathrm{cf}}\) 뒤(후차축 기준 \(x=L\)). 이미지 최하단 ≈ `x_min_m`이지 범퍼/앞차축이 아님.
 
 ### 4.2 \(\delta_{\max}\) · \(R_{\min}\) · 실제 타이어각 — 측정 방법
 
@@ -168,11 +214,11 @@ A로 \(\delta\)를 재고 B로 \(R\)를 재면 \(R \approx L/\tan\delta\)와 비
 
 ```text
 wheelbase_m: 0.175
-max_steer_angle_rad: 0.3054   # δ_max = 17.5°
-# R_min measured 0.535 m (diameter 107 cm) — cross-check only
+max_steer_angle_rad: 0.4266   # δ_max = atan(0.175/0.385) ≈ 24.44°
+# R_min SSOT 0.385 m
 ```
 
-시뮬 YAML 기본(0.24 / 0.5236)은 그대로 두고, 보드 `lane_control` 파라미터만 덮어쓰면 된다.
+시뮬 YAML 기본은 **0.24 / 0.5574** (같은 \(R_{\min}\)). 보드에서는 위 덮어쓰기.
 
 ---
 

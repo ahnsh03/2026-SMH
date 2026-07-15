@@ -87,7 +87,8 @@ Es würde einfach in andere Datei angerufen werden. -->
             <xacro:insert_block name="joint_pose"/>
             <axis xyz="0 0 1" />
             <!-- Paramenten von Herstellern -->
-            <limit lower="-0.523598767" upper="0.523598767" effort="20" velocity="4.0" />
+            <!-- R_min=0.385 m @ L=0.24 → ±atan(L/R)≈0.5574 rad; vel ≈ full-lock ~70 ms -->
+            <limit lower="-0.5574" upper="0.5574" effort="20" velocity="8.0" />
             <dynamics damping="0.05" friction="0.05"/>
         </joint>
 
@@ -165,7 +166,8 @@ Es würde einfach in andere Datei angerufen werden. -->
             <child link="${wheel_prefix}_steer_link"/>
             <xacro:insert_block name="joint_pose"/>
             <axis xyz="0 0 -1"/>
-            <limit lower="-0.523598767" upper="0.523598767" effort="20" velocity="4.0" />
+            <!-- R_min=0.385 m @ L=0.24 → ±atan(L/R)≈0.5574 rad; vel ≈ full-lock ~70 ms -->
+            <limit lower="-0.5574" upper="0.5574" effort="20" velocity="8.0" />
             <dynamics damping="0.05" friction="0.05"/>
         </joint>
 
@@ -357,7 +359,7 @@ Es würde einfach in andere Datei angerufen werden. -->
                 <linear_velocity_pid_gain>0.5 10 0.001</linear_velocity_pid_gain>
                 <linear_velocity_i_range>0 0</linear_velocity_i_range>
 
-                <max_steer>0.523598767</max_steer> 
+                <max_steer>0.5574</max_steer>
 
                 <wheel_separation>0.172</wheel_separation> 
                 <wheel_diameter>0.09</wheel_diameter> 

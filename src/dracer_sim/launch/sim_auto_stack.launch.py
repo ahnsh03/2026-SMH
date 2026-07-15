@@ -55,7 +55,7 @@ def _viz_settings(viz: str) -> tuple[bool, str]:
     return True, 'control'
   if mode in ('all', 'on', 'full'):
     return True, 'on'
-  # lane (default)
+  # lane (preview only) — no inference OpenCV window
   return True, 'off'
 
 
@@ -165,11 +165,11 @@ def generate_launch_description():
     ),
     DeclareLaunchArgument(
       'viz',
-      default_value='lane',
+      default_value='debug',
       choices=['lane', 'off', 'debug', 'all'],
       description=(
         'Windows: lane=Fork preview only; off=none; '
-        'debug=+lane_control; all=full LANE_VISUALIZE'
+        'debug=preview + Lane drive (control SSOT); all=+HSV'
       ),
     ),
     DeclareLaunchArgument(
