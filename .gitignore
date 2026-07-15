@@ -12,22 +12,16 @@ __pycache__/
 dist/
 *.so
 
-# ML / data
+# ML / data (race ONNX under weights/ is force-tracked)
 *.h5
 *.pt
 *.onnx
 *.weights
-# Race board: track competition ONNX weights under weights/.
 !weights/
 !weights/sign_best.onnx
 !weights/sign_light_best_v5b.onnx
 !weights/README.md
 !weights/.gitignore
-datasets/
-runs/
-wandb/
-data/captures/
-bags/
 
 # IDE / OS
 .vscode/
@@ -40,10 +34,10 @@ Thumbs.db
 .env
 *.key
 
-# Vendor clone (use submodule or init script)
+# Official Kit (symlink or clone — never commit)
 external/D-Racer-Kit/
 
-# init_workspace.sh — D-Racer-Kit / limo_car 심볼릭 링크 (매 clone마다 스크립트로 생성)
+# init_workspace.sh — Kit package symlinks under src/
 src/battery
 src/battery_msgs
 src/camera
@@ -52,7 +46,6 @@ src/control
 src/control_msgs
 src/joystick
 src/joystick_msgs
-src/limo_car
 src/monitor
 src/opencv
 src/topst_utils

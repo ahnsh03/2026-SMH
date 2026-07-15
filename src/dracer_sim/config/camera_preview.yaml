@@ -1,8 +1,0 @@
-sim_camera_preview:
-  ros__parameters:
-    image_topic: /camera/image_raw
-    window_name: D-Racer Camera
-    window_width: 640
-    window_height: 360
-    window_x: 40
-    window_y: 40

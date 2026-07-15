@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 실차·대회용: 공식 D-Racer-Kit + 팀 inference 만 colcon 워크스페이스로 구성.
-# Gazebo / limo_car 는 보드에서 불필요 — 있으면 링크, 없으면 건너뜀.
+# Gazebo / limo_car / vendor 없음.
 #
-# D-Racer-Kit: <repo>/external/D-Racer-Kit (없거나 비정상면 clone)
+# D-Racer-Kit: <repo>/external/D-Racer-Kit (symlink 또는 clone)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -87,27 +87,14 @@ for pkg in "${OFFICIAL_PKGS[@]}"; do
   echo "[SEA-Me board] linked ${pkg}"
 done
 
-# Optional: keep PC/sim trees happy if vendor limo exists; board does not require it.
-LIMO_CAR_SRC="${ROOT}/vendor/limo_car"
-if [ -f "${LIMO_CAR_SRC}/package.xml" ]; then
-  link_path "${LIMO_CAR_SRC}" "${ROOT}/src/limo_car"
-  echo "[SEA-Me board] linked limo_car (optional vendor)"
-else
-  echo "[SEA-Me board] skip limo_car (not needed on D3-G)"
-fi
-
-config_src="${VENDOR}/src/config"
 config_dst="${ROOT}/src/config"
 team_config="${ROOT}/config/vehicle_config.yaml"
 mkdir -p "${config_dst}"
 if [ -f "${team_config}" ]; then
   link_path "${team_config}" "${config_dst}/vehicle_config.yaml"
   echo "[SEA-Me board] linked team vehicle_config"
-elif [ -d "${config_src}" ]; then
-  link_path "${config_src}" "${config_dst}"
-  echo "[SEA-Me board] linked Kit default config"
 else
-  echo "[SEA-Me board] WARNING: no vehicle_config found"
+  echo "[SEA-Me board] WARNING: missing config/vehicle_config.yaml"
 fi
 
 if [ ! -d "${ROOT}/src/inference" ]; then
@@ -118,4 +105,3 @@ fi
 echo ""
 echo "[SEA-Me board] Init done. Build with:"
 echo "  ./scripts/board_race_sync.sh --no-pull"
-echo "  # or: colcon build --symlink-install --packages-up-to inference"
