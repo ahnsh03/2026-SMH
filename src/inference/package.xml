@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>inference</name>
+  <version>0.1.0</version>
+  <description>인지 계층: 카메라 영상 → 차선/표지 인지 → LaneDetections 발행 (통합 launch 포함)</description>
+  <maintainer email="inha.aim.01@gmail.com">SMH Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>lane_msgs</exec_depend>
+  <!-- 통합 launch(auto_driving)가 제어 계층을 함께 띄운다 -->
+  <exec_depend>driving</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

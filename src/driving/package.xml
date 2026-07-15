@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>driving</name>
+  <version>0.1.0</version>
+  <description>제어 계층: LaneDetections → 경로선택/추종(Pure Pursuit) → Control 명령 발행</description>
+  <maintainer email="inha.aim.01@gmail.com">SMH Team</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>lane_msgs</exec_depend>
+  <!-- D-Racer-Kit(언더레이)에서 제공하는 액추에이터 명령 메시지 -->
+  <exec_depend>control_msgs</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

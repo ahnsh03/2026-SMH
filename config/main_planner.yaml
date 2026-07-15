@@ -1,0 +1,10 @@
+# 미션/상위 플래너 파라미터 (갈림길·정지·방향표지 연동)
+# board: config/main_planner.yaml 에 대응. 현재는 스켈레톤.
+lane_control_node:
+  ros__parameters:
+    # 갈림길 진입: 최근 방향표지 관측 시에만 fork 추종 허용
+    fork_enable_after_sign: true
+    fork_sign_ttl: 2.0        # s
+    # 정지 표지(ArUco): 감지 거리 이하에서 정지
+    stop_distance: 0.30       # m
+    stop_hold: 2.0            # s

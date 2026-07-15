@@ -1,0 +1,14 @@
+# ROS2 / colcon
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# 편집기
+.vscode/
+.idea/

@@ -1,0 +1,16 @@
+# 제어(lane_control_node) 파라미터 — 경로추종/명령
+# board: config/lane_control.yaml 에 대응
+lane_control_node:
+  ros__parameters:
+    lane_topic: /perception/lane
+    control_topic: /control
+    command_hz: 10.0
+    lane_timeout: 0.5        # s, 인지 소실 시 안전정지
+    steer_trim: 0.0          # 실차 조향 오프셋 (sim=0, 실차는 vehicle_config STEER_TRIM)
+
+    # --- Pure Pursuit ---
+    lookahead: 0.35          # m
+    wheelbase: 0.20          # m
+    max_steer: 1.0
+    base_throttle: 0.25
+    steer_ema: 0.5           # 조향 평활 계수 0~1

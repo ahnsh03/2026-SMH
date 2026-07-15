@@ -1,0 +1,21 @@
+# 인지(inference_node) 파라미터 — 차선/표지 비전
+# board: config/lane_vision.yaml 에 대응
+inference_node:
+  ros__parameters:
+    image_topic: /camera/image/compressed
+    lane_topic: /perception/lane
+    vehicle_config_file: ""
+
+    # --- BEV / IPM (실제 값은 scripts 튜닝으로 채움) ---
+    # bev_width: 200
+    # bev_height: 200
+    # meters_per_pixel: 0.005
+    # x_forward_max: 1.0
+
+    # --- HSV 색상 임계 (흰/노랑 차선) ---
+    # white_h: [0, 180]
+    # white_s: [0, 40]
+    # white_v: [200, 255]
+    # yellow_h: [20, 35]
+    # yellow_s: [80, 255]
+    # yellow_v: [80, 255]
