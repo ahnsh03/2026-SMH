@@ -17,7 +17,7 @@ metric_ipm:
   camera:
     hfov_deg: 70.42
     height_ground_m: 0.13
-    pitch_down_deg: 20.0
+    pitch_down_deg: 10.0
   range:
     x_min_m: 0.22
     x_max_m: 1.5
@@ -79,13 +79,13 @@ hsv:
   red_road:
     h_min: 0
     h_max: 9
-    s_min: 180
+    s_min: 155
     s_max: 255
-    v_min: 145
-    v_max: 230
+    v_min: 120
+    v_max: 255
   note: >
     OpenCV HSV (H 0-179). Bag-tuned 2026-07-15 (Seunghyun, from_bag captures).
-    BEV/IPM mount left on board values — do not conflate with this hsv block.
+    red_road widened 2026-07-15 (s_min 155, v 120–255). BEV/IPM mount left on board.
 detect_tune:
   crossing_coverage_ratio: 0.4
   crossing_min_rows: 3

@@ -66,7 +66,7 @@ VISUALIZE_TUNE = "tune"
 # │               (cv2 창 대신 CompressedImage → 모니터 패널) │
 # │  환경변수: LANE_VISUALIZE=off|control|on|tune            │
 # └──────────────────────────────────────────────────────────┘
-VISUALIZE_MODE = "tune"
+VISUALIZE_MODE = "off"
 
 # 보드/SSH/headless에서는 창을 띄우면 죽는다. 코드를 안 고치고 끄려면
 # 환경변수로 덮어쓴다(있을 때만 우선).
@@ -346,7 +346,7 @@ def _load_hsv_thresholds() -> dict[str, tuple[np.ndarray, np.ndarray]]:
         "white": ((0, 0, 210), (179, 20, 255)),
         "yellow": ((15, 50, 160), (50, 150, 255)),
         "black_road": ((17, 0, 50), (70, 255, 140)),
-        "red_road": ((0, 180, 145), (9, 255, 230)),
+        "red_road": ((0, 155, 120), (9, 255, 255)),
     }
     try:
         with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as f:
