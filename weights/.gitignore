@@ -1,5 +1,6 @@
-# Allow the competition sign model (root .gitignore ignores *.onnx).
+# Allow competition ONNX models (root .gitignore ignores *.onnx).
 *
 !.gitignore
 !README.md
 !sign_best.onnx
+!sign_light_best_v5b.onnx

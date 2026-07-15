@@ -17,9 +17,10 @@ dist/
 *.pt
 *.onnx
 *.weights
-# Race board: track the competition left/right sign ONNX only.
+# Race board: track competition ONNX weights under weights/.
 !weights/
 !weights/sign_best.onnx
+!weights/sign_light_best_v5b.onnx
 !weights/README.md
 !weights/.gitignore
 datasets/
