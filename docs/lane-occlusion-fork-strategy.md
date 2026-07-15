@@ -508,6 +508,52 @@ PYTHONPATH=scripts/vision_tune:src/inference python3 scripts/vision_tune/score_o
 
 후속: `enable_fork`/표지 게이트와 AND로 연결 · L/R은 기존 `road_split` / `white_*` · FSM.
 
+### 5.1.3+ Stretch 통합 (2026-07-16)
+
+흰 tip(`out_fork_moment`)만으로는 미션 **구간**(~1690–1783)을 덮지 못한다.  
+ego_blob Y-stretch와 fuse한 **`score_out_fork_capture`** 를 bag으로 검증한다.
+
+| | |
+|--|--|
+| 문서 | [out-ego-fork-shape.md](./out-ego-fork-shape.md) |
+| CLI | `scripts/vision_tune/score_out_fork_capture.py --from-bag out` |
+| Fuse | `capture = ego.hard ∨ (moment.hard ∧ ego soft/hard)` |
+
+---
+
+## 5.1.4 판단 구조 — OUT 표지∧capture · IN moment 패스 정책 (2026-07-16)
+
+**검토 결론: 요청 구조 채택.**
+
+| 장면 | 트리거 | L/R |
+|------|--------|-----|
+| **Out 갈림** | **표지 인식 ∧ `out_fork_capture`** (`decide_out_fork_arm`) | 표지가 rank 잠금 (0=좌, 1=우) |
+| **In 탈출** | **`in_circle_fork_moment`만** (표지 불필요) | **1회 rising → 우(rank1)=원 유지** · **2회 rising → 좌(rank0)=탈출** |
+
+```
+OUT:  sign_window ──┐
+      capture ──────┼──► enable_fork → yellow_alt/road_split follow → FORK_TURN
+                    │
+IN:   moment.hard ──(K debounce rising)──► pass1 keep_rank=1
+                                         ► pass2 exit_rank=0 → EXIT_READY/EXIT
+```
+
+왜 AND(OUT): 표지만이면 평상 흰 차로에서 가짜 fork, capture만이면 표지 없는 먼 stretch에서 arm.  
+왜 IN에 moment만: 회전교차로 유지/탈출은 대회에 방향 표지가 없음. yellow far dual이 SSOT (§5.1.2). **OUT ego capture를 IN에 쓰지 말 것.**
+
+코드:
+
+| | |
+|--|--|
+| 정책 | [`perception/fork/judgment.py`](../src/inference/inference/modules/perception/fork/judgment.py) |
+| 플래너 | `MainPlanner._fork_perception_allowed` · `_apply_in_moment_pass` · `_wants_roundabout_exit` |
+| YAML | `route.out_fork_require_capture` · `roundabout.in_exit_use_moment` / `in_keep_passes` / `in_keep_branch_rank` |
+| 인지 플래그 | `LaneDetections.out_fork_capture` · `.in_circle_fork_moment` (blob detect) |
+
+원형 중 `circle_ignore_fork_for_control`: moment가 rank를 **고른 뒤에는** fork PP 허용 (유지 갈래 / 탈출 갈래 추종 ON).
+
+상세 bag 검증: [out-ego-fork-shape.md](./out-ego-fork-shape.md).
+
 ---
 
 ## 5.2 통합 결정 (2026-07-14)

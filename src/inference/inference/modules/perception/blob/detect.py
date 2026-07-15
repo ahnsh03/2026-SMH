@@ -106,6 +106,30 @@ def detect_with_debug(
     yellow_vis = yellow_lane_present(masks['yellow']) if prefer else False
     white_vis = bool(np.any(masks['white'])) and (not prefer or not yellow_vis)
 
+    out_capture = False
+    in_moment = False
+    try:
+        from inference.modules.perception.fork.capture import score_out_fork_capture
+        from inference.modules.perception.fork.moment import (
+            score_in_circle_fork_moment,
+        )
+
+        if prefer:
+            in_moment = bool(
+                score_in_circle_fork_moment(
+                    masks['yellow'], masks['road_raw']
+                ).hard
+            )
+        else:
+            out_capture = bool(
+                score_out_fork_capture(
+                    masks['white'], masks['road_raw'], blob
+                ).capture
+            )
+    except Exception:
+        out_capture = False
+        in_moment = False
+
     detections = LaneDetections(
         drivable_area=blob.copy(),
         white_centerline=white_cl,
@@ -125,6 +149,8 @@ def detect_with_debug(
         lane_policy='explore',
         meters_per_pixel=mpp,
         x_forward_max=float(ipm.x_max_m),
+        out_fork_capture=out_capture,
+        in_circle_fork_moment=in_moment,
     )
 
     if left_rails.size == h_bev and h_bev > 0:

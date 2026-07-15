@@ -90,6 +90,9 @@ class LaneDetections:
     # BEV grid → base_link (same contract as lane_msgs/LaneDetections)
     meters_per_pixel: float = 0.0
     x_forward_max: float = 0.0
+    # Mask gates for planner judgment (fork/judgment.py) — not L/R geometry.
+    out_fork_capture: bool = False
+    in_circle_fork_moment: bool = False
 
 
 @dataclass

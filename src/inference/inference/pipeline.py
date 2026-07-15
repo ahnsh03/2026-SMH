@@ -49,6 +49,8 @@ class PlannerConfig:
     sign_confirm_frames: int = 3
     out_fork_require_sign: bool = True
     out_fork_sign_hold_sec: float = 3.0
+    # OUT: also require ``out_fork_capture`` (tip+stretch) with the sign window.
+    out_fork_require_capture: bool = True
     # If True, forced_turn keeps fork perception armed (old sim behavior).
     # Default False: forced_turn only picks L/R rank when a real sign arms the window.
     out_fork_forced_turn_arms: bool = False
@@ -95,6 +97,10 @@ class PlannerConfig:
     roundabout_entry_on_yellow: bool = True
     min_lap_time_sec: float = 5.0
     exit_branch_rank: int = 0
+    # IN: moment-driven keep then exit (rank 1 = right keep, 0 = left exit).
+    in_exit_use_moment: bool = True
+    in_keep_passes: int = 1
+    in_keep_branch_rank: int = 1
     branch_required_events: int = 2
     crossing_required_events: int = 2
     branch_on_frames: int = 3
@@ -231,6 +237,9 @@ def load_planner_config(
         out_fork_sign_hold_sec=max(
             0.0, float(route.get('out_fork_sign_hold_sec', 3.0))
         ),
+        out_fork_require_capture=bool(
+            route.get('out_fork_require_capture', True)
+        ),
         out_fork_forced_turn_arms=bool(
             route.get('out_fork_forced_turn_arms', False)
         ),
@@ -313,6 +322,9 @@ def load_planner_config(
         roundabout_entry_on_yellow=bool(rb.get('entry_on_yellow', True)),
         min_lap_time_sec=max(0.0, float(rb.get('min_lap_time_sec', 5.0))),
         exit_branch_rank=int(rb.get('exit_branch_rank', 0)),
+        in_exit_use_moment=bool(rb.get('in_exit_use_moment', True)),
+        in_keep_passes=max(0, int(rb.get('in_keep_passes', 1))),
+        in_keep_branch_rank=int(rb.get('in_keep_branch_rank', 1)),
         branch_required_events=max(1, int(rb.get('branch_required_events', 2))),
         crossing_required_events=max(1, int(rb.get('crossing_required_events', 2))),
         branch_on_frames=max(1, int(rb.get('branch_on_frames', 3))),
@@ -509,6 +521,13 @@ class MainPlanner:
         self.crossing_counter = RisingEventCounter(
             self.config.crossing_on_frames, self.config.crossing_off_frames
         )
+        # IN keep/exit moment risings (same debounce as branch_on/off).
+        self.moment_counter = RisingEventCounter(
+            self.config.branch_on_frames, self.config.branch_off_frames
+        )
+        self._in_fork_pass_count = 0
+        self._out_capture_latched = False
+        self._last_fork_arm_reason = 'none'
         self._roundabout_started_at: float | None = None
         self._yellow_valid_frames = 0
         self._path_lost_frames = 0
@@ -567,6 +586,8 @@ class MainPlanner:
             self._roundabout_started_at = now_sec
             self.branch_counter.reset()
             self.crossing_counter.reset()
+            self.moment_counter.reset()
+            self._in_fork_pass_count = 0
             self._lookahead_m = self.config.roundabout_lookahead_m
         if state in (DrivingState.NORMAL, DrivingState.FINISHED):
             self._fork_absent_frames = 0
@@ -648,9 +669,23 @@ class MainPlanner:
         self._fork_selection_reason = f'forced_{turn.value}'
 
     def _wants_roundabout_exit(self) -> bool:
-        """IN-mode policy: LEFT exits; RIGHT keeps circling; else default exit."""
+        """IN-mode policy: LEFT exits; RIGHT keeps circling; else default exit.
+
+        When ``in_exit_use_moment`` is on, keep-passes must already be finished
+        (``_in_fork_pass_count > in_keep_passes``) before exit is allowed.
+        """
         if self.config.route_mode is not RouteMode.IN:
             return True
+        if self.config.in_exit_use_moment:
+            from inference.modules.perception.fork.judgment import (
+                in_wants_exit_from_passes,
+            )
+
+            if not in_wants_exit_from_passes(
+                self._in_fork_pass_count,
+                keep_passes=self.config.in_keep_passes,
+            ):
+                return False
         latched = (
             self._forced_turn
             if self._forced_turn is not TurnSign.UNKNOWN
@@ -660,8 +695,40 @@ class MainPlanner:
             return False
         if latched is TurnSign.LEFT:
             return True
-        # No pre-choice: keep historical default (attempt exit when armed).
+        # No pre-choice: after moment keep-passes, attempt exit when armed.
         return True
+
+    def _apply_in_moment_pass(self, moment_rising: bool) -> None:
+        """On IN moment rising: pass1→right keep, pass2→left exit (+ fork follow)."""
+
+        if not moment_rising:
+            return
+        if self.config.route_mode is not RouteMode.IN:
+            return
+        if not self.config.in_exit_use_moment:
+            return
+        if self.state is not DrivingState.ROUNDABOUT_CIRCLE:
+            return
+        # Sim/test override: forced_turn owns keep/exit.
+        if self._forced_turn is not TurnSign.UNKNOWN:
+            return
+        from inference.modules.perception.fork.judgment import decide_in_exit_pass
+
+        decision = decide_in_exit_pass(
+            self._in_fork_pass_count,
+            keep_passes=self.config.in_keep_passes,
+            keep_rank=self.config.in_keep_branch_rank,
+            exit_rank=self.config.exit_branch_rank,
+        )
+        self._in_fork_pass_count = decision.pass_index
+        self._fork_selected_rank = int(decision.select_rank)
+        self._fork_selection_reason = decision.reason
+        if decision.wants_exit:
+            self.desired_turn = TurnSign.LEFT
+            self._fork_locked_turn = TurnSign.LEFT
+        else:
+            self.desired_turn = TurnSign.RIGHT
+            self._fork_locked_turn = TurnSign.RIGHT
 
     def force_fork_choice(
         self,
@@ -1827,46 +1894,61 @@ class MainPlanner:
             self._last_out_sign_sec = now_sec
 
     def _fork_perception_allowed(
-        self, *, now_sec: float, observed_sign: TurnSign
+        self,
+        *,
+        now_sec: float,
+        observed_sign: TurnSign,
+        out_capture: bool = False,
     ) -> bool:
         """Whether detect() should publish fork/branches this frame.
 
-        OUT: only after a recent turn sign (or mid-manoeuvre). Normal white
-        follow keeps enable_fork=False so cell/marking forks cannot yank the
-        robot. ``forced_turn`` selects rank only — it does **not** keep fork
-        perception armed for the whole lap (use out_fork_forced_turn_arms to
-        restore the old sim override).
-        IN: always (circle uses forks for exit counting; control gated elsewhere).
+        OUT: turn-sign window AND (optional) ``out_fork_capture`` tip+stretch.
+        IN: always allow perception so moment+yellow_alt can run; control is
+        gated by circle_ignore / EXIT states (see §5.1.4).
         """
-        if self.state in (
+        from inference.modules.perception.fork.judgment import decide_out_fork_arm
+
+        mid = self.state in (
             DrivingState.FORK_TURN,
             DrivingState.ROUNDABOUT_EXIT,
             DrivingState.ROUNDABOUT_EXIT_READY,
-        ):
-            return True
+        )
         if self.config.route_mode is not RouteMode.OUT:
-            return True
-        if not self.config.out_fork_require_sign:
+            self._last_fork_arm_reason = 'in_open'
             return True
         if (
             self.config.out_fork_forced_turn_arms
             and self._forced_turn is not TurnSign.UNKNOWN
         ):
+            self._last_fork_arm_reason = 'forced_turn_arms'
             return True
         self._note_out_sign_sighting(observed_sign, now_sec)
-        if self._last_out_sign_sec is None:
-            return False
-        return (now_sec - self._last_out_sign_sec) <= float(
-            self.config.out_fork_sign_hold_sec
+        sign_window = False
+        if self._last_out_sign_sec is not None:
+            sign_window = (now_sec - self._last_out_sign_sec) <= float(
+                self.config.out_fork_sign_hold_sec
+            )
+        decision = decide_out_fork_arm(
+            sign_window=sign_window,
+            capture=bool(out_capture),
+            require_sign=self.config.out_fork_require_sign,
+            require_capture=self.config.out_fork_require_capture,
+            force_mid_manoeuvre=mid,
         )
-
+        self._last_fork_arm_reason = decision.reason
+        return bool(decision.arm)
     def _forkish_for_mask(self, lane: Any) -> bool:
         if not self.config.mask_fork_force_pp:
             return False
-        # Circulating: stay on mask/yellow centerline; do not flicker to fork PP.
+        # Circulating: stay on mask/yellow unless IN moment already selected a
+        # keep/exit rank (pass policy wants fork follow ON — §5.1.4).
         if (
             self.config.circle_ignore_fork_for_control
             and self.state is DrivingState.ROUNDABOUT_CIRCLE
+            and not (
+                self.config.in_exit_use_moment
+                and self._fork_selected_rank is not None
+            )
         ):
             return False
         if not self._fork_perception_enabled:
@@ -1874,7 +1956,6 @@ class MainPlanner:
         if bool(getattr(lane, 'fork_active', False)):
             return True
         return len(getattr(lane, 'branches', ()) or ()) >= 2
-
     def _effective_mask_corridor_mode(self, lane: Any) -> tuple[str, bool]:
         """Return (corridor_mode, require_color_path) for mask_p this frame."""
 
@@ -2254,12 +2335,15 @@ class MainPlanner:
             else False
         )
         # Sign first so OUT can gate fork perception before detect().
+        # Capture uses previous-frame latch (stretch lasts ≫1 frame).
         traffic = traffic_sign.detect(frame)
         aruco = aruco_detection.detect(frame)
         self._note_out_sign_sighting(traffic.turn, now_sec)
         self._update_desired_turn(traffic.turn)
         enable_fork = self._fork_perception_allowed(
-            now_sec=now_sec, observed_sign=traffic.turn
+            now_sec=now_sec,
+            observed_sign=traffic.turn,
+            out_capture=bool(self._out_capture_latched),
         )
         self._fork_perception_enabled = enable_fork
         lane = lane_detection.detect(
@@ -2268,9 +2352,19 @@ class MainPlanner:
             prefer_yellow=prefer_yellow,
             enable_fork=enable_fork,
         )
+        # Refresh capture latch from this frame for next arm decision.
+        # Hold while capture stays true; drop when stretch ends (unless mid FORK).
+        if bool(getattr(lane, 'out_fork_capture', False)):
+            self._out_capture_latched = True
+        elif self.state is not DrivingState.FORK_TURN:
+            self._out_capture_latched = False
 
         branch_event = self.branch_counter.update(bool(lane.fork_active))
         crossing_event = self.crossing_counter.update(bool(lane.yellow_crossing_line))
+        moment_rising = self.moment_counter.update(
+            bool(getattr(lane, 'in_circle_fork_moment', False))
+        )
+        self._apply_in_moment_pass(moment_rising)
         elapsed = (
             0.0
             if self._roundabout_started_at is None
@@ -2310,7 +2404,15 @@ class MainPlanner:
 
         if self.state is DrivingState.ROUNDABOUT_CIRCLE:
             enough_time = elapsed >= self.config.min_lap_time_sec
-            branch_ready = self.branch_counter.events >= self.config.branch_required_events
+            if self.config.in_exit_use_moment:
+                # Moment pass policy: need completed keep-pass then exit pass.
+                branch_ready = self._in_fork_pass_count > int(
+                    self.config.in_keep_passes
+                )
+            else:
+                branch_ready = (
+                    self.branch_counter.events >= self.config.branch_required_events
+                )
             crossing_ready = self.crossing_counter.events >= self.config.crossing_required_events
             if (
                 enough_time
@@ -2667,9 +2769,17 @@ class MainPlanner:
             'yellow_selected': path_source is PathSource.YELLOW_CENTERLINE,
             'fork_active': bool(lane.fork_active),
             'fork_perception': bool(enable_fork),
+            'fork_arm_reason': str(self._last_fork_arm_reason),
+            'out_fork_capture': bool(getattr(lane, 'out_fork_capture', False)),
+            'in_circle_fork_moment': bool(
+                getattr(lane, 'in_circle_fork_moment', False)
+            ),
+            'in_fork_pass_count': int(self._in_fork_pass_count),
+            'moment_rising': bool(moment_rising),
             'branch_count': len(lane.branches),
             'branch_event': branch_event,
             'branch_events': self.branch_counter.events,
+            'moment_events': self.moment_counter.events,
             'crossing_active': bool(lane.yellow_crossing_line),
             'crossing_event': crossing_event,
             'crossing_events': self.crossing_counter.events,

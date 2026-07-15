@@ -45,11 +45,15 @@ Pure Pursuit / mask_p + mission state → ControlCommand → /control
 
 | `tracker.normal` | 의미 |
 |------------------|------|
-| `mask_p` | **보드 SSOT.** hard white corridor COM (mask_hard_wide, cruise≈0.28) |
-| `pp` / `hybrid` | 실험용 |
+| `mask_p` | **실차 1순위.** ego-blob COM (`sim_v2`) + `track_state` — **corridor 기본 off** (T1–T2) |
+| `pp` / `hybrid` / `stanley` | 실험·A/B — flip 전 [`control-hybrid-strategy.md`](./control-hybrid-strategy.md) |
 
-**OUT NORMAL:** 흰 hard corridor `mask_p` + 표지 후 fork는 **branch PP**.  
-저속 동결: cruise **0.28** / curve **0.18** (`mask_policy` 랩 승자 + 감속).
+**역할 분리 (요지):** NORMAL = **mask 주 / paint 보조**. 갈림·원형 = **paint·갈래 PP 주 / mask 끔**.  
+OUT arm = **표지 ∧ capture** · IN = moment **우 유지→좌 탈출**. 상세·실차 T0–T7:  
+[`control-hybrid-strategy.md`](./control-hybrid-strategy.md) · 보드: [`board-freeze-control.md`](./board-freeze-control.md).
+
+**OUT NORMAL:** mask_p + 표지∧capture 후 fork는 **branch PP**.  
+속도: 보드에서는 cruise **0.18–0.22**부터 ([`main_planner.real_car.yaml`](../config/main_planner.real_car.yaml)).
 
 갈림 L/R 확인:
 
@@ -166,8 +170,8 @@ raw_steering = pp_steering + heading_steering + cte_steering
 
 ### NORMAL tracker
 
-- `mask_p` (보드 SSOT): BEV hard-corridor COM + `track_state` 횡오프셋 EMA/jump hold
-- `stanley` (A/B): 색 센터라인 Stanley-lite `δ=ψ+atan(k e/(v+ε))+κ_ff`, fork 시에는 기존처럼 branch PP
+- `mask_p` (**실차 우선**): ego-blob COM + `track_state` — corridor는 T1–T2에서 **off** ([`control-hybrid-strategy.md`](./control-hybrid-strategy.md))
+- `stanley` (A/B): 색 센터라인 Stanley-lite; fork 시 branch PP. **bench 전 flip 금지**
 - `hybrid` / `pp`: 실험용
 
 `track_state`는 COM/경로 근거리 y를 시계열로 고정하고, `|y|`가 half-width를

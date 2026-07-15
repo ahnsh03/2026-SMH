@@ -385,6 +385,7 @@ def test_out_fork_gated_without_sign():
         PlannerConfig(
             route_mode=RouteMode.OUT,
             out_fork_require_sign=True,
+            out_fork_require_capture=True,
             out_fork_sign_hold_sec=3.0,
             branch_on_frames=1,
             branch_off_frames=1,
@@ -477,6 +478,7 @@ def test_forced_turn_does_not_arm_out_fork_by_default():
         PlannerConfig(
             route_mode=RouteMode.OUT,
             out_fork_require_sign=True,
+            out_fork_require_capture=True,
             out_fork_forced_turn_arms=False,
             out_fork_sign_hold_sec=3.0,
             branch_on_frames=1,
@@ -498,8 +500,8 @@ def test_forced_turn_does_not_arm_out_fork_by_default():
     assert out.state is DrivingState.NORMAL
 
 
-def test_out_fork_arms_after_sign_hold():
-    """OUT: turn sign arms fork window; fork then enters FORK_TURN."""
+def test_out_fork_arms_after_sign_and_capture():
+    """OUT: turn sign AND out_fork_capture arm fork window → FORK_TURN."""
     path = np.array(
         [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
         dtype=np.float32,
@@ -513,6 +515,8 @@ def test_out_fork_arms_after_sign_hold():
         yellow_visible=False,
         fork_active=False,
         yellow_crossing_line=False,
+        out_fork_capture=False,
+        in_circle_fork_moment=False,
         branches=(
             SimpleNamespace(points=path, confidence=0.9, lateral_rank=0),
             SimpleNamespace(points=path, confidence=0.9, lateral_rank=1),
@@ -522,6 +526,7 @@ def test_out_fork_arms_after_sign_hold():
         PlannerConfig(
             route_mode=RouteMode.OUT,
             out_fork_require_sign=True,
+            out_fork_require_capture=True,
             out_fork_sign_hold_sec=3.0,
             branch_on_frames=1,
             branch_off_frames=1,
@@ -538,10 +543,18 @@ def test_out_fork_arms_after_sign_hold():
     ), patch(
         'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
     ):
+        # Sign alone is not enough.
         first = planner.step(frame, now_sec=0.0)
-        assert first.debug['fork_perception'] is True
+        assert first.debug['fork_perception'] is False
+        # Next frame: capture true → latch → arm on following step.
+        lane.out_fork_capture = True
+        primed = planner.step(frame, now_sec=0.05)
+        assert primed.debug['out_fork_capture'] is True
+        # Latch now set; same sign still held → perception arms.
+        armed = planner.step(frame, now_sec=0.1)
+        assert armed.debug['fork_perception'] is True
         lane.fork_active = True
-        second = planner.step(frame, now_sec=0.1)
+        second = planner.step(frame, now_sec=0.2)
     assert second.state is DrivingState.FORK_TURN
     assert second.debug['desired_turn'] == 'left'
 
@@ -820,12 +833,14 @@ def test_curvature_reduces_lookahead_and_throttle():
     assert command.throttle < planner.config.cruise_throttle
 
 
-def test_in_course_exits_on_second_debounced_branch():
+def test_in_course_exits_on_second_moment_pass():
+    """IN: moment rising ×1 = keep(rank1); ×2 = exit(rank0)."""
     path = np.array(
         [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
         dtype=np.float32,
     )
-    branch = SimpleNamespace(points=path, confidence=0.9)
+    branch0 = SimpleNamespace(points=path, confidence=0.9, lateral_rank=0)
+    branch1 = SimpleNamespace(points=path, confidence=0.9, lateral_rank=1)
     lane = SimpleNamespace(
         white_centerline=path,
         yellow_centerline=path,
@@ -835,7 +850,9 @@ def test_in_course_exits_on_second_debounced_branch():
         yellow_visible=True,
         fork_active=False,
         yellow_crossing_line=False,
-        branches=(branch,),
+        out_fork_capture=False,
+        in_circle_fork_moment=False,
+        branches=(branch0,),
     )
     config = PlannerConfig(
         route_mode=RouteMode.IN,
@@ -843,7 +860,10 @@ def test_in_course_exits_on_second_debounced_branch():
         yellow_valid_on_frames=1,
         min_points=5,
         min_lap_time_sec=1.0,
-        branch_required_events=2,
+        in_exit_use_moment=True,
+        in_keep_passes=1,
+        in_keep_branch_rank=1,
+        exit_branch_rank=0,
         branch_on_frames=1,
         branch_off_frames=1,
         crossing_on_frames=1,
@@ -859,18 +879,21 @@ def test_in_course_exits_on_second_debounced_branch():
     ), patch(
         'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
     ):
-        planner.step(frame, now_sec=0.0)  # Enter roundabout and reset counters.
+        planner.step(frame, now_sec=0.0)  # Enter roundabout.
+        # Pass 1: keep right.
+        lane.in_circle_fork_moment = True
         lane.fork_active = True
-        lane.branches = (branch, branch)
+        lane.branches = (branch0, branch1)
         planner.step(frame, now_sec=0.1)
-        lane.fork_active = False
-        lane.branches = (branch,)
+        assert planner._in_fork_pass_count == 1
+        assert planner._fork_selected_rank == 1
+        lane.in_circle_fork_moment = False
         planner.step(frame, now_sec=0.2)
-        lane.fork_active = True
-        lane.branches = (branch, branch)
+        # Pass 2: exit left (≥ min_lap_time).
+        lane.in_circle_fork_moment = True
         output = planner.step(frame, now_sec=1.2)
 
-    assert planner.branch_counter.events == 2
+    assert planner._in_fork_pass_count == 2
     assert output.state is DrivingState.ROUNDABOUT_EXIT
     assert output.decision == 'roundabout_exit_rank0'
 
@@ -940,6 +963,7 @@ def test_forced_turn_right_stays_in_roundabout_circle():
             yellow_valid_on_frames=1,
             min_points=5,
             min_lap_time_sec=0.5,
+            in_exit_use_moment=False,
             branch_required_events=1,
             branch_on_frames=1,
             branch_off_frames=1,
@@ -994,6 +1018,7 @@ def test_forced_turn_left_arms_roundabout_exit():
             yellow_valid_on_frames=1,
             min_points=5,
             min_lap_time_sec=0.5,
+            in_exit_use_moment=False,
             branch_required_events=1,
             branch_on_frames=1,
             branch_off_frames=1,
@@ -1096,14 +1121,24 @@ def test_sign_is_confirmed_then_locked_during_fork():
         yellow_visible=False,
         fork_active=False,
         yellow_crossing_line=False,
+        out_fork_capture=True,
+        in_circle_fork_moment=False,
         branches=(
             SimpleNamespace(points=left_path, confidence=0.9),
             SimpleNamespace(points=right_path, confidence=0.9),
         ),
     )
     planner = MainPlanner(
-        PlannerConfig(min_points=5, sign_confirm_frames=2, branch_on_frames=1)
+        PlannerConfig(
+            route_mode=RouteMode.OUT,
+            min_points=5,
+            sign_confirm_frames=2,
+            branch_on_frames=1,
+            out_fork_require_sign=True,
+            out_fork_require_capture=True,
+        )
     )
+    planner._out_capture_latched = True
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(

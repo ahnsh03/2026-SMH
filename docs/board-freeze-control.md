@@ -1,15 +1,60 @@
-# 보드(실차) 동결 — 저속 mask_hard_wide + 갈림 L/R
+# 보드(실차) 동결 — mask_p + 갈림 게이트 + 실차 T1–T7
 
-시뮬에서 검증한 제어를 보드에 올릴 때 **이 YAML이 SSOT**입니다.
+> 개정: 2026-07-16 — 하이브리드 제어 전략·fork judgment 반영.  
+> **제어 설계 SSOT:** [`control-hybrid-strategy.md`](./control-hybrid-strategy.md)  
+> YAML: `config/main_planner.yaml` (+ 실차 [`main_planner.real_car.yaml`](../config/main_planner.real_car.yaml))
 
-- 파일: `config/main_planner.yaml`
-- NORMAL: `tracker.normal: mask_p` + hard corridor 0.38
-- 속도: `cruise_throttle: 0.28`, `curve_throttle: 0.18`
-- mask: `steer_k: 2.0`, `alpha: 0.40`, `near_band: 0.85`, `fork_force_pp: true`
-- Phase A: `track_state` 횡오프셋 EMA + jump reject + 센터라인 half-width hold
-- Phase B A/B: `tracker.normal: stanley` (κ FF 포함) — **YAML SSOT는 mask_p 유지**
-  (오프라인 synthetic은 stanley 쪽으로 기울 수 있음 → `out_lap_bench` 확정 전 flip 금지)
-- Fork: 표지 후 / `forced_turn` 시 선택 branch PP만 추종 (LEFT=0, RIGHT=1)
+---
+
+## 현재 보드 권장 (T1–T2 시작점)
+
+| 항목 | 값 |
+|------|-----|
+| NORMAL | `tracker.normal: mask_p` · **corridor_mode: off** (soft/hard는 T3+) |
+| 입력 | ego blob `drivable_area` (near-band HSV SSOT) |
+| mask | `steer_law: sim_v2`, `steer_k: 2.0`, `steer_alpha: 0.40`, `fork_force_pp: true` |
+| track_state | EMA + jump reject + `half_width_m: 0.175` hold |
+| 속도 | 시뮬 cruise보다 낮게 시작 (`0.18`–`0.22`); real_car overlay |
+| CIRCLE | `circle_tracker: pp` (yellow) — COM 금지 |
+| OUT 갈림 arm | **표지 ∧ `out_fork_capture`** (`out_fork_require_capture: true`) |
+| IN 탈출 | moment pass1 **우 유지** / pass2 **좌 탈출** (`in_exit_use_moment`) |
+| Fork 조향 | 선택 branch PP만 (LEFT=0, RIGHT=1). mask COM 미사용 |
+
+Stanley / hybrid / soft corridor 전체 flip은 **T1–T2 통과 전 금지**.
+
+---
+
+## 실차 검증 순서 (요약)
+
+자세한 성공 기준: [`control-hybrid-strategy.md` §5](./control-hybrid-strategy.md).
+
+| # | 초점 |
+|---|------|
+| T0 | HSV·ego blob 육안 |
+| **T1** | mask_p 저속 직진 |
+| **T2** | mask_p 완만 커브 |
+| T3 | paint soft pull A/B |
+| T4–T6 | CIRCLE PP · IN keep/exit |
+| T7 | OUT 표지∧capture → 갈림 PP |
+
+---
+
+## 보드 적용 (Phase C)
+
+1. 이 브랜치(`feature/seunghyun-recover-pre-pdc` 또는 merge 후)를 보드에 sync.
+2. `main_planner.yaml` + `main_planner.real_car.yaml` 기하·속도 반영:
+   - `wheelbase_m: 0.175`, `max_steer_angle_rad: 0.4266`
+   - cruise를 시뮬보다 낮게
+3. `STEER_TRIM` → `config/vehicle_config.yaml`.
+4. hunting만 남으면 `track_state.delay_pred_sec` `0.06~0.12`.
+5. **HSV · morph · near-band select**는 잠금본 유지 (T0 이상이면 제어만 건드림).
+6. 다른 feature 브랜치에서 제어/갈림 진입만 파생 개발·검증.
+
+### 디버그 필드 (`/debug/planner`)
+
+`fork_arm_reason` · `out_fork_capture` · `in_circle_fork_moment` · `in_fork_pass_count` · `path_source` · `fork_perception`
+
+---
 
 ## 갈림 확인 (시뮬 재현)
 
@@ -24,31 +69,15 @@ PYTHONUNBUFFERED=1 python3 scripts/drive_test/fork_spawn_unit.py \
 | out_left / out_right | `out_fork` | left/right_branch |
 | in_exit_left / in_exit_right | `in_roundabout_exit` | left/right_branch |
 
-모니터링: OpenCV `Lane drive`, `Fork select` · 스냅 `data/captures/fork_drive_logs/<stamp>/r00_*/snap_*.png`
+오프라인 capture:  
+`PYTHONPATH=scripts/vision_tune:src/inference python3 scripts/vision_tune/score_out_fork_capture.py --from-bag out --stride 5`
 
-## 보드 적용 (Phase C)
-
-1. `main_planner.yaml`을 보드에 동기화 (갈림·mask corridor 유지).
-2. 실차 기하·속도는 [`config/main_planner.real_car.yaml`](../config/main_planner.real_car.yaml) 값을
-   `pure_pursuit` / `speed` / `track_state`에 반영:
-   - `wheelbase_m: 0.175`, `max_steer_angle_rad: 0.4266`
-   - cruise를 시뮬보다 낮게 시작 (`0.22`)
-3. `STEER_TRIM`은 `config/vehicle_config.yaml` (웹/조이스틱 트림).
-4. 직진 hunting이 남으면만 `track_state.delay_pred_sec`를 `0.06~0.12`로 켬.
-5. 실차에서는 속도·트림·delay만 만지고, 갈림 분리 로직은 시뮬 동결본을 유지.
-
-### tracker A/B (시뮬)
+### tracker A/B (시뮬 — T1 이후)
 
 ```bash
-# 짧은 구간 steer_rms
 python3 scripts/drive_test/mask_steer_bench.py \
   --variants mask_p_hard_wide,stanley_soft --segments start,out_in_merge
-
-# OUT 랩 패밀리
 python3 scripts/drive_test/out_lap_bench.py --families mask_p,stanley
-
-# 오프라인 synthetic A/B (Gazebo 없이 steer_rms)
-python3 scripts/drive_test/tracker_ab_offline.py
 ```
 
-오프라인 스모크: `fork_spawn_unit.py --mode offline --scenario all` (프레임 기반 L/R layer 확인).
+`out_lap_bench` 확정 전 Stanley YAML flip 금지.

@@ -14,6 +14,8 @@ route:
   # normal driving is white centerline / mask only.
   out_fork_require_sign: true
   out_fork_sign_hold_sec: 3.0
+  # Also require tip+stretch capture (score_out_fork_capture) with the sign.
+  out_fork_require_capture: true
   # Keep false: forced_turn:= only chooses L/R rank, does not arm forks all lap.
   # Set true only for sign-less fork unit tests / rail review.
   # Production: camera signs (or require_sign=false) arm forks — keeps NORMAL white-only stable.
@@ -143,7 +145,11 @@ roundabout:
   # Enter circle mode once a stable yellow path or a yellow crossing line appears.
   entry_on_yellow: true
   min_lap_time_sec: 5.0
+  # lateral_rank: 0=left(exit), 1=right(keep circle) — moment pass policy §5.1.4
   exit_branch_rank: 0
+  in_exit_use_moment: true
+  in_keep_passes: 1
+  in_keep_branch_rank: 1
   branch_required_events: 2
   crossing_required_events: 2
   # Stricter than NORMAL fork flicker — reduces false exit arms in-circle.
@@ -151,7 +157,7 @@ roundabout:
   branch_off_frames: 10
   crossing_on_frames: 3
   crossing_off_frames: 6
-  # While circulating, do not switch mask→fork PP (count events only).
+  # While circulating, do not switch mask→fork PP until moment selects a rank.
   circle_ignore_fork_for_control: true
   # Circle: paint centerline PP (yellow), not road_clean COM.
   circle_tracker: pp

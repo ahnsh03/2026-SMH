@@ -87,3 +87,29 @@ def test_out_moment_rejects_narrow_parallel_rails():
     s = score_out_fork_moment(white * 255, road * 255)
     assert s.sep_white < 150.0
     assert s.hard is False
+
+
+def test_out_fork_capture_fuses_tip_and_stretch():
+    from inference.modules.perception.fork.capture import score_out_fork_capture
+
+    h, w = 200, 320
+    white = np.zeros((h, w), dtype=np.uint8)
+    road = np.zeros((h, w), dtype=np.uint8)
+    ego = np.zeros((h, w), dtype=np.uint8)
+    # Tip-like white dual far
+    for v in range(0, int(h * 0.70)):
+        white[v, 30:50] = 255
+        white[v, 270:290] = 255
+        road[v, 20:140] = 255
+        road[v, 180:300] = 255
+        ego[v, 20:140] = 255
+        ego[v, 180:300] = 255
+    for v in range(int(h * 0.70), h):
+        white[v, 130:150] = 255
+        road[v, 110:210] = 255
+        ego[v, 110:210] = 255
+
+    s = score_out_fork_capture(white, road, ego)
+    assert s.tip is True
+    assert s.in_stretch is True or s.ego.soft is True
+    assert s.capture is True
