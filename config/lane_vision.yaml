@@ -58,10 +58,10 @@ hsv:
   red_road:
     h_min: 0
     h_max: 9
-    s_min: 180
+    s_min: 155
     s_max: 255
-    v_min: 145
-    v_max: 230
+    v_min: 120
+    v_max: 255
   note: OpenCV HSV (H 0-179). Tuned with scripts/vision_tune/tune_hsv.py. Sim/real
     shared; Won Tae may refine final competition values.
 detect_tune:
