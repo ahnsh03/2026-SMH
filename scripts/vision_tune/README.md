@@ -226,8 +226,11 @@ python3 scripts/vision_tune/tune_hsv.py --from-bag out_glare --channel black_cya
 python3 scripts/vision_tune/tune_hsv.py --channel yellow
 ```
 
-기준값: `real_car` = bag `from_bag` 캡처 (커밋 `0191811`, `35ba99e`).  
+기준값: `real_car` = bag `from_bag` 캡처 (커밋 `0191811`, `35ba99e`, `2e37ae8` black_cyan).  
 추가 미세조정 후 `s` 저장. `d`=sim 시드, `b`=origin/board 1차 실차(레거시).
+
+**주행가능 영역 SSOT (2026-07-15):** `road_raw = black|red|black_cyan` → morph → BEV 하단 ego blob.  
+검증: `viz_raw_hsv_masks.py` · `viz_cyan_ab.py` · 문서 [`hsv-profiles.md`](../../docs/hsv-profiles.md) §1.1.
 
 | 창 | 역할 |
 |----|------|
@@ -323,15 +326,17 @@ Metric IPM이면 종·횡이 이미 등방이라 검증용; 사다리꼴 쓸 때
 | `tune_bev.py` | **기본 BEV 진입** → Metric IPM |
 | `tune_metric_ipm.py` | Metric IPM UI·로직 (`tune_bev.py`가 호출) |
 | `metric_ipm.py` | remapping · `(u,v)→(x,y) m` |
-| `tune_hsv.py` | **HSV 마스크** (흰/노란/검/빨) |
+| `tune_hsv.py` | **HSV 마스크** (흰/노란/검/빨/**시안**) |
 | `hsv.py` | HSV load/save/mask |
+| `viz_raw_hsv_masks.py` | BEV · morph · **ego blob** (road=`black\|red\|cyan`) |
+| `viz_cyan_ab.py` | 시안 전후 ego A/B 모자이크 (`out_glare`) |
 | `tune_lane_control.py` | **Pure Pursuit** 게인 튜너 (레거시 경로) |
 | `window_layout.py` | OpenCV 창 화면 안 배치 (`w`) |
 | `tune_bev_roi.py` | 사다리꼴만 (참고) |
 | `bev_roi.py` | 사다리꼴 기하 |
 | `capture_camera.py` | 핫키 캡처 (라이브 토픽) |
 | `capture_from_bag.py` | **IN/OUT bag 재생 + 핫키 캡처** |
-| `preview_out_drivable.py` | OUT/IN: road(black\|red) + **피팅 레일** between 프리뷰 |
+| `preview_out_drivable.py` | OUT/IN: road + 피팅 레일 between 프리뷰 |
 | `out_drivable.py` | road / fill_between_fitted_rails 헬퍼 |
 | `../../config/lane_vision.yaml` | `metric_ipm:` + `hsv:` + `detect_tune:` SSOT |
 | `../../config/lane_control.yaml` | planner 게인 |

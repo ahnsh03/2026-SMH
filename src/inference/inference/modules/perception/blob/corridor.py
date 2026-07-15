@@ -1,14 +1,15 @@
 """Drivable mask: near-ego blob + DT-strip (track-width prior).
 
-A/B on bag frames (``viz_mask_postprocess_ab.py``) showed:
+A/B on bag frames (``viz_mask_postprocess_ab.py`` / ``viz_cyan_ab.py``) showed:
   - rail fill / road_in (old) → zigzag mid, worst score
   - F_dtstrip (near blob + distance-transform ridge ± half_w) wins OUT
   - C_near / E_walls compete on IN when paint is strong
+  - ``black_cyan`` (OR into road_raw) fills OUT LED floor-wash holes (2026-07-15 lock)
 
 Pipeline
 --------
-1. morph denoise road (black|red)
-2. keep largest CC touching ego near-band
+1. morph denoise road (black|red|black_cyan)
+2. keep largest CC touching ego near-band  (= ego blob SSOT)
 3. DT ridge mid → clip each row to mid ± track_width/2 ∩ blob
 4. optional: if course paint dense, AND with paint-wall flood (lights walls)
 """

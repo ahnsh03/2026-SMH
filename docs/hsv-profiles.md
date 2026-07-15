@@ -31,10 +31,42 @@ python3 scripts/vision_tune/hsv.py --apply-profile real_car   # 보드와 동일
 | `yellow` | 노란 차선 마스크 | IN |
 | `black_road` | 검정 아스팔트 (도로) | 공통 |
 | `red_road` | 빨강 아스팔트 (도로) | 공통 |
+| `black_cyan` | 전광판·LED **시안 반사**가 덮인 아스팔트 | OUT 글레어 구간 |
 
-도로 마스크 = `black_road | red_road`. 차선은 코스별로 white **또는** yellow만 쓴다 (OR 하지 않음).
+**도로 원시 마스크** `road_raw` = `black_road | red_road | black_cyan`  
+(2026-07-15 OUT LED 바닥 반사 bag 검증 후 **SSOT 확정**. 시안은 white 차선과 OR하지 않음.)
+
+차선은 코스별로 white **또는** yellow만 쓴다 (서로 OR 하지 않음).
 
 `red_road`는 hue wrap: `h_min`이 낮을 때 `detect_tune.red_h_low_wrap`으로 저-H 대역을 OR한다.
+
+---
+
+## 1.1 주행가능 영역 (drivable) 생성 — SSOT
+
+캡처 A/B(`viz_raw_hsv_masks.py` · `viz_cyan_ab.py`)로 확정한 순서:
+
+```
+BEV(Metric IPM)
+  → HSV: white | yellow | (black|red|black_cyan)
+  → morph open/close + 소구멍 채움
+  → BEV 하단(로봇)에 닿는 최대 CC만 유지  (= ego blob)
+  → drivable_area (제어·mask_p 입력)
+```
+
+| 단계 | 역할 |
+|------|------|
+| `black_cyan` | OUT 전광판 시안 반사로 `black_road`가 뚫리는 구간 보완 |
+| ego blob | 바닥과 떨어진 노이즈 덩어리 제거 |
+| 런타임 | `perception.backend: blob` — `masks.extract_bev_masks`의 `road_raw`에 시안 OR 후 morph / near-ego CC (`corridor` · `morph_blob`) |
+
+튜너/검증:
+
+```bash
+python3 scripts/vision_tune/tune_hsv.py --from-bag out_glare --channel black_cyan
+python3 scripts/vision_tune/viz_raw_hsv_masks.py --from-bag out_glare --all
+python3 scripts/vision_tune/viz_cyan_ab.py --from-bag out_glare --clean
+```
 
 ---
 
@@ -67,6 +99,16 @@ python3 scripts/vision_tune/hsv.py --apply-profile real_car   # 보드와 동일
 
 실차 아스팔트는 Gazebo보다 밝고 색조가 있다 → V 하한·H 밴드 조정.
 
+### black_cyan (OUT LED 바닥 반사)
+
+| | H | S | V |
+|--|---|---|---|
+| **sim** | 90 – 100 | 190 – 220 | 200 – 230 |
+| **real_car** | 90 – 100 | 190 – 220 | 200 – 230 |
+
+OUT 코스 전광판 시안 반사 bag(`from_bag/out_glare`, 2026-07-15)에서 튜닝.  
+좁은 고채도·고명도 cyan만 잡아 흰 카펫·흰 테이프 bleed를 피한다. `black_road`와 **OR**.
+
 ### red_road
 
 | | H | S | V | 비고 |
@@ -95,9 +137,9 @@ python3 scripts/vision_tune/hsv.py --apply-profile real_car   # 보드와 동일
 |------|-----|
 | 환경 | D3-G 보드 + C920e, Metric IPM BEV |
 | bag | IN `bag_20260711_150234`, OUT `bag_20260711_144948` |
-| 캡처 | `scripts/vision_tune/capture_from_bag.py` → `data/captures/from_bag/{in,out}/` |
-| 튜너 | `tune_hsv.py --from-bag in\|out`, 저장 키 **`s`** |
-| Git | `0191811` (전 채널), `35ba99e` (`red_road` S/V 완화) |
+| 캡처 | `capture_from_bag.py` → `data/captures/from_bag/{in,out}/` · 글레어 `out_glare/` |
+| 튜너 | `tune_hsv.py --from-bag in\|out\|out_glare`, 저장 키 **`s`** |
+| Git | `0191811` (전 채널), `35ba99e` (`red_road`), `2e37ae8` (`black_cyan`) |
 
 ### 참고: origin/board 1차 실차값 (레거시)
 
@@ -111,7 +153,7 @@ python3 scripts/vision_tune/hsv.py --apply-profile real_car   # 보드와 동일
 1. PC에서 `board_sync.sh` 또는 `git pull`로 최신 `feature/seunghyun-recover-pre-pdc` (또는 머지된 main) 받기
 2. `config/lane_vision.yaml` 확인:
    - `hsv.active: real_car`
-   - `hsv.white` … `hsv.red_road`가 real_car 프로필과 일치
+   - `hsv.white` … `hsv.black_cyan`이 real_car 프로필과 일치
 3. **HSV만** 옮길 때: `hsv:` 블록 전체 복사 (`metric_ipm:` 은 별도 협의)
 4. 런타임 재시작 (`auto_driving.launch.py`)
 
@@ -152,6 +194,7 @@ hsv:
   yellow: { … }
   black_road: { … }
   red_road: { … }
+  black_cyan: { … }   # OUT LED floor wash; OR into road_raw
 ```
 
 도구: [`scripts/vision_tune/hsv.py`](../scripts/vision_tune/hsv.py) · [`tune_hsv.py`](../scripts/vision_tune/tune_hsv.py)

@@ -369,6 +369,17 @@ camera frame
 4. 실차 HSV vs 시뮬 HSV
 5. 빨간 장애물 차로(`red_road`) 커버리지·미션 힌트
 
+**현재 런타임 SSOT (2026-07-15, `perception.backend: blob`):**
+
+```
+camera → Metric IPM BEV
+  → HSV white / yellow / black_road | red_road | black_cyan
+  → morph → near-ego CC (ego blob) → DT-strip (± track/2)
+  → LaneDetections.drivable_area + course centerline
+```
+
+상세·값: [hsv-profiles.md](./hsv-profiles.md) §1.1 · `config/lane_vision.yaml`.
+
 **담당:** **안승현(임시)** — 갈림길·곡선·한쪽선 L/R. **조향·MainPlanner FSM은 건드리지 않음.**  
 장원태 복귀 후 공동 소유·핸드오프. Metric IPM 계약·msg 필드 삭제/개명은 팀장과 합의.
 

@@ -26,6 +26,7 @@ from metric_ipm import load_metric_ipm, warp_metric_ipm  # noqa: E402
 FROM_BAG = {
     'in': _ROOT / 'data' / 'captures' / 'from_bag' / 'in',
     'out': _ROOT / 'data' / 'captures' / 'from_bag' / 'out',
+    'out_glare': _ROOT / 'data' / 'captures' / 'from_bag' / 'out_glare',
 }
 OUT_DIR = _ROOT / 'data' / 'captures' / 'raw_hsv_masks'
 PANEL_H = 220
@@ -208,7 +209,12 @@ def extract_five(
     yellow = _bin(make_mask(bev, ranges['yellow']))
     black = _bin(make_mask(bev, ranges['black_road']))
     red = _bin(make_mask(bev, ranges['red_road']))
-    road = _or2(black, red)
+    cyan = (
+        _bin(make_mask(bev, ranges['black_cyan']))
+        if 'black_cyan' in ranges
+        else np.zeros_like(black)
+    )
+    road = _or2(_or2(black, red), cyan)
 
     white_road = _or2(white, road)
     yellow_road = _or2(yellow, road)
@@ -241,12 +247,14 @@ def extract_five(
         'bev': bev,
         'white_road': white_road,
         'yellow_road': yellow_road,
+        'cyan_road': cyan,
         'road_open': road_open,
         'morph_fill': cleaned,
         'ego_blob': ego_blob,
         'white': white,
         'yellow': yellow,
         'road': road,
+        'cyan': cyan,
     }
 
 
@@ -279,7 +287,7 @@ def build_mosaic(
     )
     cv2.putText(
         footer,
-        '3=largest CC touching BEV bottom (noise blobs dropped)',
+        '3=largest CC touching BEV bottom; road=black|red|black_cyan',
         (8, 34),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.36,
@@ -292,7 +300,7 @@ def build_mosaic(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--from-bag', choices=('in', 'out'), default='out')
+    ap.add_argument('--from-bag', choices=('in', 'out', 'out_glare'), default='out')
     ap.add_argument('--folder', type=Path, default=None)
     ap.add_argument('--config', type=Path, default=default_config_path())
     ap.add_argument('--index', type=int, default=1)
@@ -351,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
         cv2.imwrite(str(frame_dir / '1_bev.png'), five['bev'])
         cv2.imwrite(str(frame_dir / '2_white_road.png'), five['white_road'])
         cv2.imwrite(str(frame_dir / '3_yellow_road.png'), five['yellow_road'])
+        cv2.imwrite(str(frame_dir / '3b_black_cyan.png'), five['cyan'])
         cv2.imwrite(str(frame_dir / '4_road_open.png'), five['road_open'])
         cv2.imwrite(str(frame_dir / '5_morph_fill.png'), five['morph_fill'])
         cv2.imwrite(str(frame_dir / '6_ego_blob.png'), five['ego_blob'])

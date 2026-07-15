@@ -127,9 +127,12 @@ hsv:
   black_cyan: *id005
   note: OpenCV HSV (H 0-179). Runtime reads flattened channels (= profiles[active]).
     See docs/hsv-profiles.md. Tuned with scripts/vision_tune/tune_hsv.py.
+    road_raw = black_road | red_road | black_cyan; drivable = morph → ego-bottom CC
+    (2026-07-15 lock, OUT LED glare).
 perception:
   backend: blob
-  note: 2026-07-15 blob corridor SSOT for normal lanes; legacy fork only when enable_fork.
+  note: '2026-07-15 blob SSOT: road=black|red|cyan → morph → near-ego CC (+ DT strip);
+    legacy fork only when enable_fork.'
 detect_tune:
   crossing_coverage_ratio: 0.4
   crossing_min_rows: 3
