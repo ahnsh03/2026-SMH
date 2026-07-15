@@ -56,6 +56,42 @@ _DEFAULTS: dict[str, dict[str, int]] = {
     },
 }
 
+# origin/board field tune (bag_20260711_144948, D3-G 2026-07-14).
+_BOARD_DEFAULTS: dict[str, dict[str, int]] = {
+    'white': {
+        'h_min': 0,
+        'h_max': 179,
+        's_min': 0,
+        's_max': 29,
+        'v_min': 180,
+        'v_max': 255,
+    },
+    'yellow': {
+        'h_min': 15,
+        'h_max': 45,
+        's_min': 110,
+        's_max': 255,
+        'v_min': 120,
+        'v_max': 255,
+    },
+    'black_road': {
+        'h_min': 0,
+        'h_max': 89,
+        's_min': 0,
+        's_max': 255,
+        'v_min': 10,
+        'v_max': 200,
+    },
+    'red_road': {
+        'h_min': 170,
+        'h_max': 179,
+        's_min': 130,
+        's_max': 255,
+        'v_min': 120,
+        'v_max': 250,
+    },
+}
+
 
 @dataclass(frozen=True)
 class HsvRange:
@@ -118,6 +154,17 @@ def default_range(channel: str) -> HsvRange:
     if channel not in _DEFAULTS:
         raise KeyError(f'Unknown HSV channel: {channel}')
     return HsvRange.from_dict(_DEFAULTS[channel], _DEFAULTS[channel])
+
+
+def board_range(channel: str) -> HsvRange:
+    """origin/board field baseline (real-car bag tune)."""
+    if channel not in _BOARD_DEFAULTS:
+        raise KeyError(f'Unknown HSV channel: {channel}')
+    return HsvRange.from_dict(_BOARD_DEFAULTS[channel], _BOARD_DEFAULTS[channel])
+
+
+def board_ranges() -> dict[str, HsvRange]:
+    return {name: board_range(name) for name in CHANNEL_NAMES}
 
 
 def load_hsv_ranges(path: Path | None = None) -> dict[str, HsvRange]:

@@ -19,53 +19,49 @@ metric_ipm:
   camera:
     hfov_deg: 70.42
     height_ground_m: 0.13
-    pitch_down_deg: 10.0
+    pitch_down_deg: 13.8
   range:
     x_min_m: 0.22
-    x_max_m: 1.5
-    full_image_width: false
+    x_max_m: 1.3
     y_half_width_m: 0.77
+    full_image_width: false
   meters_per_pixel: 0.004
   crop_top_ratio: 0.39
   bev_width: 386
-  bev_height: 321
+  bev_height: 271
   track_width_m: 0.35
   guide_half_width_px: 44
-  note: 'Team lock 2026-07-12: Metric IPM is provisional SSOT (WonTae pipeline). y_half_width_m=0.77.
-    crop_top≈0.39 marks x_max≈1.5 m on 320×180. meters_per_pixel sets BEV grid resolution
-    only — not the look-ahead distance (that is x_max_m). Keep 0.004 unless CPU-bound
-    or you need coarser/finer maps.
-
-    '
+  note: 'Team lock 2026-07-12: Metric IPM provisional SSOT. y_half_width_m=0.77 by
+    default; set full_image_width only to expand.'
 hsv:
   white:
     h_min: 0
     h_max: 179
     s_min: 0
-    s_max: 29
-    v_min: 174
+    s_max: 20
+    v_min: 210
     v_max: 255
   yellow:
-    h_min: 0
-    h_max: 55
-    s_min: 32
-    s_max: 255
-    v_min: 79
+    h_min: 15
+    h_max: 50
+    s_min: 50
+    s_max: 150
+    v_min: 160
     v_max: 255
   black_road:
-    h_min: 0
-    h_max: 179
+    h_min: 17
+    h_max: 70
     s_min: 0
     s_max: 255
-    v_min: 0
-    v_max: 30
+    v_min: 50
+    v_max: 140
   red_road:
-    h_min: 170
-    h_max: 179
-    s_min: 125
-    s_max: 192
-    v_min: 161
-    v_max: 229
+    h_min: 0
+    h_max: 9
+    s_min: 180
+    s_max: 255
+    v_min: 145
+    v_max: 230
   note: OpenCV HSV (H 0-179). Tuned with scripts/vision_tune/tune_hsv.py. Sim/real
     shared; Won Tae may refine final competition values.
 detect_tune:
@@ -77,14 +73,13 @@ detect_tune:
   dash_max_heading_diff_deg: 27.0
   dash_min_component_area_px: 12
   dash_branch_assoc_m: 0.22
-  red_h_low_wrap: 0
+  red_h_low_wrap: 15
   fork_track_assoc_m: 0.05
   fork_track_min_rows: 14
   fork_pair_width_m: 0.35
   fork_far_zone_ratio: 0.45
   fork_track_max_row_gap: 8
   fork_near_zone_ratio: 0.35
-  note: 'parallel-rail (11자) 2026-07-14: width=0.35 SSOT; stem shared mid until fork apex;
-    center=outer±half_w; assoc=0.05 far=0.45 near=0.35 gap=8.
-    LOCKED: out_fork verify/current.png accepted 2026-07-14.
-    '
+  note: 'parallel-rail (11자) 2026-07-14: width=0.35 SSOT; stem shared mid until fork
+    apex; center=outer±half_w; assoc=0.05 far=0.45 near=0.35 gap=8. LOCKED: out_fork
+    verify/current.png accepted 2026-07-14. '
