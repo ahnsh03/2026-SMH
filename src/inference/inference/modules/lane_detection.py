@@ -7,7 +7,7 @@
   - BEV(IPM) 변환 → HSV 색상 마스크(흰/노랑) → 차선 픽셀 추출
   - 좌우 경계 → 센터라인 polyline (base_link 좌표)
   - 갈림길 분기 검출 → RoadBranch 목록
-config: bringup/config/perception.yaml 의 lane_vision 블록 참고.
+config: config/lane_vision.yaml 참고 (self.params 로 주입됨).
 """
 from __future__ import annotations
 
