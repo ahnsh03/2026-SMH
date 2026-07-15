@@ -10,10 +10,10 @@ from inference.types import TrafficSignal
 # HSV thresholds tuned for lit traffic-light lenses (bright, saturated pixels).
 # Red wraps around hue 0, so it needs two ranges.
 _RED_RANGES = (
-    ((0, 158, 125), (18, 255, 255)),
+    ((0, 158, 125), (1, 255, 255)),
     ((169, 158, 125), (180, 255, 255)),
 )
-_GREEN_RANGE = ((40, 80, 120), (90, 255, 255))
+_GREEN_RANGE = ((42, 119, 120), (81, 255, 255))
 
 _MIN_RED_PIXELS = 50
 _MIN_GREEN_PIXELS = 50
