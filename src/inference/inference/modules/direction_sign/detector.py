@@ -14,11 +14,14 @@ try:
 except ImportError:  # Rule-based fallback remains available without ONNX Runtime.
     ort = None
 
-from inference.types import TurnSign
+from inference.types import TrafficSignal, TurnSign
 
-# weights/sign_best.onnx: Ultralytics YOLO26n, imgsz 416, end2end=False.
-# 클래스 순서는 모델 메타데이터의 names={0: 'Left Sign', 1: 'Right Sign'}를 따른다.
-_CLASS_TO_TURN = (TurnSign.LEFT, TurnSign.RIGHT)
+# weights/sign_best.onnx: Ultralytics YOLO11n, imgsz 416, end2end=False.
+# 클래스 순서는 모델 메타데이터의 names={0: 'Left Sign', 1: 'Right Sign',
+# 2: 'Red Light', 3: 'Green Light'}를 따른다 (표지판+신호등 통합 모델,
+# board에서 YOLO forward pass를 1회로 유지하기 위해 하나의 모델로 합침).
+_CLASS_TO_TURN: dict[int, TurnSign] = {0: TurnSign.LEFT, 1: TurnSign.RIGHT}
+_CLASS_TO_SIGNAL: dict[int, TrafficSignal] = {2: TrafficSignal.RED, 3: TrafficSignal.GREEN}
 
 _INPUT_SIZE = 416
 _CONF_THRESHOLD = 0.25
@@ -50,7 +53,11 @@ class Detection(NamedTuple):
 
     @property
     def turn(self) -> TurnSign:
-        return _CLASS_TO_TURN[self.cls]
+        return _CLASS_TO_TURN.get(self.cls, TurnSign.UNKNOWN)
+
+    @property
+    def signal(self) -> TrafficSignal:
+        return _CLASS_TO_SIGNAL.get(self.cls, TrafficSignal.UNKNOWN)
 
 
 def _model_path() -> Path:
@@ -126,12 +133,52 @@ def _nms(boxes: np.ndarray, scores: np.ndarray) -> list[int]:
     return keep
 
 
+# A physical sign or light can only ever be one class from its own group, so
+# unlike ordinary multi-object NMS these groups compete against each other:
+# {Left Sign, Right Sign} and {Red Light, Green Light}.
+_MUTEX_GROUPS: dict[int, int] = {0: 0, 1: 0, 2: 1, 3: 1}
+
+
+def _cross_class_nms(detections: list[Detection]) -> list[Detection]:
+    """Suppress overlapping detections across classes within a mutex group.
+
+    The per-class NMS in `_postprocess` only removes duplicate boxes of the
+    *same* class. On frames where the model is genuinely torn between e.g.
+    Left and Right for one sign, both can independently clear the confidence
+    threshold and both survive per-class NMS, so the same physical sign gets
+    drawn twice with conflicting labels. Keep only the single
+    highest-confidence detection among heavily-overlapping group members.
+    """
+    kept: list[Detection] = []
+    for detection in sorted(detections, key=lambda d: d.score, reverse=True):
+        group = _MUTEX_GROUPS.get(detection.cls)
+        overlaps_kept = False
+        for other in kept:
+            if _MUTEX_GROUPS.get(other.cls) != group:
+                continue
+            x1, y1 = max(detection.x1, other.x1), max(detection.y1, other.y1)
+            x2, y2 = min(detection.x2, other.x2), min(detection.y2, other.y2)
+            inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+            area_d = (detection.x2 - detection.x1) * (detection.y2 - detection.y1)
+            area_o = (other.x2 - other.x1) * (other.y2 - other.y1)
+            if inter / max(area_d + area_o - inter, 1e-6) > _IOU_THRESHOLD:
+                overlaps_kept = True
+                break
+        if not overlaps_kept:
+            kept.append(detection)
+    return kept
+
+
 def _postprocess(
     raw: np.ndarray, scale: float, pad_x: int, pad_y: int, width: int, height: int
 ) -> list[Detection]:
-    # raw (1, 6, 3549) -> (3549, 6): cx, cy, w, h, score_left, score_right.
-    # end2end=False, so boxes arrive decoded in 416x416 pixel space and class
-    # scores are already sigmoid-activated. There is no objectness channel.
+    # raw (1, 4+nc, N) -> (N, 4+nc): cx, cy, w, h, then one score column per
+    # class in _CLASS_TO_TURN/_CLASS_TO_SIGNAL order (currently nc=4: Left
+    # Sign, Right Sign, Red Light, Green Light). end2end=False, so boxes
+    # arrive decoded in 416x416 pixel space and class scores are already
+    # sigmoid-activated. There is no objectness channel. Channel count is
+    # read from the tensor shape, not hardcoded, so this works unchanged if
+    # more classes are added later.
     pred = raw[0].T
     boxes_cxcywh, class_scores = pred[:, :4], pred[:, 4:]
 
@@ -165,6 +212,7 @@ def _postprocess(
                 Detection(*boxes[index], float(confidences[index]), int(cls))
             )
 
+    detections = _cross_class_nms(detections)
     detections.sort(key=lambda detection: detection.score, reverse=True)
     return detections
 
@@ -256,3 +304,33 @@ def detect_turn(frame: np.ndarray) -> TurnSign:
     if detections:
         return detections[0].turn
     return detect_turn_rule_based(frame)
+
+
+def detect_turn_and_signal(frame: np.ndarray) -> tuple[TurnSign, TrafficSignal]:
+    """Fork-turn sign and traffic-light color from a single ONNX forward pass.
+
+    The model was trained with both sign and light classes together so the
+    board only runs one YOLO inference per frame instead of two. Falls back
+    to the rule-based sign detector when ONNX is unavailable/empty, same as
+    `detect_turn()`; the light side has no rule-based fallback here (callers
+    that want one can layer `trafficsign.color_detector` on top, see
+    `traffic_sign.py`).
+    """
+    try:
+        detections = detect_signs(frame)
+    except (FileNotFoundError, RuntimeError, ValueError):
+        detections = []
+
+    turn = TurnSign.UNKNOWN
+    signal = TrafficSignal.UNKNOWN
+    for detection in detections:
+        if turn is TurnSign.UNKNOWN and detection.cls in _CLASS_TO_TURN:
+            turn = detection.turn
+        elif signal is TrafficSignal.UNKNOWN and detection.cls in _CLASS_TO_SIGNAL:
+            signal = detection.signal
+        if turn is not TurnSign.UNKNOWN and signal is not TrafficSignal.UNKNOWN:
+            break
+
+    if turn is TurnSign.UNKNOWN:
+        turn = detect_turn_rule_based(frame)
+    return turn, signal

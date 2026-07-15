@@ -1,0 +1,6 @@
+path: /tmp/bag_analysis/sign_dataset_clean
+train: images/train
+val: images/val
+names:
+  0: Left Sign
+  1: Right Sign

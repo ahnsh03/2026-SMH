@@ -1,0 +1,8 @@
+path: /home/jun/2026-SMH/scripts/sign_dataset/dataset_v2
+train: images/train
+val: images/val
+names:
+  0: Left Sign
+  1: Right Sign
+  2: Red Light
+  3: Green Light
