@@ -186,7 +186,7 @@ IN bag ~930 대역. 튜너 키 **`6`**.
 | 캡처 | `capture_from_bag.py` → `data/captures/from_bag/{in,out}/` · 글레어 `out_glare/` |
 | 튜너 | `tune_hsv.py --from-bag all\|in\|out\|…`, 저장 키 **`s`** |
 | Git | `0191811` (전 채널), `35ba99e` (`red_road`), `2e37ae8` (`black_cyan`), **2026-07-16** near SSOT + red/cyan retune (black H/V 유지) |
-| 확정 메모 | black **미확대단** 기각 · red Smin110 · cyan S200–215 V190–238 · morph **3/13/1** |
+| 확정 메모 | black H/V **확대 기각** · red Smin110 · cyan S200–215 V190–238 · morph **3/13/1** |
 
 ### 참고: origin/board 1차 실차값 (레거시)
 
