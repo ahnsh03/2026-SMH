@@ -17,6 +17,11 @@ dist/
 *.pt
 *.onnx
 *.weights
+# Race board: track the competition left/right sign ONNX only.
+!weights/
+!weights/sign_best.onnx
+!weights/README.md
+!weights/.gitignore
 datasets/
 runs/
 wandb/

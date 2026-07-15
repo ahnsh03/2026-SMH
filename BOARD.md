@@ -34,6 +34,8 @@ ros2 launch inference auto_driving.launch.py route_mode:=in   # or out
 | 기하 | L **0.175**, R_min **0.385**, δ_max **0.4266**, d_rc **0.200** (시뮬값 금지) |
 | `/control` | 소프트웨어 계약 **+steering = 우**. 이 보드 서보 반대 배선 → `STEER_INVERT: true` |
 | 조이스틱 | launch에 포함 (E-Stop / 수동) |
+| 신호등 | HSV `trafficsign/color_detector.py` (**origin/board** 튜닝값) |
+| 방향 표지판 | YOLO ONNX `weights/sign_best.onnx` + `direction_sign/` (**origin/board**) |
 | 신호·ArUco | green start / red stop / ArUco stop **ON** |
 
 상세 수치: `config/lane_vision.yaml`, `config/main_planner.yaml`, `config/vehicle_config.yaml`, `docs/hsv-profiles.md`, `docs/vehicle-geometry.md`.
