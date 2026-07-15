@@ -17,8 +17,10 @@ import numpy as np
 
 _SCRIPT = Path(__file__).resolve().parent
 _ROOT = _SCRIPT.parents[1]
-if str(_SCRIPT) not in sys.path:
-    sys.path.insert(0, str(_SCRIPT))
+_INFERENCE = _ROOT / 'src' / 'inference'
+for p in (_SCRIPT, _INFERENCE):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
 from hsv import default_config_path, load_hsv_ranges, make_mask  # noqa: E402
 from metric_ipm import load_metric_ipm, warp_metric_ipm  # noqa: E402
@@ -90,12 +92,102 @@ def _fill_enclosed_holes(mask: np.ndarray, max_hole_px: int = 5000) -> np.ndarra
     return out
 
 
+def _drop_top_edge_only_blobs(
+    mask: np.ndarray,
+    *,
+    min_area: int = 350,
+    top_band_ratio: float = 0.025,
+    near_band_ratio: float = 0.18,
+) -> np.ndarray:
+    """Drop BEV-top-only large CCs before morph (trial #2). See morph_blob."""
+
+    binary = _bin(mask)
+    if binary.size == 0 or not np.any(binary):
+        return binary
+    h, w = binary.shape
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if n <= 1:
+        return binary
+
+    top_h = max(2, int(round(h * float(top_band_ratio))))
+    near_h = max(2, int(round(h * float(near_band_ratio))))
+    top_labs = {int(lab) for lab in np.unique(labels[:top_h, :]) if int(lab) > 0}
+    bot_labs = {
+        int(lab) for lab in np.unique(labels[h - near_h :, :]) if int(lab) > 0
+    }
+
+    out = binary.copy()
+    for lab in top_labs:
+        if lab in bot_labs:
+            continue
+        if int(stats[lab, cv2.CC_STAT_AREA]) >= int(min_area):
+            out[labels == lab] = 0
+    return out
+
+
+def _keep_near_floor_blob(
+    mask: np.ndarray,
+    *,
+    near_band_ratio: float = 0.35,
+    min_near_area: int = 80,
+    centroid_lower_frac: float = 0.55,
+) -> np.ndarray:
+    """Near-robot CC before morph (black / cyan). Score = near-band pixels."""
+
+    binary = _bin(mask)
+    if binary.size == 0 or not np.any(binary):
+        return binary
+    h, w = binary.shape
+    n, labels, stats, cents = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    if n <= 1:
+        return np.zeros_like(binary)
+
+    near_h = max(2, int(round(h * float(near_band_ratio))))
+    near_slice = labels[h - near_h :, :]
+    near_labs = {int(lab) for lab in np.unique(near_slice) if int(lab) > 0}
+
+    near_ok: list[tuple[int, int]] = []
+    for lab in near_labs:
+        near_area = int(np.count_nonzero(near_slice == lab))
+        if near_area >= int(min_near_area):
+            near_ok.append((lab, near_area))
+
+    if near_ok:
+        best = max(near_ok, key=lambda t: t[1])[0]
+    else:
+        v_cut = float(h) * float(centroid_lower_frac)
+        lower: list[tuple[int, int]] = []
+        for lab in range(1, n):
+            area = int(stats[lab, cv2.CC_STAT_AREA])
+            cy = float(cents[lab][1])
+            if cy >= v_cut and area >= int(min_near_area):
+                lower_area = int(np.count_nonzero(labels[h // 2 :, :] == lab))
+                lower.append((lab, lower_area if lower_area > 0 else area))
+        if lower:
+            best = max(lower, key=lambda t: t[1])[0]
+        else:
+            best = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+
+    out = np.zeros_like(binary)
+    if best > 0:
+        out[labels == best] = 255
+    return out
+
+
+# Alias used by older call sites / cyan comments.
+_keep_near_cyan_blob = _keep_near_floor_blob
+
+
 def _keep_bottom_ego_blob(
     mask: np.ndarray,
     *,
     near_band_ratio: float = 0.18,
 ) -> np.ndarray:
-    """Keep only the largest CC that touches the BEV bottom (robot bumper)."""
+    """After morph: keep CC with max pixels in the BEV bottom band.
+
+    Same scoring as ``_keep_near_floor_blob`` (band mass, not total area).
+    Trial #2 uses this after morph; trial #1 also uses it for final ego.
+    """
     binary = _bin(mask)
     if binary.size == 0 or not np.any(binary):
         return binary
@@ -108,18 +200,17 @@ def _keep_bottom_ego_blob(
     near_slice = labels[h - near_h :, :]
     near_labs = {int(lab) for lab in np.unique(near_slice) if int(lab) > 0}
     if not near_labs:
-        # Fallback: absolute largest component
         best = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
         out = np.zeros_like(binary)
         out[labels == best] = 255
         return out
 
     best = 0
-    best_area = -1
+    best_near = -1
     for lab in near_labs:
-        area = int(stats[lab, cv2.CC_STAT_AREA])
-        if area > best_area:
-            best_area = area
+        near_area = int(np.count_nonzero(near_slice == lab))
+        if near_area > best_near:
+            best_near = near_area
             best = lab
     out = np.zeros_like(binary)
     if best > 0:
@@ -192,8 +283,8 @@ def _panel_bin(mask: np.ndarray, title: str) -> np.ndarray:
     return p
 
 
-def extract_five(
-    frame: np.ndarray,
+def extract_five_from_bev(
+    bev: np.ndarray,
     config_path: Path,
     *,
     open_k: int = 5,
@@ -201,23 +292,78 @@ def extract_five(
     open_iters: int = 1,
     close_iters: int = 2,
     max_hole_px: int = 5000,
+    course: str | None = None,
+    prefer_yellow: bool | None = None,
+    black_mode: str = 'near',
 ) -> dict[str, np.ndarray]:
+    """Photo/bag SSOT panels from an **already-warped** Metric IPM BEV.
+
+    Paint|road for morph/ego (never OR white∧yellow):
+      IN  (prefer_yellow): yellow present → yellow|road ; else white|road
+      OUT (!prefer_yellow): always white|road
+
+    ``black_mode``:
+      - ``near`` (default, trial #1): near-band-mass CC before morph
+      - ``top_drop`` (trial #2): drop BEV-top-only large CCs, then morph → bottom
+
+    Morph defaults: open 5 / close 17 / 2 iters (restored one step vs soft 3/13/1).
+
+    Do **not** pass camera frames here (would double-warp). Use ``extract_five``.
+    """
+
     ranges = load_hsv_ranges(config_path)
-    ipm = load_metric_ipm(config_path)
-    bev = warp_metric_ipm(frame, ipm)
     white = _bin(make_mask(bev, ranges['white']))
     yellow = _bin(make_mask(bev, ranges['yellow']))
-    black = _bin(make_mask(bev, ranges['black_road']))
+    black_raw = _bin(make_mask(bev, ranges['black_road'], morph=False))
+    mode = (black_mode or 'near').strip().lower()
+    if mode in ('top_drop', 'top-drop', 'trial2', '2'):
+        black = _drop_top_edge_only_blobs(black_raw)
+    else:
+        # default / trial #1
+        black = _keep_near_floor_blob(black_raw)
     red = _bin(make_mask(bev, ranges['red_road']))
-    cyan = (
-        _bin(make_mask(bev, ranges['black_cyan']))
+    cyan1 = (
+        _bin(make_mask(bev, ranges['black_cyan'], morph=False))
         if 'black_cyan' in ranges
         else np.zeros_like(black)
     )
+    cyan2 = (
+        _bin(make_mask(bev, ranges['black_cyan_2'], morph=False))
+        if 'black_cyan_2' in ranges
+        else np.zeros_like(black)
+    )
+    cyan_raw = _or2(cyan1, cyan2)
+    cyan = _keep_near_floor_blob(cyan_raw)
     road = _or2(_or2(black, red), cyan)
+
+    # Course paint: exclusive white *or* yellow (SSOT · resolve_course_lane_mask).
+    if prefer_yellow is None:
+        key = (course or '').strip().lower()
+        if key in ('out', 'out_glare', 'out_course'):
+            prefer_yellow = False
+        else:
+            # default / in / unknown → IN rule (yellow if present else white)
+            prefer_yellow = True
+    try:
+        from inference.modules.perception.blob.rail_corridor import (
+            resolve_course_lane_mask,
+        )
+    except ModuleNotFoundError:
+        from inference.inference.modules.perception.blob.rail_corridor import (
+            resolve_course_lane_mask,
+        )
+
+    paint, used_yellow = resolve_course_lane_mask(
+        white, yellow, prefer_yellow=bool(prefer_yellow)
+    )
+    if paint is None or paint.size == 0:
+        paint = np.zeros_like(road)
+    else:
+        paint = _bin(paint)
 
     white_road = _or2(white, road)
     yellow_road = _or2(yellow, road)
+    lane_road = _or2(paint, road)  # IN/OUT exclusive paint | road
 
     # 4) stronger open + light close on road (noise then small holes)
     road_open = _clean_lane_mask(
@@ -229,8 +375,7 @@ def extract_five(
         max_hole_px=max_hole_px,
     )
 
-    # 5) open+strong close+hole-fill on (W|Y|road)
-    lane_road = _or2(white_road, yellow)
+    # 5) open+strong close+hole-fill on (course_paint | road)
     cleaned = _clean_lane_mask(
         lane_road,
         open_k=open_k,
@@ -248,14 +393,55 @@ def extract_five(
         'white_road': white_road,
         'yellow_road': yellow_road,
         'cyan_road': cyan,
+        'cyan_raw': cyan_raw,
+        'cyan1': cyan1,
+        'cyan2': cyan2,
         'road_open': road_open,
         'morph_fill': cleaned,
         'ego_blob': ego_blob,
         'white': white,
         'yellow': yellow,
+        'black': black,
+        'black_raw': black_raw,
         'road': road,
         'cyan': cyan,
+        'paint': paint,
+        'lane_road': lane_road,
+        'used_yellow': used_yellow,
+        'prefer_yellow': bool(prefer_yellow),
+        'black_mode': mode if mode in ('top_drop', 'top-drop', 'trial2', '2') else 'near',
     }
+
+
+def extract_five(
+    frame: np.ndarray,
+    config_path: Path,
+    *,
+    open_k: int = 5,
+    close_k: int = 17,
+    open_iters: int = 1,
+    close_iters: int = 2,
+    max_hole_px: int = 5000,
+    course: str | None = None,
+    prefer_yellow: bool | None = None,
+    black_mode: str = 'near',
+) -> dict[str, np.ndarray]:
+    """Camera frame → Metric IPM BEV once → ``extract_five_from_bev``."""
+
+    ipm = load_metric_ipm(config_path)
+    bev = warp_metric_ipm(frame, ipm)
+    return extract_five_from_bev(
+        bev,
+        config_path,
+        open_k=open_k,
+        close_k=close_k,
+        open_iters=open_iters,
+        close_iters=close_iters,
+        max_hole_px=max_hole_px,
+        course=course,
+        prefer_yellow=prefer_yellow,
+        black_mode=black_mode,
+    )
 
 
 def build_mosaic(
@@ -285,9 +471,11 @@ def build_mosaic(
         1,
         cv2.LINE_AA,
     )
+    paint = 'Y' if five.get('used_yellow') else 'W'
     cv2.putText(
         footer,
-        '3=largest CC touching BEV bottom; road=black|red|black_cyan',
+        f'3=ego bottom CC AFTER morph; cyan=pre-ego BEFORE morph; '
+        f'road=black|red|cyan_near',
         (8, 34),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.36,
@@ -352,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
             open_iters=open_iters,
             close_iters=close_iters,
             max_hole_px=max_hole_px,
+            course=bag,
         )
         frame_dir = out_root / f'{i + 1:04d}_{stem}'
         frame_dir.mkdir(parents=True, exist_ok=True)

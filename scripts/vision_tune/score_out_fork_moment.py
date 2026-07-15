@@ -31,9 +31,9 @@ from hsv import default_config_path, load_hsv_ranges, make_mask  # noqa: E402
 from metric_ipm import load_metric_ipm, warp_metric_ipm  # noqa: E402
 
 from inference.modules.perception.fork.moment import (  # noqa: E402
-    combine_road_masks,
     score_out_fork_moment,
 )
+from viz_raw_hsv_masks import extract_five_from_bev  # noqa: E402
 
 EXPECTED_HARD_POS = frozenset(
     {
@@ -88,13 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         bev = warp_metric_ipm(frame, ipm)
         white = make_mask(bev, ranges['white'])
-        road = combine_road_masks(
-            make_mask(bev, ranges['black_road']),
-            make_mask(bev, ranges['red_road']),
-            make_mask(bev, ranges['black_cyan'])
-            if 'black_cyan' in ranges
-            else None,
-        )
+        road = extract_five_from_bev(bev, args.config, course='out')['road']
         s = score_out_fork_moment(white, road)
         rows.append(
             Row(

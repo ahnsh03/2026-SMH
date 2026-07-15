@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Sim / real-car HSV mask tuner (shared YAML for Won Tae + runtime).
 
-Tune white / yellow / black_road / red_road / black_cyan ranges on Metric
-IPM BEV (or camera view). Click a pixel to expand the active range around
-that sample. Saves ``config/lane_vision.yaml`` → ``hsv:``.
+Tune **6** channels on Metric IPM BEV (or camera):
+  white / yellow / black_road / red_road / black_cyan / black_cyan_2
 
-Examples (inside 2026-smh-sim after source /opt/ros/humble/setup.bash):
+Examples (inside 2026-smh-sim after sourcing ROS):
 
-  python3 scripts/vision_tune/tune_hsv.py --from-bag out_glare
-  python3 scripts/vision_tune/tune_hsv.py --folder data/captures/from_bag/out_glare
-  python3 scripts/vision_tune/tune_hsv.py --channel black_cyan
+  # All previous bag captures (in+out+glare+black_tune+in_yellow) — keys 1–6
+  python3 scripts/vision_tune/tune_hsv.py --from-bag all
+
+  python3 scripts/vision_tune/tune_hsv.py --from-bag out_glare --channel black_cyan
+  python3 scripts/vision_tune/tune_hsv.py --from-bag black_road --channel black_road
+  python3 scripts/vision_tune/tune_hsv.py --from-bag in_yellow --channel yellow
+  python3 scripts/vision_tune/tune_hsv.py --folder data/captures/from_bag/out
 
 Keys:
-  1–5   select channel (white/yellow/black/red/black_cyan)
+  1–6   white / yellow / black_road / red_road / black_cyan / black_cyan_2
   b     reset active channel → origin/board field baseline
   d     reset active channel → Won Tae seed defaults
   s     save all channels to lane_vision.yaml
@@ -70,6 +73,7 @@ CHANNEL_COLORS = {
     'black_road': (80, 80, 80),
     'red_road': (0, 0, 255),
     'black_cyan': (255, 220, 0),  # cyan-ish in BGR preview
+    'black_cyan_2': (255, 180, 80),
 }
 
 FROM_BAG_DIRS = {
@@ -77,7 +81,24 @@ FROM_BAG_DIRS = {
     'out': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out',
     # OUT LED billboard floor-wash frames only (7 captures, 2026-07-15).
     'out_glare': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out_glare',
+    # Black V / curve off-track samples (IN+OUT frames for black_road tune).
+    'black_road': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'black_road_tune_in_out',
+    # IN BEV yellow-dense band (~870–955).
+    'in_yellow': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'in_bev_tune_870_955',
 }
+
+# Suggested capture sets per channel (keys into FROM_BAG_DIRS or merge tags).
+CHANNEL_CAPTURE_HINT = {
+    'white': 'out / in  (흰 테이프)',
+    'yellow': 'in / in_yellow',
+    'black_road': 'black_road / in / out',
+    'red_road': 'out',
+    'black_cyan': 'out_glare',
+    'black_cyan_2': 'in / in_yellow',
+}
+
+# --from-bag all : merge these folders (existing only).
+ALL_BAG_KEYS = ('in', 'out', 'out_glare', 'black_road', 'in_yellow')
 
 
 def _list_images(folder: Path) -> list[Path]:
@@ -384,7 +405,7 @@ def _handle_key(key: int, state: HsvTuneState, config_path: Path) -> str | None:
         state.reset_active_board()
         print(f'Reset {state.channel} → origin/board field baseline')
         return None
-    if key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
+    if key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5'), ord('6')):
         state.set_channel(key - ord('1'))
         print(f'Channel → {state.channel}')
         return None
@@ -395,26 +416,55 @@ def _handle_key(key: int, state: HsvTuneState, config_path: Path) -> str | None:
     return None
 
 
-def run_folder(folder: Path, state: HsvTuneState, config_path: Path) -> int:
-    paths = _list_images(folder)
-    if not paths:
-        raise SystemExit(f'No images in {folder}')
+def _list_images_many(folders: list[Path]) -> list[tuple[Path, str]]:
+    """Return (path, label) unique by filename, stable order."""
+
+    seen: set[str] = set()
+    out: list[tuple[Path, str]] = []
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        for path in _list_images(folder):
+            key = path.name
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((path, f'{folder.name}/{path.name}'))
+    return out
+
+
+def run_folder(
+    folder: Path | list[Path],
+    state: HsvTuneState,
+    config_path: Path,
+    *,
+    label: str | None = None,
+) -> int:
+    folders = [folder] if isinstance(folder, Path) else list(folder)
+    entries = _list_images_many(folders)
+    if not entries:
+        raise SystemExit(f'No images in {folders}')
     frames = []
     labels = []
-    for path in paths:
+    for path, lab in entries:
         img = cv2.imread(str(path))
         if img is not None:
             frames.append(img)
-            labels.append(path.name)
+            labels.append(lab)
     if not frames:
-        raise SystemExit(f'Failed to load images from {folder}')
+        raise SystemExit(f'Failed to load images from {folders}')
     state.config_path = config_path
     _init_ui(state)
     idx = 0
+    src = label or (str(folders[0]) if len(folders) == 1 else f'{len(folders)} folders')
+    hints = '  '.join(f'{i + 1}:{n}' for i, n in enumerate(CHANNEL_NAMES))
     print(
-        f'Folder: {folder} ({len(frames)} images)\n'
-        f'Baseline: lane_vision.yaml hsv (origin/board field tune)\n'
-        f'Keys: 1-5 channel  b=board  d=seed  s=save  n/p  q=quit  (click ORIGIN/BEV)',
+        f'Folder: {src} ({len(frames)} images)\n'
+        f'Channels: {hints}\n'
+        f'Hints: '
+        + ' | '.join(f'{k}→{v}' for k, v in CHANNEL_CAPTURE_HINT.items())
+        + '\n'
+        f'Keys: 1-6 channel  b=board  d=seed  s=save  n/p  q=quit  (click ORIGIN/BEV)',
         flush=True,
     )
     try:
@@ -495,23 +545,38 @@ def run_topic(topic: str, state: HsvTuneState, config_path: Path) -> int:
     return 0
 
 
-def _resolve_folder(args: argparse.Namespace) -> Path | None:
+def _resolve_folders(args: argparse.Namespace) -> tuple[list[Path] | None, str | None]:
+    """Return (folders, label) or (None, None) for live topic mode."""
+
     if args.from_bag is not None:
         key = args.from_bag.strip().lower()
         if key == 'both':
-            in_dir = FROM_BAG_DIRS['in']
-            out_dir = FROM_BAG_DIRS['out']
-            if not in_dir.is_dir() and not out_dir.is_dir():
-                raise SystemExit(f'No bag captures under {in_dir.parent}')
-            # Prefer in if both exist; user can pass --folder for merged review.
-            return in_dir if in_dir.is_dir() else out_dir
+            folders = [FROM_BAG_DIRS['in'], FROM_BAG_DIRS['out']]
+            present = [p for p in folders if p.is_dir()]
+            if not present:
+                raise SystemExit(f'No bag captures under {FROM_BAG_DIRS["in"].parent}')
+            return present, 'from_bag/in+out'
+        if key == 'all':
+            folders = [FROM_BAG_DIRS[k] for k in ALL_BAG_KEYS]
+            present = [p for p in folders if p.is_dir()]
+            if not present:
+                raise SystemExit(
+                    f'No bag captures under {FROM_BAG_DIRS["in"].parent} '
+                    '(run capture_from_bag.py first)'
+                )
+            return present, 'from_bag/all(in+out+glare+black+in_yellow)'
         if key not in FROM_BAG_DIRS:
-            raise SystemExit(f'Unknown --from-bag {args.from_bag!r}; use in|out|out_glare|both')
+            raise SystemExit(
+                f'Unknown --from-bag {args.from_bag!r}; '
+                f'use {", ".join(list(FROM_BAG_DIRS) + ["both", "all"])}'
+            )
         folder = FROM_BAG_DIRS[key]
         if not folder.is_dir():
             raise SystemExit(f'Missing captures: {folder} (run capture_from_bag.py first)')
-        return folder
-    return args.folder
+        return [folder], f'from_bag/{key}'
+    if args.folder is not None:
+        return [args.folder.expanduser().resolve()], str(args.folder)
+    return None, None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -520,16 +585,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--folder', type=Path, default=None)
     parser.add_argument(
         '--from-bag',
-        choices=('in', 'out', 'out_glare', 'both'),
+        choices=(*FROM_BAG_DIRS.keys(), 'both', 'all'),
         default=None,
-        help='Shortcut: data/captures/from_bag/<in|out|out_glare>',
+        help=(
+            'Capture set under data/captures/from_bag/. '
+            'all = in+out+out_glare+black_road+in_yellow (6 HSV channels). '
+            'Keys 1–6: white yellow black_road red_road black_cyan black_cyan_2.'
+        ),
     )
     parser.add_argument('--config', type=Path, default=default_config_path())
     parser.add_argument(
         '--channel',
         choices=list(CHANNEL_NAMES),
         default='white',
-        help='Initial channel',
+        help='Initial channel (1–6)',
     )
     args = parser.parse_args(argv)
 
@@ -537,9 +606,9 @@ def main(argv: list[str] | None = None) -> int:
     state = HsvTuneState(ranges)
     state.channel_idx = CHANNEL_NAMES.index(args.channel)
 
-    folder = _resolve_folder(args)
-    if folder is not None:
-        return run_folder(folder.expanduser().resolve(), state, args.config)
+    folders, label = _resolve_folders(args)
+    if folders is not None:
+        return run_folder(folders, state, args.config, label=label)
     return run_topic(args.topic, state, args.config)
 
 

@@ -77,6 +77,13 @@ hsv:
         s_max: 255
         v_min: 80
         v_max: 230
+      black_cyan_2:
+        h_min: 97
+        h_max: 105
+        s_min: 240
+        s_max: 255
+        v_min: 105
+        v_max: 180
     real_car:
       meta:
         environment: D3-G field (C920e 320x180)
@@ -104,7 +111,7 @@ hsv:
         h_max: 70
         s_min: 0
         s_max: 255
-        v_min: 50
+        v_min: 15
         v_max: 140
       red_road: &id004
         h_min: 0
@@ -120,19 +127,29 @@ hsv:
         s_max: 220
         v_min: 200
         v_max: 230
+      black_cyan_2: &id006
+        h_min: 97
+        h_max: 105
+        s_min: 240
+        s_max: 255
+        v_min: 105
+        v_max: 180
   white: *id001
   yellow: *id002
   black_road: *id003
   red_road: *id004
   black_cyan: *id005
-  note: OpenCV HSV (H 0-179). Runtime reads flattened channels (= profiles[active]).
+  black_cyan_2: *id006
+  note: >-
+    OpenCV HSV (H 0-179). Runtime reads flattened channels (= profiles[active]).
     See docs/hsv-profiles.md. Tuned with scripts/vision_tune/tune_hsv.py.
-    road_raw = black_road | red_road | black_cyan; drivable = morph → ego-bottom CC
-    (2026-07-15 lock, OUT LED glare).
+    LOCKED 2026-07-16 trial#1: road_raw=black_near|red|cyan_near (near-band mass CC
+    before morph); morph open5/close17/2; then ego CC by near-band mass.
 perception:
   backend: blob
-  note: '2026-07-15 blob SSOT: road=black|red|cyan → morph → near-ego CC (+ DT strip);
-    legacy fork only when enable_fork.'
+  note: >-
+    2026-07-16 LOCKED blob SSOT: road=black_near|red|cyan_near → morph(5/17) →
+    near-ego CC (+ DT strip); legacy fork only when enable_fork.
 detect_tune:
   crossing_coverage_ratio: 0.4
   crossing_min_rows: 3

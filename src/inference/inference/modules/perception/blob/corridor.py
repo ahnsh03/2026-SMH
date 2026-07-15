@@ -4,12 +4,13 @@ A/B on bag frames (``viz_mask_postprocess_ab.py`` / ``viz_cyan_ab.py``) showed:
   - rail fill / road_in (old) → zigzag mid, worst score
   - F_dtstrip (near blob + distance-transform ridge ± half_w) wins OUT
   - C_near / E_walls compete on IN when paint is strong
-  - ``black_cyan`` (OR into road_raw) fills OUT LED floor-wash holes (2026-07-15 lock)
+  - ``black_cyan`` / ``black_cyan_2``: near-robot CC only *before* morph
+    (billboard wash appears on- and off-lane; keep on-lane wash)
 
 Pipeline
 --------
-1. morph denoise road (black|red|black_cyan)
-2. keep largest CC touching ego near-band  (= ego blob SSOT)
+1. morph denoise road (black_near|red|cyan_near) — open 3 / close 5
+2. keep largest CC by **near-band mass** touching ego near-band  (= ego blob SSOT)
 3. DT ridge mid → clip each row to mid ± track_width/2 ∩ blob
 4. optional: if course paint dense, AND with paint-wall flood (lights walls)
 """
@@ -57,6 +58,8 @@ def course_lane_mask(
 
 
 def denoise_road_mask(road: np.ndarray) -> np.ndarray:
+    """Morph denoise road before near-ego CC (open 3 / close 5)."""
+
     cleaned = morph_clean_road(road, open_k=3, close_k=5, max_hole_px=600)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(
         (cleaned > 0).astype(np.uint8), connectivity=8

@@ -20,7 +20,14 @@ import cv2
 import numpy as np
 import yaml
 
-CHANNEL_NAMES = ('white', 'yellow', 'black_road', 'red_road', 'black_cyan')
+CHANNEL_NAMES = (
+    'white',
+    'yellow',
+    'black_road',
+    'red_road',
+    'black_cyan',
+    'black_cyan_2',
+)
 PROFILE_NAMES = ('sim', 'real_car')
 
 # OUT scoreboard glare → cyan wash on asphalt (tuned out_glare 2026-07-15).
@@ -31,6 +38,16 @@ _BLACK_CYAN_DEFAULT: dict[str, int] = {
     's_max': 220,
     'v_min': 200,
     'v_max': 230,
+}
+
+# Secondary cyan / teal asphalt patch (IN bag ~930, 2026-07-15 tune).
+_BLACK_CYAN_2_DEFAULT: dict[str, int] = {
+    'h_min': 97,
+    'h_max': 105,
+    's_min': 240,
+    's_max': 255,
+    'v_min': 105,
+    'v_max': 180,
 }
 
 # Gazebo / Won Tae seed (OpenCV HSV).
@@ -68,6 +85,7 @@ _SIM_DEFAULTS: dict[str, dict[str, int]] = {
         'v_max': 229,
     },
     'black_cyan': dict(_BLACK_CYAN_DEFAULT),
+    'black_cyan_2': dict(_BLACK_CYAN_2_DEFAULT),
 }
 
 # origin/board field tune (bag_20260711_144948, D3-G 2026-07-14).
@@ -105,6 +123,7 @@ _BOARD_DEFAULTS: dict[str, dict[str, int]] = {
         'v_max': 250,
     },
     'black_cyan': dict(_BLACK_CYAN_DEFAULT),
+    'black_cyan_2': dict(_BLACK_CYAN_2_DEFAULT),
 }
 
 # Real-car field tune from bag replay captures (2026-07-15, commits 0191811 + 35ba99e).
@@ -130,7 +149,7 @@ _REAL_CAR_DEFAULTS: dict[str, dict[str, int]] = {
         'h_max': 70,
         's_min': 0,
         's_max': 255,
-        'v_min': 50,
+        'v_min': 15,
         'v_max': 140,
     },
     'red_road': {
@@ -143,6 +162,7 @@ _REAL_CAR_DEFAULTS: dict[str, dict[str, int]] = {
     },
     # OUT LED billboard floor wash (from_bag/out_glare, 2026-07-15).
     'black_cyan': dict(_BLACK_CYAN_DEFAULT),
+    'black_cyan_2': dict(_BLACK_CYAN_2_DEFAULT),
 }
 
 _DEFAULTS = _SIM_DEFAULTS
@@ -399,14 +419,17 @@ def apply_hsv_profile(name: str, path: Path | None = None) -> Path:
 
 
 def make_mask(bgr: np.ndarray, rng: HsvRange, *, morph: bool = True) -> np.ndarray:
-    """Binary mask for one HSV range (single segment; no red wrap)."""
+    """Binary mask for one HSV range (single segment; no red wrap).
+
+    When ``morph`` is True, apply a single light open only (no close) so
+    channel masks do not bridge toward off-track or fork arms.
+    """
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     p = rng.clamp()
     mask = cv2.inRange(hsv, p.lower(), p.upper())
     if morph:
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
     return mask
 
 

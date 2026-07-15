@@ -160,6 +160,63 @@ python3 scripts/vision_tune/capture_from_bag.py out --rate 0.3 --start 10
 
 창이 안 보이면: 이전 프로세스가 남아 있는지 확인(`Ctrl+C`) 후 다시 실행. 작업표시줄에서 `bag_capture_*` 창을 찾거나, 창은 (48,48)에 뜹니다.
 
+### bag 실시간 주행가능 마스크 (BEV | 6_ego_blob)
+
+**주의:** 초판 `play_bag_drivable`는 런타임 blob(카메라 HSV→워프·morph 3/5)을 써서
+사진 mosaic의 **`6_ego_blob`과 달랐다.** 지금은 `viz_raw_hsv_masks.extract_five`와 동일.
+
+권장: bag → **BEV mp4 저장** → 그 영상에서 ego blob 재생 (IPM 1회만).
+
+```bash
+# 2026-smh-sim
+source /opt/ros/humble/setup.bash && source install/setup.bash
+
+# 1) bag → BEV 영상 저장
+python3 scripts/vision_tune/play_bag_drivable.py in --export-bev \
+  data/captures/bev_videos/in.mp4
+
+# 2) 저장한 BEV에서 6_ego_blob (좌:BEV / 우:흰 마스크)
+python3 scripts/vision_tune/play_bag_drivable.py --from-bev \
+  data/captures/bev_videos/in.mp4
+
+# 한 번에: export 후 바로 재생
+python3 scripts/vision_tune/play_bag_drivable.py out --export-bev \
+  data/captures/bev_videos/out.mp4 --play-after-export
+
+# live (저장 없이) — extract_five/6_ego, IN paint=Y|road or W|road
+python3 scripts/vision_tune/play_bag_drivable.py out --rate 0.4
+python3 scripts/vision_tune/play_bag_drivable.py --from-bev data/captures/bev_videos/in.mp4 \
+  --paint-course in
+
+# black near-CC: score=near-band area (OUT curve 1412–1491 검증)
+python3 scripts/vision_tune/score_near_floor_select.py \
+  --from-bev data/captures/bev_videos/out.mp4 --start 1412 --end 1491
+python3 scripts/vision_tune/play_bag_drivable.py out \
+  --from-bev data/captures/bev_videos/out.mp4 --start 1412
+
+# black trial #1 vs #2 × IN/OUT → data/captures/bev_videos/black_trials/
+python3 scripts/vision_tune/export_black_trial_videos.py
+# morph open5/close17 명시 저장 (기본과 동일 강도, 폴더명으로 구분)
+python3 scripts/vision_tune/export_black_trial_videos.py \
+  --open-k 5 --close-k 17 --outdir data/captures/bev_videos/black_trials_morph5_17
+# soft morph 비교용
+python3 scripts/vision_tune/export_black_trial_videos.py \
+  --open-k 3 --close-k 13 --close-iters 1 --max-hole-px 3000 \
+  --outdir data/captures/bev_videos/black_trials_morph3_13
+```
+
+IN 페인트 규칙: **노란 차선 있으면 `yellow|road`**, 없으면 **`white|road`** (`resolve_course_lane_mask`, 흰∧노란 OR 금지).  
+OUT: 항상 `white|road`.
+
+| 키 | 동작 |
+|----|------|
+| `SPACE` | 재생 / 일시정지 (**시작은 PAUSE**) |
+| `←` `→` / `,` `.` | 프레임 단위 이동 |
+| `[` `]` | 재생 속도 ↓ / ↑ |
+| `o` | 우측: 흰 이진 ↔ BEV 위 흰색 overlay |
+| `r` | 처음으로 |
+| `q` / ESC | 종료 |
+
 캡처 후:
 
 ```bash
@@ -219,18 +276,30 @@ python3 scripts/vision_tune/tune_lane_control.py --drive
 python3 scripts/vision_tune/hsv.py --apply-profile sim
 python3 scripts/vision_tune/hsv.py --apply-profile real_car
 
-# 실차 bag 캡처로 튜닝
+# 실차 bag 캡처로 튜닝 (6채널: 흰/노란/검/빨/시안/시안2)
+python3 scripts/vision_tune/tune_hsv.py --from-bag all
 python3 scripts/vision_tune/tune_hsv.py --from-bag in
 python3 scripts/vision_tune/tune_hsv.py --folder data/captures/from_bag/out
 python3 scripts/vision_tune/tune_hsv.py --from-bag out_glare --channel black_cyan
-python3 scripts/vision_tune/tune_hsv.py --channel yellow
+python3 scripts/vision_tune/tune_hsv.py --from-bag black_road --channel black_road
+python3 scripts/vision_tune/tune_hsv.py --from-bag in_yellow --channel yellow
 ```
 
-기준값: `real_car` = bag `from_bag` 캡처 (커밋 `0191811`, `35ba99e`, `2e37ae8` black_cyan).  
-추가 미세조정 후 `s` 저장. `d`=sim 시드, `b`=origin/board 1차 실차(레거시).
+기준값: `real_car` = bag `from_bag` 캡처. `s` 저장 · `d`=sim 시드 · `b`=board 레거시.
 
-**주행가능 영역 SSOT (2026-07-15):** `road_raw = black|red|black_cyan` → morph → BEV 하단 ego blob.  
-검증: `viz_raw_hsv_masks.py` · `viz_cyan_ab.py` · 문서 [`hsv-profiles.md`](../../docs/hsv-profiles.md) §1.1.
+| `--from-bag` | 용도 / 추천 채널 |
+|--------------|------------------|
+| `all` | in+out+out_glare+black_road+in_yellow — **6채널 전체** |
+| `in` / `out` | 흰·노란·검·빨 일반 |
+| `out_glare` | **black_cyan** |
+| `black_road` | **black_road** (커브/V 튜닝 프레임) |
+| `in_yellow` | **yellow** / **black_cyan_2** (~870–955) |
+| `both` | in+out 병합 |
+
+**주행가능 영역 SSOT (2026-07-16 LOCKED trial #1):**  
+`road_raw = black_near|red|cyan_near` (near=하단 밴드 **질량** CC, morph 전)  
+→ morph open **5** / close **17** / 2회 → ego (하단 밴드 질량).  
+비교 영상: `data/captures/bev_videos/black_trials_morph5_17/` (gitignore).
 
 | 창 | 역할 |
 |----|------|
@@ -238,7 +307,7 @@ python3 scripts/vision_tune/tune_hsv.py --channel yellow
 
 | 키 | 동작 |
 |----|------|
-| `1`–`5` | white / yellow / black_road / red_road / **black_cyan** |
+| `1`–`6` | white / yellow / black_road / red_road / **black_cyan** / **black_cyan_2** |
 | `d` | 활성 채널 → **sim** (Gazebo / 원태 시드) |
 | `b` | 활성 채널 → origin/board 1차 실차 (레거시) |
 | 클릭 | ORIGIN/BEV 패널에서 해당 픽셀 HSV로 범위 **확장** |
@@ -339,6 +408,7 @@ Metric IPM이면 종·횡이 이미 등방이라 검증용; 사다리꼴 쓸 때
 | `bev_roi.py` | 사다리꼴 기하 |
 | `capture_camera.py` | 핫키 캡처 (라이브 토픽) |
 | `capture_from_bag.py` | **IN/OUT bag 재생 + 핫키 캡처** |
+| `play_bag_drivable.py` | **bag→BEV 저장 / BEV\|6_ego_blob 재생** (`extract_five` SSOT) |
 | `preview_out_drivable.py` | OUT/IN: road + 피팅 레일 between 프리뷰 |
 | `out_drivable.py` | road / fill_between_fitted_rails 헬퍼 |
 | `../../config/lane_vision.yaml` | `metric_ipm:` + `hsv:` + `detect_tune:` SSOT |

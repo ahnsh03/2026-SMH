@@ -46,16 +46,26 @@ def _pipe(
     bev = warp_metric_ipm(frame, ipm)
     white = V._bin(make_mask(bev, ranges['white']))
     yellow = V._bin(make_mask(bev, ranges['yellow']))
-    black = V._bin(make_mask(bev, ranges['black_road']))
+    black_raw = V._bin(make_mask(bev, ranges['black_road'], morph=False))
+    black = V._keep_near_floor_blob(black_raw)  # trial #1
     red = V._bin(make_mask(bev, ranges['red_road']))
-    cyan = (
-        V._bin(make_mask(bev, ranges['black_cyan']))
+    cyan1 = (
+        V._bin(make_mask(bev, ranges['black_cyan'], morph=False))
         if 'black_cyan' in ranges
         else np.zeros_like(black)
     )
+    cyan2 = (
+        V._bin(make_mask(bev, ranges['black_cyan_2'], morph=False))
+        if 'black_cyan_2' in ranges
+        else np.zeros_like(black)
+    )
+    cyan_raw = V._or2(cyan1, cyan2)
+    cyan = V._keep_near_floor_blob(cyan_raw)  # before morph
     road = V._or2(black, red)
     if use_cyan:
         road = V._or2(road, cyan)
+    # A/B still uses exclusive paint rule via extract_five for live pipe;
+    # keep legacy W|Y OR here only for historical glare A/B mosaics.
     lane_road = V._or2(V._or2(white, road), yellow)
     cleaned = V._clean_lane_mask(
         lane_road,

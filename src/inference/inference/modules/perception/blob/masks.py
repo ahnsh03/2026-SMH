@@ -89,10 +89,12 @@ def _load_hsv_bounds() -> dict[str, tuple[np.ndarray, np.ndarray]]:
     defaults = {
         'white': ((0, 0, 174), (179, 29, 255)),
         'yellow': ((0, 32, 79), (55, 255, 255)),
-        'black_road': ((0, 0, 0), (179, 255, 30)),
+        'black_road': ((17, 0, 15), (70, 255, 140)),
         'red_road': ((170, 125, 161), (179, 192, 229)),
         # OUT LED billboard cyan wash on asphalt
         'black_cyan': ((90, 190, 200), (100, 220, 230)),
+        # Secondary cyan/teal asphalt (IN bag tune 2026-07-15)
+        'black_cyan_2': ((97, 240, 105), (105, 255, 180)),
     }
     DEFAULT_CONFIG_PATH, _, _, _ = _metric_ipm()
     try:
@@ -152,7 +154,13 @@ def _red_inrange(hsv: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
 
 
 def extract_bev_masks(frame: np.ndarray) -> dict[str, np.ndarray]:
-    """Return BEV uint8 masks: white, yellow, black, red, cyan, road_raw, bev."""
+    """Return BEV uint8 masks: white, yellow, black, red, cyan, road_raw, bev.
+
+    ``road_raw`` = black_near | red | cyan_near — near-robot CC on black and cyan
+    *before* road morph (trial #1 locked).
+    """
+
+    from inference.modules.perception.blob.morph_blob import keep_near_floor_blob
 
     if frame is None or frame.size == 0:
         empty = np.empty((0, 0), dtype=np.uint8)
@@ -163,11 +171,14 @@ def extract_bev_masks(frame: np.ndarray) -> dict[str, np.ndarray]:
             'black': empty,
             'red': empty,
             'cyan': empty,
+            'cyan_raw': empty,
             'road_raw': empty,
         }
 
     h, w = frame.shape[:2]
     ensure_ipm_maps(w, h)
+    global _HSV_BOUNDS
+    _HSV_BOUNDS = None  # pick up retuned lane_vision.yaml
     bounds = hsv_bounds()
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
@@ -182,13 +193,25 @@ def extract_bev_masks(frame: np.ndarray) -> dict[str, np.ndarray]:
             np.array([110, 255, 230], dtype=np.uint8),
         ),
     )
+    cyan2_lo, cyan2_hi = bounds.get(
+        'black_cyan_2',
+        (
+            np.array([97, 240, 105], dtype=np.uint8),
+            np.array([105, 255, 180], dtype=np.uint8),
+        ),
+    )
     cyan_src = cv2.inRange(hsv, cyan_lo, cyan_hi)
+    cyan2_src = cv2.inRange(hsv, cyan2_lo, cyan2_hi)
 
     white = warp_mask(white_src)
     yellow = warp_mask(yellow_src)
-    black = warp_mask(black_src)
+    black_raw = warp_mask(black_src)
+    black = keep_near_floor_blob(black_raw)
     red = warp_mask(red_src)
-    cyan = warp_mask(cyan_src)
+    cyan1 = warp_mask(cyan_src)
+    cyan2 = warp_mask(cyan2_src)
+    cyan_raw = cv2.bitwise_or(cyan1, cyan2)
+    cyan = keep_near_floor_blob(cyan_raw)
     road_raw = cv2.bitwise_or(black, red)
     road_raw = cv2.bitwise_or(road_raw, cyan)
     bev = warp_bgr(frame)
@@ -197,7 +220,9 @@ def extract_bev_masks(frame: np.ndarray) -> dict[str, np.ndarray]:
         'white': white,
         'yellow': yellow,
         'black': black,
+        'black_raw': black_raw,
         'red': red,
         'cyan': cyan,
+        'cyan_raw': cyan_raw,
         'road_raw': road_raw,
     }

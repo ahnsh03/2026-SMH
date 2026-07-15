@@ -78,10 +78,28 @@ def road_mask_from_hsv(
     bev: np.ndarray,
     ranges: dict[str, HsvRange],
 ) -> np.ndarray:
-    """Always-on road = black_road | red_road (one set, no obstacle split)."""
-    black = make_mask(bev, ranges['black_road'])
-    red = make_mask(bev, ranges['red_road'])
-    return cv2.bitwise_or(black, red)
+    """road = black_near | red (| cyan_near if present). Trial #1 locked."""
+
+    from viz_raw_hsv_masks import _bin, _keep_near_floor_blob, _or2
+
+    black = _keep_near_floor_blob(
+        _bin(make_mask(bev, ranges['black_road'], morph=False))
+    )
+    red = _bin(make_mask(bev, ranges['red_road']))
+    road = _or2(black, red)
+    if 'black_cyan' in ranges or 'black_cyan_2' in ranges:
+        cyan = np.zeros_like(black)
+        if 'black_cyan' in ranges:
+            cyan = _or2(
+                cyan, _bin(make_mask(bev, ranges['black_cyan'], morph=False))
+            )
+        if 'black_cyan_2' in ranges:
+            cyan = _or2(
+                cyan, _bin(make_mask(bev, ranges['black_cyan_2'], morph=False))
+            )
+        road = _or2(road, _keep_near_floor_blob(cyan))
+    return road
+
 
 
 def course_rails_from_debug(
