@@ -92,7 +92,7 @@ def _load_hsv_bounds() -> dict[str, tuple[np.ndarray, np.ndarray]]:
         'black_road': ((17, 0, 15), (70, 255, 140)),
         'red_road': ((170, 125, 161), (179, 192, 229)),
         # OUT LED billboard cyan wash on asphalt
-        'black_cyan': ((90, 190, 200), (100, 220, 230)),
+        'black_cyan': ((90, 200, 190), (100, 215, 238)),
         # Secondary cyan/teal asphalt (IN bag tune 2026-07-15)
         'black_cyan_2': ((97, 240, 105), (105, 255, 180)),
     }

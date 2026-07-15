@@ -34,10 +34,10 @@ PROFILE_NAMES = ('sim', 'real_car')
 _BLACK_CYAN_DEFAULT: dict[str, int] = {
     'h_min': 90,
     'h_max': 100,
-    's_min': 190,
-    's_max': 220,
-    'v_min': 200,
-    'v_max': 230,
+    's_min': 200,
+    's_max': 215,
+    'v_min': 190,
+    'v_max': 238,
 }
 
 # Secondary cyan / teal asphalt patch (IN bag ~930, 2026-07-15 tune).
@@ -155,12 +155,12 @@ _REAL_CAR_DEFAULTS: dict[str, dict[str, int]] = {
     'red_road': {
         'h_min': 0,
         'h_max': 9,
-        's_min': 155,
+        's_min': 110,
         's_max': 255,
         'v_min': 120,
         'v_max': 255,
     },
-    # OUT LED billboard floor wash (from_bag/out_glare, 2026-07-15).
+    # OUT LED billboard floor wash (from_bag/out_glare, retune 2026-07-16 S/V).
     'black_cyan': dict(_BLACK_CYAN_DEFAULT),
     'black_cyan_2': dict(_BLACK_CYAN_2_DEFAULT),
 }

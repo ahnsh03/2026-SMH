@@ -85,8 +85,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--folder', type=Path, default=None)
     ap.add_argument('--config', type=Path, default=default_config_path())
     ap.add_argument('--clean', action='store_true')
-    ap.add_argument('--open-k', type=int, default=5)
-    ap.add_argument('--close-k', type=int, default=17)
+    ap.add_argument('--open-k', type=int, default=3)
+    ap.add_argument('--close-k', type=int, default=13)
     args = ap.parse_args(argv)
 
     folder = args.folder.expanduser().resolve() if args.folder else FROM_BAG[args.from_bag]
@@ -116,8 +116,8 @@ def main(argv: list[str] | None = None) -> int:
             open_k=args.open_k,
             close_k=args.close_k,
             open_iters=1,
-            close_iters=2,
-            max_hole_px=5000,
+            close_iters=1,
+            max_hole_px=3000,
         )
         _, _f1, ego1, _ = _pipe(
             frame,
@@ -127,8 +127,8 @@ def main(argv: list[str] | None = None) -> int:
             open_k=args.open_k,
             close_k=args.close_k,
             open_iters=1,
-            close_iters=2,
-            max_hole_px=5000,
+            close_iters=1,
+            max_hole_px=3000,
         )
         gained = V._bin(cv2.bitwise_and(ego1, cv2.bitwise_not(ego0)))
         gained_bgr = np.zeros((*ego0.shape, 3), dtype=np.uint8)

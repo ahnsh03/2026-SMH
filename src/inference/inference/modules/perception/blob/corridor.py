@@ -9,7 +9,7 @@ A/B on bag frames (``viz_mask_postprocess_ab.py`` / ``viz_cyan_ab.py``) showed:
 
 Pipeline
 --------
-1. morph denoise road (black_near|red|cyan_near) — open 3 / close 5
+1. morph denoise road (black_near|red|cyan_near) — open 2 / close 3
 2. keep largest CC by **near-band mass** touching ego near-band  (= ego blob SSOT)
 3. DT ridge mid → clip each row to mid ± track_width/2 ∩ blob
 4. optional: if course paint dense, AND with paint-wall flood (lights walls)
@@ -60,7 +60,7 @@ def course_lane_mask(
 def denoise_road_mask(road: np.ndarray) -> np.ndarray:
     """Morph denoise road before near-ego CC (open 3 / close 5)."""
 
-    cleaned = morph_clean_road(road, open_k=3, close_k=5, max_hole_px=600)
+    cleaned = morph_clean_road(road, open_k=2, close_k=3, max_hole_px=400)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(
         (cleaned > 0).astype(np.uint8), connectivity=8
     )

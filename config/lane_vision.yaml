@@ -89,9 +89,11 @@ hsv:
         environment: D3-G field (C920e 320x180)
         source: bag replay → data/captures/from_bag/{in,out}
         bags: bag_20260711_150234 (IN), bag_20260711_144948 (OUT)
-        tuned: '2026-07-15'
+        tuned: '2026-07-16'
         tool: scripts/vision_tune/tune_hsv.py --from-bag
-        commits: 0191811, 35ba99e
+        commits: 0191811, 35ba99e, 2e37ae8
+        note: 'LOCKED HSV: black H17 V15-140; red Smin110; cyan S200-215 V190-238;
+          near CC + morph open3/close13/1'
       white: &id001
         h_min: 0
         h_max: 179
@@ -116,17 +118,17 @@ hsv:
       red_road: &id004
         h_min: 0
         h_max: 9
-        s_min: 155
+        s_min: 110
         s_max: 255
         v_min: 120
         v_max: 255
       black_cyan: &id005
         h_min: 90
         h_max: 100
-        s_min: 190
-        s_max: 220
-        v_min: 200
-        v_max: 230
+        s_min: 200
+        s_max: 215
+        v_min: 190
+        v_max: 238
       black_cyan_2: &id006
         h_min: 97
         h_max: 105
@@ -142,13 +144,12 @@ hsv:
   black_cyan_2: *id006
   note: >-
     OpenCV HSV (H 0-179). Runtime reads flattened channels (= profiles[active]).
-    See docs/hsv-profiles.md. Tuned with scripts/vision_tune/tune_hsv.py.
-    LOCKED 2026-07-16 trial#1: road_raw=black_near|red|cyan_near (near-band mass CC
-    before morph); morph open5/close17/2; then ego CC by near-band mass.
+    See docs/hsv-profiles.md. Tuned 2026-07-16: keep black H17 V15-140; apply red
+    Smin110 + cyan S200-215 V190-238. LOCKED trial#1 near; morph open3/close13/1.
 perception:
   backend: blob
   note: >-
-    2026-07-16 LOCKED blob SSOT: road=black_near|red|cyan_near → morph(5/17) →
+    2026-07-16 LOCKED blob SSOT: road=black_near|red|cyan_near → morph(3/13) →
     near-ego CC (+ DT strip); legacy fork only when enable_fork.
 detect_tune:
   crossing_coverage_ratio: 0.4

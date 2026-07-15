@@ -287,14 +287,15 @@ def extract_five_from_bev(
     bev: np.ndarray,
     config_path: Path,
     *,
-    open_k: int = 5,
-    close_k: int = 17,
+    open_k: int = 3,
+    close_k: int = 13,
     open_iters: int = 1,
-    close_iters: int = 2,
-    max_hole_px: int = 5000,
+    close_iters: int = 1,
+    max_hole_px: int = 3000,
     course: str | None = None,
     prefer_yellow: bool | None = None,
     black_mode: str = 'near',
+    ranges: dict | None = None,
 ) -> dict[str, np.ndarray]:
     """Photo/bag SSOT panels from an **already-warped** Metric IPM BEV.
 
@@ -306,12 +307,15 @@ def extract_five_from_bev(
       - ``near`` (default, trial #1): near-band-mass CC before morph
       - ``top_drop`` (trial #2): drop BEV-top-only large CCs, then morph → bottom
 
-    Morph defaults: open 5 / close 17 / 2 iters (restored one step vs soft 3/13/1).
+    Morph defaults: open 3 / close 13 / 1 iter (one step softer than 5/17/2).
+
+    Optional ``ranges`` overrides ``load_hsv_ranges(config_path)`` (HSV A/B sweeps).
 
     Do **not** pass camera frames here (would double-warp). Use ``extract_five``.
     """
 
-    ranges = load_hsv_ranges(config_path)
+    if ranges is None:
+        ranges = load_hsv_ranges(config_path)
     white = _bin(make_mask(bev, ranges['white']))
     yellow = _bin(make_mask(bev, ranges['yellow']))
     black_raw = _bin(make_mask(bev, ranges['black_road'], morph=False))
@@ -417,11 +421,11 @@ def extract_five(
     frame: np.ndarray,
     config_path: Path,
     *,
-    open_k: int = 5,
-    close_k: int = 17,
+    open_k: int = 3,
+    close_k: int = 13,
     open_iters: int = 1,
-    close_iters: int = 2,
-    max_hole_px: int = 5000,
+    close_iters: int = 1,
+    max_hole_px: int = 3000,
     course: str | None = None,
     prefer_yellow: bool | None = None,
     black_mode: str = 'near',
@@ -495,11 +499,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--all', action='store_true')
     ap.add_argument('--stride', type=int, default=1)
     ap.add_argument('--clean', action='store_true')
-    ap.add_argument('--open-k', type=int, default=5, help='open kernel (noise)')
-    ap.add_argument('--close-k', type=int, default=17, help='close kernel (fill)')
+    ap.add_argument('--open-k', type=int, default=3, help='open kernel (noise)')
+    ap.add_argument('--close-k', type=int, default=13, help='close kernel (fill)')
     ap.add_argument('--open-iters', type=int, default=1)
-    ap.add_argument('--close-iters', type=int, default=2)
-    ap.add_argument('--max-hole-px', type=int, default=5000)
+    ap.add_argument('--close-iters', type=int, default=1)
+    ap.add_argument('--max-hole-px', type=int, default=3000)
     args = ap.parse_args(argv)
 
     open_k = int(args.open_k)

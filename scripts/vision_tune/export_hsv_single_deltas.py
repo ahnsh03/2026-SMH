@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
-"""Export side-by-side BEV | ego_blob videos for black trial #1 vs #2 × IN/OUT.
+"""Export 5 OUT BEV|ego videos: pre-retune HSV + one delta each.
 
-Writes under ``data/captures/bev_videos/black_trials/``::
+Baseline = HSV before 2026-07-16 retune (black H17 Vmax140, red Smin155,
+cyan S190-220 V200-230). Each clip applies **only one** retune knob:
 
-  in_trial1_near.mp4
-  in_trial2_top_drop.mp4
-  out_trial1_near.mp4
-  out_trial2_top_drop.mp4
+  1. black_road H  (h_min 17→14)
+  2. black_road V  (v_max 140→180)
+  3. red_road S    (s_min 155→110)
+  4. black_cyan S  (190-220 → 200-215)
+  5. black_cyan V  (200-230 → 190-238)
+
+SSOT pipeline: black_mode=near, morph open5/close17.
 
 Example::
 
-  python3 scripts/vision_tune/export_black_trial_videos.py
-  python3 scripts/vision_tune/export_black_trial_videos.py --stride 2
+  python3 scripts/vision_tune/export_hsv_single_deltas.py
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import sys
 from pathlib import Path
 
@@ -30,13 +34,83 @@ for p in (_SCRIPT, _INFERENCE):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from hsv import default_config_path  # noqa: E402
+from hsv import (  # noqa: E402
+    CHANNEL_NAMES,
+    HsvRange,
+    default_config_path,
+    load_hsv_ranges,
+)
 from viz_raw_hsv_masks import extract_five_from_bev  # noqa: E402
 
 PANEL_W = 480
 PANEL_H = 360
 GAP = 8
-OUT_DIR = _ROOT / 'data' / 'captures' / 'bev_videos' / 'black_trials'
+OUT_DIR = _ROOT / 'data' / 'captures' / 'bev_videos' / 'hsv_single_deltas'
+
+# Pre-retune real_car road channels (white/yellow/cyan2 unchanged in retune).
+_BASELINE_OVERRIDES: dict[str, dict[str, int]] = {
+    'black_road': {
+        'h_min': 17,
+        'h_max': 70,
+        's_min': 0,
+        's_max': 255,
+        'v_min': 15,
+        'v_max': 140,
+    },
+    'red_road': {
+        'h_min': 0,
+        'h_max': 9,
+        's_min': 155,
+        's_max': 255,
+        'v_min': 120,
+        'v_max': 255,
+    },
+    'black_cyan': {
+        'h_min': 90,
+        'h_max': 100,
+        's_min': 190,
+        's_max': 220,
+        'v_min': 200,
+        'v_max': 230,
+    },
+}
+
+
+def _baseline_ranges(config: Path) -> dict[str, HsvRange]:
+    ranges = load_hsv_ranges(config)
+    out = {k: copy.deepcopy(v) for k, v in ranges.items()}
+    for name, block in _BASELINE_OVERRIDES.items():
+        out[name] = HsvRange.from_dict(block, block)
+    return out
+
+
+def _with_patch(
+    base: dict[str, HsvRange],
+    channel: str,
+    patch: dict[str, int],
+) -> dict[str, HsvRange]:
+    out = {k: copy.deepcopy(v) for k, v in base.items()}
+    d = out[channel].to_dict()
+    d.update(patch)
+    out[channel] = HsvRange.from_dict(d, d)
+    return out
+
+
+VARIANTS: list[tuple[str, str, dict[str, int]]] = [
+    ('01_black_H_only', 'black_road', {'h_min': 14}),
+    ('02_black_V_only', 'black_road', {'v_max': 180}),
+    ('03_red_S_only', 'red_road', {'s_min': 110}),
+    (
+        '04_cyan_S_only',
+        'black_cyan',
+        {'s_min': 200, 's_max': 215},
+    ),
+    (
+        '05_cyan_V_only',
+        'black_cyan',
+        {'v_min': 190, 'v_max': 238},
+    ),
+]
 
 
 def _fit(img: np.ndarray, w: int, h: int, *, nearest: bool = False) -> np.ndarray:
@@ -89,7 +163,7 @@ def _compose(
         f'{title}  [{index + 1}/{n}]',
         (8, 24),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
+        0.45,
         (200, 200, 200),
         1,
         cv2.LINE_AA,
@@ -97,29 +171,27 @@ def _compose(
     return np.vstack([row, footer])
 
 
-def export_one(
+def export_variant(
     *,
     bev_path: Path,
     out_path: Path,
-    course: str,
-    black_mode: str,
+    ranges: dict[str, HsvRange],
+    title: str,
     config: Path,
     open_k: int,
     close_k: int,
     close_iters: int,
     max_hole_px: int,
     stride: int,
-    fps: float | None,
 ) -> Path:
     cap = cv2.VideoCapture(str(bev_path))
     if not cap.isOpened():
         raise SystemExit(f'Cannot open {bev_path}')
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 15.0)
-    use_fps = float(fps) if fps and fps > 0 else max(1.0, src_fps / max(1, stride))
+    use_fps = max(1.0, src_fps / max(1, stride))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    title = f'{course} black_mode={black_mode} open={open_k} close={close_k}'
     writer = None
     written = 0
     idx = 0
@@ -138,8 +210,9 @@ def export_one(
             open_iters=1,
             close_iters=close_iters,
             max_hole_px=max_hole_px,
-            course=course,
-            black_mode=black_mode,
+            course='out',
+            black_mode='near',
+            ranges=ranges,
         )
         frame = _compose(
             five['bev'],
@@ -156,91 +229,63 @@ def export_one(
                 raise SystemExit(f'VideoWriter failed: {out_path}')
         writer.write(frame)
         written += 1
-        if written % 200 == 0:
-            print(f'  … {out_path.name}: {written} frames (src idx {idx}/{n})')
+        if written % 400 == 0:
+            print(f'  … {out_path.name}: {written} frames', flush=True)
         idx += 1
 
     cap.release()
     if writer is not None:
         writer.release()
-    print(f'wrote {out_path} ({written} frames @ {use_fps:.2f} fps)')
+    print(f'wrote {out_path} ({written} frames @ {use_fps:.2f} fps)', flush=True)
     return out_path
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--config', type=Path, default=default_config_path())
-    ap.add_argument('--in-bev', type=Path, default=_ROOT / 'data/captures/bev_videos/in.mp4')
-    ap.add_argument('--out-bev', type=Path, default=_ROOT / 'data/captures/bev_videos/out.mp4')
+    ap.add_argument(
+        '--from-bev',
+        type=Path,
+        default=_ROOT / 'data/captures/bev_videos/out.mp4',
+    )
     ap.add_argument('--outdir', type=Path, default=OUT_DIR)
-    ap.add_argument('--open-k', type=int, default=3)
-    ap.add_argument('--close-k', type=int, default=13)
-    ap.add_argument('--close-iters', type=int, default=1)
-    ap.add_argument('--max-hole-px', type=int, default=3000)
+    ap.add_argument('--open-k', type=int, default=5)
+    ap.add_argument('--close-k', type=int, default=17)
+    ap.add_argument('--close-iters', type=int, default=2)
+    ap.add_argument('--max-hole-px', type=int, default=5000)
     ap.add_argument('--stride', type=int, default=1)
-    ap.add_argument('--fps', type=float, default=0.0, help='0 = source_fps/stride')
-    ap.add_argument(
-        '--modes',
-        default='near,top_drop',
-        help='Comma list: near (trial1 SSOT) and/or top_drop (trial2)',
-    )
-    ap.add_argument(
-        '--courses',
-        default='in,out',
-        help='Comma list: in and/or out',
-    )
     args = ap.parse_args(argv)
 
-    mode_map = {
-        'near': ('near', 'trial1_near'),
-        'top_drop': ('top_drop', 'trial2_top_drop'),
-        'top-drop': ('top_drop', 'trial2_top_drop'),
-        '1': ('near', 'trial1_near'),
-        '2': ('top_drop', 'trial2_top_drop'),
-    }
-    modes = []
-    for raw in str(args.modes).split(','):
-        key = raw.strip().lower()
-        if not key:
-            continue
-        if key not in mode_map:
-            raise SystemExit(f'Unknown mode {raw!r}; use near,top_drop')
-        modes.append(mode_map[key])
-    courses = [c.strip().lower() for c in str(args.courses).split(',') if c.strip()]
-    src_by = {'in': args.in_bev, 'out': args.out_bev}
-
-    jobs = []
-    for course in courses:
-        if course not in src_by:
-            raise SystemExit(f'Unknown course {course!r}')
-        for mode, tag in modes:
-            jobs.append((course, src_by[course], mode, f'{course}_{tag}.mp4'))
-
+    base = _baseline_ranges(args.config)
     print(
-        f'export black trials → {args.outdir}  '
-        f'morph open={args.open_k} close={args.close_k} '
-        f'iters={args.close_iters} stride={args.stride}'
+        'baseline = pre-retune HSV; SSOT near + morph '
+        f'{args.open_k}/{args.close_k}; source={args.from_bev}',
+        flush=True,
     )
-    for course, src, mode, name in jobs:
-        src = Path(src).expanduser().resolve()
-        if not src.is_file():
-            raise SystemExit(f'missing BEV video: {src}')
-        dest = Path(args.outdir).expanduser().resolve() / name
-        print(f'\n[{course} / {mode}] {src.name} → {dest.name}')
-        export_one(
-            bev_path=src,
+    for name in CHANNEL_NAMES:
+        if name in _BASELINE_OVERRIDES:
+            print(f'  {name}: {base[name].to_dict()}', flush=True)
+
+    for tag, channel, patch in VARIANTS:
+        ranges = _with_patch(base, channel, patch)
+        patched = {k: ranges[channel].to_dict()[k] for k in patch}
+        title = f'out near | {tag} | {channel} {patched}'
+        dest = Path(args.outdir).expanduser().resolve() / f'{tag}.mp4'
+        print(f'\n[{tag}] {channel} {patch}', flush=True)
+        export_variant(
+            bev_path=Path(args.from_bev).expanduser().resolve(),
             out_path=dest,
-            course=course,
-            black_mode=mode,
+            ranges=ranges,
+            title=title,
             config=args.config,
             open_k=int(args.open_k),
             close_k=int(args.close_k),
             close_iters=int(args.close_iters),
             max_hole_px=int(args.max_hole_px),
             stride=max(1, int(args.stride)),
-            fps=float(args.fps) if args.fps else None,
         )
-    print('\ndone. default runtime/player remains trial #1 (black_mode=near).')
+
+    print(f'\ndone → {args.outdir}', flush=True)
     return 0
 
 

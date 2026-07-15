@@ -196,13 +196,14 @@ python3 scripts/vision_tune/play_bag_drivable.py out \
 
 # black trial #1 vs #2 × IN/OUT → data/captures/bev_videos/black_trials/
 python3 scripts/vision_tune/export_black_trial_videos.py
-# morph open5/close17 명시 저장 (기본과 동일 강도, 폴더명으로 구분)
-python3 scripts/vision_tune/export_black_trial_videos.py \
-  --open-k 5 --close-k 17 --outdir data/captures/bev_videos/black_trials_morph5_17
-# soft morph 비교용
-python3 scripts/vision_tune/export_black_trial_videos.py \
-  --open-k 3 --close-k 13 --close-iters 1 --max-hole-px 3000 \
-  --outdir data/captures/bev_videos/black_trials_morph3_13
+# SSOT near + morph3/13 + red/cyan HSV → IN/OUT BEV|ego
+python3 scripts/vision_tune/export_black_trial_videos.py --modes near --courses in,out \
+  --outdir data/captures/bev_videos/ssot_near_morph3_13
+# 캡처 mosaic (extract_five SSOT)
+python3 scripts/vision_tune/viz_raw_hsv_masks.py --from-bag in --all --clean
+python3 scripts/vision_tune/viz_raw_hsv_masks.py --from-bag out --all --clean
+python3 scripts/vision_tune/play_bag_drivable.py out \
+  --from-bev data/captures/bev_videos/out.mp4
 ```
 
 IN 페인트 규칙: **노란 차선 있으면 `yellow|road`**, 없으면 **`white|road`** (`resolve_course_lane_mask`, 흰∧노란 OR 금지).  
@@ -298,8 +299,8 @@ python3 scripts/vision_tune/tune_hsv.py --from-bag in_yellow --channel yellow
 
 **주행가능 영역 SSOT (2026-07-16 LOCKED trial #1):**  
 `road_raw = black_near|red|cyan_near` (near=하단 밴드 **질량** CC, morph 전)  
-→ morph open **5** / close **17** / 2회 → ego (하단 밴드 질량).  
-비교 영상: `data/captures/bev_videos/black_trials_morph5_17/` (gitignore).
+→ morph open **3** / close **13** / 1회 → ego (하단 밴드 질량).  
+HSV retune: black 유지(H17 V15–140); **red S≥110**, **cyan S200–215 V190–238**.
 
 | 창 | 역할 |
 |----|------|

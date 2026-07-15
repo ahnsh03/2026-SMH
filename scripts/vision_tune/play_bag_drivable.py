@@ -540,8 +540,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--rate', type=float, default=0.5)
     ap.add_argument('--start', type=float, default=0.0, help='seconds (bag) or frame idx if --from-bev')
     ap.add_argument('--overlay', action='store_true')
-    ap.add_argument('--open-k', type=int, default=5)
-    ap.add_argument('--close-k', type=int, default=17)
+    ap.add_argument('--open-k', type=int, default=3)
+    ap.add_argument('--close-k', type=int, default=13)
     ap.add_argument(
         '--export-bev',
         type=Path,
