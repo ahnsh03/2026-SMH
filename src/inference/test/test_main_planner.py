@@ -143,6 +143,31 @@ def test_mask_fork_force_pp_uses_color_decision():
     )
 
 
+def test_effective_corridor_near_fork_out_only_when_armed():
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.OUT,
+            mask_corridor_mode='off',
+            mask_corridor_near_fork=True,
+        )
+    )
+    planner.state = DrivingState.NORMAL
+    lane = SimpleNamespace(fork_active=False, branches=())
+    planner._fork_perception_enabled = True
+    mode, require_path = planner._effective_mask_corridor_mode(lane)
+    assert mode == 'hard'
+    assert require_path is True
+
+    planner._fork_perception_enabled = False
+    mode_off, _ = planner._effective_mask_corridor_mode(lane)
+    assert mode_off == 'off'
+
+    planner.config = replace(planner.config, route_mode=RouteMode.IN)
+    planner._fork_perception_enabled = True
+    mode_in, _ = planner._effective_mask_corridor_mode(lane)
+    assert mode_in == 'off'
+
+
 def test_roundabout_circle_uses_paint_pp_not_mask():
     """NORMAL=mask_p but CIRCLE+circle_tracker=pp follows yellow centerline."""
     import cv2
@@ -1358,6 +1383,10 @@ def test_load_planner_config_has_track_and_stanley():
     cfg = load_planner_config(route_mode='out')
     assert cfg.track_half_width_m > 0.0
     assert cfg.stanley_k_cte > 0.0
-    assert cfg.normal_tracker == 'mask_p'
+    assert cfg.normal_tracker == 'stanley'
+    assert cfg.stanley_k_cte == 1.0
+    assert cfg.stanley_k_yaw == 1.2
+    assert cfg.stanley_steer_alpha == 0.25
     assert cfg.circle_tracker == 'pp'
     assert cfg.roundabout_lookahead_m == 0.45
+    assert cfg.steering_rate_limit_per_sec == 8.0

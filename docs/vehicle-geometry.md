@@ -22,7 +22,8 @@
 | 외형 (대략) | ~255×140×215 mm | 322×220×251 mm | URDF 베이스 ~190×310×120 |
 | 최대 조향각 | **±24.44°** (`atan(L/R_min)`, 제어 SSOT) | \(R_\min=0.4\,\mathrm{m}\) 역산 ≈ **27°** | **±31.94°** (`0.5574` rad) |
 | 최소 선회반경 | **0.385 m** (팀 제어 SSOT) | **0.4 m** | **0.385 m** (\(L/\tan\delta\) 맞춤) |
-| 카메라 | **h=0.13 m, pitch↓10°** (시뮬과 동일 맞춤) | — | 동일 마운트 스펙 |
+| 카메라 | **h / pitch**: yaml `metric_ipm` · **종배치**: 앞차축보다 **25 mm 앞** | — | `ahead_front_axle_m: 0.025` |
+| 후차축→카메라 \(d_{\mathrm{rc}}\) | **\(L + 0.025 = 0.200\,\mathrm{m}\)** | — | **\(0.24 + 0.025 = 0.265\,\mathrm{m}\)** |
 | 최대 속도 | ESC·배터리 의존 (고속 RC) | **~1 m/s** | 브릿지 `max_linear_speed: 1.2` |
 | 질량 | 경량 RC (~1–2 kg대) | ~4.8 kg | URDF `base_mass` 4.34 kg |
 | `/control` 부호 | −1=좌 / +1=우 | — | 동일 규약 → Gazebo 좌(+)로 **부호 반전** |
@@ -33,7 +34,9 @@
 |----|------|
 | D-Racer \(L=175\) mm, \(T=120\) mm | 팀 실측 2026-07-12 (안승현) |
 | 팀 \(R_{\min}=0.385\) m (제어 SSOT) | 2026-07-15 — 시뮬도 같은 \(R_{\min}\)에 \(\delta=\arctan(L/R)\) 맞춤 |
-| D-Racer 카메라 h=0.13 m / pitch 10° | 시뮬과 동일하게 기구 맞춤 (IPM yaml 유지) |
+| D-Racer 카메라 h=0.13 m / pitch 10° | 시뮬과 동일하게 기구 맞춤 (IPM yaml; bag 재튜닝 시 yaml이 SSOT) |
+| 카메라가 앞차축보다 25 mm 앞 | `sim_interface.yaml` `mount.ahead_front_axle_m: 0.025` (실차 동일 마운트) |
+| 후차축→카메라 \(d_{\mathrm{rc}}=L+0.025\) | 실차 **0.200 m** · 시뮬 Gazebo **0.265 m** → `path.perception_to_rear_axle_x_m` |
 | LIMO \(L=200\), \(T=175\), \(R_\min=0.4\) m | AgileX LIMO 사용자 매뉴얼 |
 | Gazebo \(L=0.24\), \(\delta_\max=0.5574\), joint `velocity=8` | `ackermann.xacro`, `control_bridge.yaml` |
 | D-Racer 액추에이터·PWM | [hardware-board.md](./hardware-board.md) §5 |
@@ -130,7 +133,10 @@ Gazebo LIMO 휠베이스 \(L=0.24\,\mathrm{m}\)에 맞추면
 |------|------|-----|
 | 휠베이스 \(L\) | ✅ | **0.175 m** |
 | 트레드 \(T\) | ✅ (바퀴 중심 간) | **0.120 m** |
-| 카메라 높이·피치 | ✅ 시뮬과 동일 | **0.13 m / 10° down** |
+| 카메라 높이·피치 | ✅ 튜너 재측정 가능 | yaml `metric_ipm.camera` (문서 기본 0.13 m / 10°) |
+| 카메라 ↔ 앞차축 (종) | ✅ 마운트 | **\(d_{\mathrm{cf}} = 0.025\,\mathrm{m}\)** (카메라가 앞차축보다 앞) |
+| **후차축 → 카메라** \(d_{\mathrm{rc}}\) | ✅ \(L + d_{\mathrm{cf}}\) | **실차 0.200 m** · 시뮬 0.265 m |
+| 인지→후차축 오프셋 | ✅ = \(d_{\mathrm{rc}}\) | `path.perception_to_rear_axle_x_m` |
 | \(\delta_{\max}\) | ✅ \(R_{\min}\) 기준 SSOT | **24.44°** → `max_steer_angle_rad ≈ 0.4266` |
 | \(R_{\min}\) | ✅ 제어 SSOT | **0.385 m** |
 | `steering=±1` ↔ 타이어각 | ✅ 풀락 = \(\delta_{\max}\) | ±1 ↔ ±24.44° |
@@ -146,6 +152,32 @@ max_steer_angle_rad: 0.4266   # atan(0.175/0.385)
 ```
 
 **트레드:** 좌·우 바퀴 **중심** 사이 횡거리 (전폭 아님). 12 cm OK.
+
+### 4.1.1 종방향 기하 (후차축 · 앞차축 · 카메라)
+
+전방 \(+x\). Metric IPM 지면 \(x\)는 **카메라** 원점이다.
+
+```text
+후차축 (PP 원점) ---- L (wheelbase) ---- 앞차축 ---- d_cf ---- 카메라 (IPM 원점)
+                         ↑                              ↑
+                    실차 0.175 m                   0.025 m
+                    시뮬 0.240 m              (ahead_front_axle_m)
+```
+
+\[
+d_{\mathrm{rc}} = L + d_{\mathrm{cf}}
+\quad\text{(후차축 → 카메라 종거리)}
+\]
+
+| 플랫폼 | \(L\) | \(d_{\mathrm{cf}}\) | **\(d_{\mathrm{rc}}\)** | 플래너 키 |
+|--------|-------|---------------------|-------------------------|-----------|
+| **D-Racer 실차** | 0.175 | 0.025 | **0.200 m** | [`main_planner.real_car.yaml`](../config/main_planner.real_car.yaml) `path.perception_to_rear_axle_x_m` |
+| **LIMO Gazebo** | 0.240 | 0.025 | **0.265 m** | [`main_planner.yaml`](../config/main_planner.yaml) 동키 · [`sim_interface.yaml`](../src/dracer_sim/config/sim_interface.yaml) `mount.ahead_front_axle_m` |
+
+사용:
+
+- IPM path 점 \((x_{\mathrm{cam}}, y)\) → 후차축 프레임: \(x_{\mathrm{rear}} = x_{\mathrm{cam}} + d_{\mathrm{rc}}\) (`MainPlanner._path_in_rear_axle_frame`).
+- 앞차축은 카메라보다 \(d_{\mathrm{cf}}\) 뒤(후차축 기준 \(x=L\)). 이미지 최하단 ≈ `x_min_m`이지 범퍼/앞차축이 아님.
 
 ### 4.2 \(\delta_{\max}\) · \(R_{\min}\) · 실제 타이어각 — 측정 방법
 

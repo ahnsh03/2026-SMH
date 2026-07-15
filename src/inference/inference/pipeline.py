@@ -154,6 +154,8 @@ class PlannerConfig:
     mask_fork_force_pp: bool = True
     # If color_path missing under hard/soft corridor, fail mask → PP fallback.
     mask_require_color_path: bool = True
+    # When OUT fork perception is armed (sign hold), auto-enable hard corridor.
+    mask_corridor_near_fork: bool = True
     # When mask drops in a corner, hold last COM steer this many frames before
     # white PP (PP often yanks off when rails vanish).
     mask_occlusion_hold_frames: int = 24
@@ -368,6 +370,7 @@ def load_planner_config(
         ),
         mask_fork_force_pp=bool(mask.get('fork_force_pp', True)),
         mask_require_color_path=bool(mask.get('require_color_path', True)),
+        mask_corridor_near_fork=bool(mask.get('corridor_near_fork', True)),
         mask_occlusion_hold_frames=max(
             0, int(mask.get('occlusion_hold_frames', 12))
         ),
@@ -852,10 +855,10 @@ class MainPlanner:
     def _path_in_rear_axle_frame(self, path: np.ndarray) -> np.ndarray:
         """Translate a perception path into the PP rear-axle frame.
 
-        Metric IPM currently measures ground distance from the camera. The
-        configured positive x offset is therefore added to every path type
-        before PP, curvature, heading and CTE consume it. Keeping this at the
-        planner boundary prevents control terms from using different origins.
+        Metric IPM measures ground distance from the camera. Add
+        ``perception_to_rear_axle_x_m`` (= rear_axle→camera = L + ahead_front)
+        once here so PP / heading / CTE share one origin. See
+        docs/vehicle-geometry.md §4.1.1 (sim 0.265 m, real 0.200 m).
         """
         points = np.asarray(path, dtype=np.float32)
         if points.ndim != 2 or points.shape[1] < 2:
@@ -1324,9 +1327,9 @@ class MainPlanner:
             if arr.ndim == 2 and arr.shape[0] >= 2 and arr.shape[1] >= 2:
                 path_xy = self._harden_color_path(arr)
 
-        corridor_mode = str(self.config.mask_corridor_mode or 'off').lower()
+        corridor_mode, require_color_path = self._effective_mask_corridor_mode(lane)
         if corridor_mode in ('hard', 'soft') and path_xy.shape[0] < 2:
-            if self.config.mask_require_color_path:
+            if require_color_path:
                 return self._mask_occlusion_hold_or_fail(dt_sec)
 
         mpp = float(getattr(lane, 'meters_per_pixel', 0.0) or 0.0)
@@ -1871,6 +1874,28 @@ class MainPlanner:
         if bool(getattr(lane, 'fork_active', False)):
             return True
         return len(getattr(lane, 'branches', ()) or ()) >= 2
+
+    def _effective_mask_corridor_mode(self, lane: Any) -> tuple[str, bool]:
+        """Return (corridor_mode, require_color_path) for mask_p this frame."""
+
+        base = str(self.config.mask_corridor_mode or 'off').lower()
+        require_path = bool(self.config.mask_require_color_path)
+        if base in ('hard', 'soft'):
+            return base, require_path
+        if not self.config.mask_corridor_near_fork:
+            return 'off', require_path
+        if self.config.route_mode is not RouteMode.OUT:
+            return 'off', require_path
+        if self.state is not DrivingState.NORMAL:
+            return 'off', require_path
+        if not self._fork_perception_enabled:
+            return 'off', require_path
+        if bool(getattr(lane, 'fork_active', False)):
+            return 'hard', True
+        if len(getattr(lane, 'branches', ()) or ()) >= 2:
+            return 'hard', True
+        # Sign-hold window before fork_active latches — still clip bleed.
+        return 'hard', True
 
     def _track_normal_path(
         self,

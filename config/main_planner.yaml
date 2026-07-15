@@ -42,7 +42,7 @@ pure_pursuit:
   # (main_planner.real_car.yaml). Do NOT put 0.4266 on Gazebo — turns go soft.
   max_steer_angle_rad: 0.5574
   max_steering_command: 1.0
-  steering_rate_limit_per_sec: 12.0
+  steering_rate_limit_per_sec: 8.0
   path_lost_steering_return_rate_per_sec: 4.0
   nominal_control_dt_sec: 0.10
   cte_gain: 0.10
@@ -65,8 +65,8 @@ speed:
   error_speed_steer_full: 0.50
   error_speed_min_scale: 0.50
 
-# NORMAL SSOT: road_clean mask COM (sim_v2 P) — no white corridor bias.
-# Fork/exit still branch PP when forkish.
+# NORMAL: free-space mask COM (sim_v2) on blob road_clean — no lane ribbon.
+# Switch to stanley|pp only for paint-path A/B. Fork still PP when forkish.
 tracker:
   normal: mask_p
 
@@ -82,13 +82,13 @@ track_state:
   delay_pred_sec: 0.0
   throttle_speed_scale_mps: 1.0
 
-# Phase B: Stanley-lite A/B (enable via tracker.normal: stanley).
+# Stanley-lite: yaw (lane angle) first, gentle CTE, EMA + rate-limit.
 stanley:
-  k_cte: 1.20
-  k_yaw: 1.0
+  k_cte: 1.0
+  k_yaw: 1.2
   v_soft: 0.18
   curvature_ff_gain: 0.35
-  steer_alpha: 0.35
+  steer_alpha: 0.25
 
 mask_pursuit:
   # limo_sim_code_v2 recipe on road_clean: largest-blob area COM + simple P.
@@ -118,15 +118,16 @@ mask_pursuit:
   curve_steer_threshold: 0.35
   curve_speed_scale: 0.80
   corridor_mode: off
+  corridor_near_fork: true
   corridor_half_width_m: 0.42
   path_weight_sigma_m: 0.28
   fork_force_pp: true
-  require_color_path: false
+  require_color_path: true
 
 path:
-  # Metric IPM x is measured from the camera. LIMO sim camera is 0.025 m
-  # ahead of the front axle: rear axle -> camera = 0.24 + 0.025 = 0.265 m.
-  # Positive means perception points are shifted forward into rear-axle frame.
+  # rear_axle_to_camera_m d_rc = wheelbase + ahead_front_axle
+  # LIMO Gazebo: 0.24 + 0.025 = 0.265 m  (SSOT: docs/vehicle-geometry.md §4.1.1)
+  # Positive: shift camera-frame path points into rear-axle frame for PP/CTE.
   perception_to_rear_axle_x_m: 0.265
   min_points: 5
   white_min_confidence: 0.15

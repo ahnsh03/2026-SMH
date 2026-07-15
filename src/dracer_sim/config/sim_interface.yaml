@@ -13,6 +13,10 @@ camera:
   frame_id: camera
   mount:
     height_ground_m: 0.13               # 추정 — 실차 실측 후 갱신
+    # Camera longitudinal: this far *ahead of front axle* (m).
+    # rear_axle_to_camera = robot.wheelbase_m + ahead_front_axle_m
+    # → Gazebo 0.24+0.025=0.265 = main_planner path.perception_to_rear_axle_x_m
+    # → D-Racer 0.175+0.025=0.200 (main_planner.real_car.yaml). Docs §4.1.1.
     ahead_front_axle_m: 0.025
     pitch_down_deg: 10.0                # 추정 — 실차 실측 후 갱신
 

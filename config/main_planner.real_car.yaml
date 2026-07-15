@@ -27,3 +27,9 @@ track_state:
 # Keep NORMAL tracker at mask_p until live A/B beats it:
 # tracker.normal: mask_p
 # Optional A/B: stanley
+
+path:
+  # rear_axle_to_camera_m d_rc = wheelbase + ahead_front_axle
+  # D-Racer: 0.175 + 0.025 = 0.200 m  (SSOT: docs/vehicle-geometry.md §4.1.1)
+  # IPM x is from camera; add d_rc once at planner boundary → rear-axle frame.
+  perception_to_rear_axle_x_m: 0.200

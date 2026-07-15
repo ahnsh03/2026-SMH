@@ -143,8 +143,10 @@ AND (branch 이벤트 2회 OR 가로선 이벤트 2회)
 
 ## Pure Pursuit
 
-인지가 출력하는 Metric IPM 점열은 `(x 전방, y 왼쪽)` 미터 단위다. 현재
-카메라 원점에서 rear axle까지의 `0.265 m`를 planner 경계에서 한 번만 더해
+인지가 출력하는 Metric IPM 점열은 `(x 전방, y 왼쪽)` 미터 단위이고, **원점은 카메라**다.  
+후차축→카메라 종거리 \(d_{\mathrm{rc}} = L + d_{\mathrm{cf}}\)  
+(시뮬 **0.265 m**, 실차 **0.200 m** — [vehicle-geometry.md §4.1.1](./vehicle-geometry.md))을  
+`path.perception_to_rear_axle_x_m`로 planner 경계에서 한 번만 더해  
 PP, heading, CTE가 모두 같은 rear-axle 좌표를 사용한다. 경로 점 하나를
 고르는 대신 경로 선분과 차량 중심 LD 원의 교점을 계산하므로 센터라인 점
 개수가 바뀌어도 `target_distance`가 현재 LD에 유지된다.
