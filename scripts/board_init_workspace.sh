@@ -30,6 +30,34 @@ else
   echo "[SEA-Me board] D-Racer-Kit already present"
 fi
 
+# Apply board-only Kit patches (idempotent). See patches/README.md.
+PATCH_DIR="${ROOT}/patches"
+KIT_GIT=0
+if [ -d "${VENDOR}/.git" ] || [ -L "${VENDOR}" ]; then
+  KIT_GIT=1
+fi
+if [ -d "${PATCH_DIR}" ] && [ "${KIT_GIT}" -eq 1 ]; then
+  apply_patch() {
+    local patch_file="$1"
+    local name
+    name="$(basename "${patch_file}")"
+    if [ ! -f "${patch_file}" ]; then
+      return 0
+    fi
+    if git -C "${VENDOR}" apply --check "${patch_file}" >/dev/null 2>&1; then
+      git -C "${VENDOR}" apply "${patch_file}"
+      echo "[SEA-Me board] applied patch ${name}"
+    elif git -C "${VENDOR}" apply --reverse --check "${patch_file}" >/dev/null 2>&1; then
+      echo "[SEA-Me board] patch already applied: ${name}"
+    else
+      echo "[SEA-Me board] WARNING: could not apply ${name} (Kit tree mismatch?)"
+    fi
+  }
+  apply_patch "${PATCH_DIR}/camera-native-caps.patch"
+  apply_patch "${PATCH_DIR}/camera-v4l2-controls.patch"
+  apply_patch "${PATCH_DIR}/control-steer-invert.patch"
+fi
+
 OFFICIAL_PKGS=(
   camera control joystick monitor opencv battery topst_utils
   battery_msgs control_msgs joystick_msgs

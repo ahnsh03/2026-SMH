@@ -14,6 +14,10 @@ ROI_LEFT: 0
 # Day0 board: set this so a straight corridor holds with near-zero planner steer.
 # Re-check after mounting / tire wear; do not compensate with mask_steer_k.
 STEER_TRIM: 0.10000000000000003
+# Software /control contract remains +steering = RIGHT (see vehicle-geometry.md).
+# This board's servo is wired opposite → invert AUTO path only (Kit patch).
+# After patch: commanding +1 on /control must turn wheels RIGHT on the stand.
+STEER_INVERT: true
 
 # Web server configuration
 # 0.0.0.0 binds every interface, so the monitor still comes up when the
@@ -27,4 +31,6 @@ JOYSTICK_TOPIC: /joystick
 STORAGE_PATH: /
 IMAGE_DISPLAY_WIDTH: 640
 IMAGE_DISPLAY_HEIGHT: 360
-OPENCV_DEBUG_MODE : true
+# true: monitor can show OpenCV debug streams (use for mask/BEV checks on track).
+# false: less Wi-Fi load for pure lap runs.
+OPENCV_DEBUG_MODE: true

@@ -1,0 +1,37 @@
+diff --git a/src/camera/camera/camera_node.py b/src/camera/camera/camera_node.py
+index 0b6f971..e71cbf3 100644
+--- a/src/camera/camera/camera_node.py
++++ b/src/camera/camera/camera_node.py
+@@ -142,7 +142,22 @@ class CameraNode(Node):
+ 
+     def build_candidate_pipelines(self, camera_device, flip_method):
+         if self.usb_cam_enabled:
+-            # Many USB webcams expose MJPG by default.
++            # Ask the camera for the target size directly. Without width/height in
++            # the source caps v4l2src negotiates the camera's largest MJPG mode
++            # (1920x1080 on the C920e), so the board decodes a 1080p JPEG and
++            # CPU-downscales it on every frame. The C920e offers 320x180 MJPG
++            # natively, which skips both.
++            mjpg_native_pipeline = (
++                f"v4l2src device={camera_device} io-mode=2 ! "
++                f"image/jpeg,width={self.image_width},height={self.image_height},framerate=30/1 ! "
++                "jpegdec ! videoconvert ! "
++                f"video/x-raw,format=BGR,width={self.image_width},height={self.image_height},framerate=30/1 ! "
++                "appsink sync=false drop=true max-buffers=1"
++            )
++            # Fallback: camera has no native mode at this size — let it pick an
++            # MJPG mode and scale on the CPU. Beware: if the negotiated mode is
++            # 4:3 and the target is 16:9, videoscale squashes the aspect ratio,
++            # which breaks the IPM (metric_ipm assumes square pixels, fy == fx).
+             mjpg_pipeline = (
+                 f"v4l2src device={camera_device} io-mode=2 ! "
+                 "image/jpeg,framerate=30/1 ! jpegdec ! "
+@@ -157,7 +172,7 @@ class CameraNode(Node):
+                 f"video/x-raw,format=BGR,width={self.image_width},height={self.image_height},framerate=30/1 ! "
+                 "appsink sync=false drop=true max-buffers=1"
+             )
+-            return [mjpg_pipeline, raw_pipeline]
++            return [mjpg_native_pipeline, mjpg_pipeline, raw_pipeline]
+ 
+         mipi_pipeline = (
+             f"v4l2src device={camera_device} io-mode=2 ! "

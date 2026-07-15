@@ -124,6 +124,20 @@ Moment 단위 테스트: [`src/inference/test/test_fork_moment.py`](../src/infer
 
 오프라인 파이프라인 참고: [fork-test-pipeline.md](./fork-test-pipeline.md).
 
+### 3.5 OUT fork *capture* = tip(moment) + stretch(ego) (bag 검증)
+
+| 항목 | 내용 |
+|------|------|
+| 목적 | bag **갈림 미션**을 white **tip** + ego_blob **Y-stretch**로 통합 포착 |
+| Fuse | `capture = in_stretch ∨ tip_in_context` — [`capture.py`](../src/inference/inference/modules/perception/fork/capture.py) |
+| CLI | [`score_out_fork_capture.py`](../scripts/vision_tune/score_out_fork_capture.py) (`--from-bag` / `--from-bev` / `--folder`) |
+| 문서 | [out-ego-fork-shape.md](./out-ego-fork-shape.md) |
+| tip SSOT | §3.3 · [lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md) §5.1.3 |
+| stretch | Gate C `ego.hard` — far dual sep·wide + near throat |
+| **판단** | OUT: **표지 ∧ capture** · IN: moment만 + 1회우유지/2회좌탈출 — §5.1.4 · [`judgment.py`](../src/inference/inference/modules/perception/fork/judgment.py) |
+
+`moment.hard`와 `ego.hard`를 플래너에 **날것으로 OR하지 말 것** — `score_out_fork_capture` + `decide_out_fork_arm`만 사용.
+
 ---
 
 ## 4. Moment API (요약)

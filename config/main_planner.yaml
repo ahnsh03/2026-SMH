@@ -14,6 +14,8 @@ route:
   # normal driving is white centerline / mask only.
   out_fork_require_sign: true
   out_fork_sign_hold_sec: 3.0
+  # Also require tip+stretch capture (score_out_fork_capture) with the sign.
+  out_fork_require_capture: true
   # Keep false: forced_turn:= only chooses L/R rank, does not arm forks all lap.
   # Set true only for sign-less fork unit tests / rail review.
   # Production: camera signs (or require_sign=false) arm forks — keeps NORMAL white-only stable.
@@ -36,13 +38,13 @@ pure_pursuit:
   curvature_far_m: 0.90
   near_path_fit_span_m: 0.30
   near_path_extrapolation_max_m: 0.35
-  wheelbase_m: 0.24
-  # Sim plant is LIMO L=0.24, NOT D-Racer L=0.175. Match shared R_min=0.385:
-  # δ_sim=atan(0.24/0.385)≈0.5574. Real car overlay: 0.175 / 0.4266
-  # (main_planner.real_car.yaml). Do NOT put 0.4266 on Gazebo — turns go soft.
-  max_steer_angle_rad: 0.5574
+  # board/race-control: D-Racer real-car geometry ONLY (not LIMO/Gazebo).
+  # L=0.175 m, R_min=0.385 m → δ_max=atan(L/R)≈0.4266 rad (≈24.44°).
+  # Re-check with joystick full-lock later; do not mix sim L=0.24 / δ=0.5574.
+  wheelbase_m: 0.175
+  max_steer_angle_rad: 0.4266
   max_steering_command: 1.0
-  steering_rate_limit_per_sec: 8.0
+  steering_rate_limit_per_sec: 10.0
   path_lost_steering_return_rate_per_sec: 4.0
   nominal_control_dt_sec: 0.10
   cte_gain: 0.10
@@ -125,10 +127,9 @@ mask_pursuit:
   require_color_path: true
 
 path:
-  # rear_axle_to_camera_m d_rc = wheelbase + ahead_front_axle
-  # LIMO Gazebo: 0.24 + 0.025 = 0.265 m  (SSOT: docs/vehicle-geometry.md §4.1.1)
-  # Positive: shift camera-frame path points into rear-axle frame for PP/CTE.
-  perception_to_rear_axle_x_m: 0.265
+  # rear_axle_to_camera_m — D-Racer: 0.175 + 0.025 = 0.200 m
+  # (docs/vehicle-geometry.md §4.1.1). Never use Gazebo 0.265 here.
+  perception_to_rear_axle_x_m: 0.200
   min_points: 5
   white_min_confidence: 0.15
   yellow_min_confidence: 0.12
@@ -143,7 +144,11 @@ roundabout:
   # Enter circle mode once a stable yellow path or a yellow crossing line appears.
   entry_on_yellow: true
   min_lap_time_sec: 5.0
+  # lateral_rank: 0=left(exit), 1=right(keep circle) — moment pass policy §5.1.4
   exit_branch_rank: 0
+  in_exit_use_moment: true
+  in_keep_passes: 1
+  in_keep_branch_rank: 1
   branch_required_events: 2
   crossing_required_events: 2
   # Stricter than NORMAL fork flicker — reduces false exit arms in-circle.
@@ -151,7 +156,7 @@ roundabout:
   branch_off_frames: 10
   crossing_on_frames: 3
   crossing_off_frames: 6
-  # While circulating, do not switch mask→fork PP (count events only).
+  # While circulating, do not switch mask→fork PP until moment selects a rank.
   circle_ignore_fork_for_control: true
   # Circle: paint centerline PP (yellow), not road_clean COM.
   circle_tracker: pp
@@ -160,11 +165,10 @@ roundabout:
   throttle: 0.14
 
 signals:
-  # Keep false until start/finish signal context is validated on the real track.
-  require_green_to_start: false
-  stop_on_red: false
-  # Detect ArUco for /debug/aruco but do not stop — keep lane follow.
-  stop_on_aruco: false
+  # Mission: wait green → drive → ArUco stop (resume when gone) → red stop.
+  require_green_to_start: true
+  stop_on_red: true
+  stop_on_aruco: true
 
 safety:
   command_watchdog_sec: 0.5

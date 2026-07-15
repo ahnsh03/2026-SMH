@@ -47,11 +47,11 @@ def fill_small_holes(mask: np.ndarray, max_hole_px: int = 400) -> np.ndarray:
 def morph_clean_road(
     road: np.ndarray,
     *,
-    open_k: int = 2,
-    close_k: int = 3,
+    open_k: int = 3,
+    close_k: int = 13,
     max_hole_px: int = 400,
 ) -> np.ndarray:
-    """Open → close → fill small holes (softened one step vs 3/5/500)."""
+    """Open → close → fill small holes (bag SSOT open3/close13)."""
 
     binary = (road > 0).astype(np.uint8) * 255
     if binary.size == 0:
