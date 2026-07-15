@@ -1,11 +1,15 @@
-"""Low-rate HSV mask preview → monitor debug panels (no full lane detection).
+"""Low-rate HSV mask + lane-boundary preview → monitor debug panels.
 
 Publishes JPEG CompressedImage on the monitor's OpenCV debug topics so the
-web UI can show white / yellow / road masks without doubling ``inference_node``
-work. IPM warp + ``inRange`` only; default ~1.5 Hz.
+web UI can show, in one panel each:
+  grayscale = WHITE  : HSV 마스크 | 흰 차선 경계 결과
+  blur      = YELLOW : HSV 마스크 | 노란 차선 경계 결과
+  edge      = 주행가능영역(black|red) 1개
+경계는 lane_detection.detect_with_debug 로 만든다(= 실제 주행 인지와 동일 경로).
+IPM+inRange만 쓰던 이전보다 무겁다(detect 1회 ~255ms). 기본 ~1.5 Hz 유지.
 
   ros2 launch inference mask_check.launch.py
-  # browser → http://<board-ip>:5000  (Grayscale=white, Blur=yellow, Edge=road+mosaic)
+  # browser → http://<board-ip>:5000
 """
 
 from __future__ import annotations
@@ -37,6 +41,22 @@ if str(_VT) not in sys.path:
 
 from hsv import load_hsv_ranges, make_mask  # noqa: E402
 from metric_ipm import load_metric_ipm, warp_metric_ipm  # noqa: E402
+
+from inference.modules import lane_detection as ld  # noqa: E402
+
+
+def _pair(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    """두 BEV 뷰를 한 창에 가로로 이어붙인다(가운데 얇은 구분선)."""
+    h = max(left.shape[0], right.shape[0])
+
+    def _fit(img: np.ndarray) -> np.ndarray:
+        if img.shape[0] != h:
+            w = max(1, int(round(img.shape[1] * h / img.shape[0])))
+            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_NEAREST)
+        return img
+
+    sep = np.full((h, 3, 3), 60, dtype=np.uint8)
+    return cv2.hconcat([_fit(left), sep, _fit(right)])
 
 
 def _label(bgr: np.ndarray, text: str) -> np.ndarray:
@@ -126,10 +146,14 @@ class HsvMaskWebNode(Node):
             CompressedImage, str(self.get_parameter('mosaic_topic').value), pub_qos
         )
 
+        # detect_with_debug 내부 cv2.imshow 경로를 끈다(헤드리스 보드).
+        ld.VISUALIZE = False
+        ld.VISUALIZE_MODE = ld.VISUALIZE_OFF
+
         self._last = 0.0
         self.get_logger().info(
-            f'HSV mask web: {topic} → monitor panels @ ≤{self.max_hz:.1f} Hz '
-            f'(IPM+inRange only, no lane detect; red_wrap={self.red_wrap})'
+            f'HSV mask + boundary web: {topic} → monitor panels @ ≤{self.max_hz:.1f} Hz '
+            f'(WHITE/YELLOW = HSV|경계, EDGE = 주행가능영역; red_wrap={self.red_wrap})'
         )
 
     def _on_image(self, msg: CompressedImage) -> None:
@@ -142,34 +166,53 @@ class HsvMaskWebNode(Node):
         if frame is None or frame.size == 0:
             return
 
+        # 차선 경계는 실제 주행 인지와 동일 경로(detect_with_debug)로 만든다.
         try:
-            bev = warp_metric_ipm(frame, self.ipm)
+            _lane, dbg = ld.detect_with_debug(frame)
         except Exception as exc:
-            self.get_logger().warning(f'IPM failed: {exc}')
+            self.get_logger().warning(f'detect failed: {exc}')
             return
 
+        bev = dbg.bev
+        if bev is None or bev.size == 0:
+            return
+
+        # HSV 마스크는 기존과 동일하게 이 노드가 inRange로 계산(주행가능영역 패널의
+        # black|red 표시를 그대로 유지). 경계는 dbg에서 가져온다.
         white = make_mask(bev, self.ranges['white'], morph=True)
         yellow = make_mask(bev, self.ranges['yellow'], morph=True)
         black = make_mask(bev, self.ranges['black_road'], morph=True)
         red = _red_mask(bev, self.ranges['red_road'], self.red_wrap)
         road = cv2.bitwise_or(black, red)
 
-        # Monitor titles stay Grayscale/Blur/Edge — label the three mask channels.
-        white_v = _label(
-            _masked_bev(bev, white),
-            f'WHITE  px={int(np.count_nonzero(white))}',
+        # 흰: HSV 마스크 | 흰 차선 경계 결과
+        white_combo = _pair(
+            _label(_masked_bev(bev, white), f'WHITE HSV  px={int(np.count_nonzero(white))}'),
+            _label(
+                ld.make_boundary_preview(
+                    bev, dbg.road_clean, dbg.white_left, dbg.white_right, 'WHITE',
+                ),
+                'WHITE BOUNDARY',
+            ),
         )
-        yellow_v = _label(
-            _masked_bev(bev, yellow),
-            f'YELLOW  px={int(np.count_nonzero(yellow))}',
+        # 노랑: HSV 마스크 | 노란 차선 경계 결과
+        yellow_combo = _pair(
+            _label(_masked_bev(bev, yellow), f'YELLOW HSV  px={int(np.count_nonzero(yellow))}'),
+            _label(
+                ld.make_boundary_preview(
+                    bev, dbg.road_clean, dbg.yellow_left, dbg.yellow_right, 'YELLOW',
+                ),
+                'YELLOW BOUNDARY',
+            ),
         )
+        # 주행가능영역: 한 창에 1개 그대로.
         road_v = _label(
             _masked_bev(bev, road),
-            f'ROAD(black|red)  px={int(np.count_nonzero(road))}',
+            f'DRIVABLE(black|red)  px={int(np.count_nonzero(road))}',
         )
 
-        self._publish(self.pub_white, white_v)
-        self._publish(self.pub_yellow, yellow_v)
+        self._publish(self.pub_white, white_combo)
+        self._publish(self.pub_yellow, yellow_combo)
         self._publish(self.pub_mosaic, road_v)
 
     def _publish(self, pub, image: np.ndarray) -> None:

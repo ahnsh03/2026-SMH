@@ -30,6 +30,7 @@ setup(
             'lane_control_node = inference.lane_control_node:main',
             'lane_preview_node = inference.lane_preview_node:main',
             'hsv_mask_web_node = inference.hsv_mask_web_node:main',
+            'lane_view_web_node = inference.lane_view_web_node:main',
         ],
     },
 )

@@ -22,10 +22,22 @@ def get_planner_config_path() -> str:
     return '/home/topst/2026-SMH/config/main_planner.yaml'
 
 
+def get_rt_wrap_prefix():
+    """i2c 노드(control/battery)를 SCHED_RR로 실행하는 래퍼 경로.
+    권한 없으면 래퍼가 알아서 일반 실행으로 폴백한다. 못 찾으면 prefix 미적용."""
+    for base_path in Path(__file__).resolve().parents:
+        candidate = base_path / 'scripts' / 'rt_wrap.sh'
+        if candidate.exists():
+            return [str(candidate)]
+    fallback = Path('/home/topst/2026-SMH/scripts/rt_wrap.sh')
+    return [str(fallback)] if fallback.exists() else None
+
+
 def generate_launch_description():
     vehicle_config_path = get_vehicle_config_path()
     planner_config_path = get_planner_config_path()
     route_mode = LaunchConfiguration('route_mode')
+    rt_prefix = get_rt_wrap_prefix()
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -52,6 +64,8 @@ def generate_launch_description():
             executable='control_node',
             name='control_node',
             output='screen',
+            # i2c 타이머를 CPU 스타베이션에서 보호(SCHED_RR). 권한 없으면 자동 폴백.
+            prefix=rt_prefix,
             parameters=[
                 {
                     'use_joystick_control': False,
@@ -76,6 +90,8 @@ def generate_launch_description():
             executable='battery_node',
             name='battery_node',
             output='screen',
+            # i2c 타이머를 CPU 스타베이션에서 보호(SCHED_RR). 권한 없으면 자동 폴백.
+            prefix=rt_prefix,
         ),
         Node(
             package='monitor',

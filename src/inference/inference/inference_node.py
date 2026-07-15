@@ -439,8 +439,14 @@ def main(args=None):
             node.publish_stop()
         except Exception:  # noqa: BLE001
             pass
-        node.destroy_node()
-        rclpy.shutdown()
+        # launch가 반복 SIGINT → destroy 중 KeyboardInterrupt 가능. 종료 경로라 삼킨다.
+        try:
+            node.destroy_node()
+        except BaseException:  # noqa: BLE001
+            pass
+        # 기본 핸들러가 이미 shutdown 했으면 이중호출(RCLError) 방지
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

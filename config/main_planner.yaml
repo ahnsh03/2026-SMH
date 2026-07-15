@@ -26,7 +26,7 @@ route:
   #       (approach → roundabout yellow → merge white). Not a yellow ladder.
 pure_pursuit:
   # Adaptive LD: long on straights, shorter on curves for earlier turn-in.
-  lookahead_m: 0.70
+  lookahead_m: 1.0
   curve_lookahead_m: 0.38
   curvature_full_scale: 0.8
   lookahead_shrink_rate_m: 0.20
@@ -73,7 +73,7 @@ tracker:
 mask_pursuit:
   # Match limo_sim_code_v2: steer_k=2.0, alpha=0.4, wide BEV COM (anticipation).
   steer_k: 1.3
-  steer_alpha: 0.40
+  steer_alpha: 0.80
   near_band_ratio: 0.85
   min_area_px: 100.0
   curve_steer_threshold: 0.50
@@ -168,8 +168,8 @@ profiles:
 
     # Board D3-G field tune (2026-07-14). Sim base keeps trusted 0.33 lap.
     speed:
-      cruise_throttle: 0.18
-      curve_throttle: 0.15
+      cruise_throttle: 0.21
+      curve_throttle: 0.19
 
     path:
       # Camera longitudinal mount (실측 관계식, sim_interface camera.mount):

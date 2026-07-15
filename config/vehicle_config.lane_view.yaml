@@ -1,0 +1,26 @@
+# lane_view 모니터 설정 — auto_driving 과 동시 실행용.
+# 주행 모니터(vehicle_config.yaml, 포트 5000, debug false)와 충돌하지 않도록
+# 포트 5001 + debug 패널 on. lane_view.launch.py 만 사용.
+# 카메라는 auto_driving 이 띄운 /camera/image/compressed 를 공유(자체 카메라 없음).
+
+USB_CAM: true
+MIPI_CAM: false
+USB_CAM_DEVICE: /dev/video1
+IMAGE_WIDTH: 320
+IMAGE_HEIGHT: 180
+ROI_TOP: 50
+ROI_LEFT: 0
+STEER_TRIM: 0.18000000000000002
+STEER_INVERT: true
+WEB_HOST: 0.0.0.0
+# 주행 대시보드(5000)와 다른 포트. 차선 패널은 http://<board-ip>:5001 에서 본다.
+WEB_PORT: 5001
+BATTERY_TOPIC: /battery_status
+IMAGE_TOPIC: /camera/image/compressed
+CONTROL_TOPIC: /control
+JOYSTICK_TOPIC: /joystick
+STORAGE_PATH: /
+IMAGE_DISPLAY_WIDTH: 640
+IMAGE_DISPLAY_HEIGHT: 360
+OPENCV_DEBUG_MODE: true
+CAPTURE_DIR: ~/2026-SMH/data/captures/real

@@ -105,11 +105,6 @@ VISUALIZE_MODE = resolve_visualize_mode(
 VISUALIZE = VISUALIZE_MODE in (VISUALIZE_CONTROL, VISUALIZE_ON)
 
 
-def tune_enabled() -> bool:
-    """tune 모드(흰 차선 프리뷰 웹 발행)인지."""
-
-    return VISUALIZE_MODE == VISUALIZE_TUNE
-
 # CONTROL: 주행용 통합 1창. ON: 같은 주행 창 + HSV 마스크 1창만.
 CONTROL_WINDOWS = ("Lane drive",)
 ON_EXTRA_WINDOWS = ("HSV masks",)
@@ -1330,6 +1325,7 @@ def enumerate_boundary_candidates(
     single_line_angle_deg: float | None = None,
     side_debug: dict[str, object] | None = None,
     drivable_cum_row: np.ndarray | None = None,
+    single_line_side_hint: int | None = None,
 ) -> list[tuple[float, float, float, int]]:
     """한 행의 가능한 모든 (왼쪽, 오른쪽, 지역 점수) 후보를 반환한다.
 
@@ -1715,6 +1711,14 @@ def enumerate_boundary_candidates(
                     if allowed_sources[0] == BOUNDARY_SOURCE_LEFT
                     else "single_temporal_right"
                 )
+            elif single_line_side_hint is not None:
+                # 라인 전체 도로 분포로 정한 좌우(행별 투표보다 견고).
+                allowed_sources = (single_line_side_hint,)
+                debug_bump(
+                    "single_agg_left"
+                    if single_line_side_hint == BOUNDARY_SOURCE_LEFT
+                    else "single_agg_right"
+                )
             elif road_side is not None:
                 allowed_sources = (road_side,)
                 debug_bump(
@@ -1931,6 +1935,41 @@ def _solve_boundary_dp(
     return raw_left, raw_right, left_observed, right_observed, best_score
 
 
+def _aggregate_single_line_side(
+    segments_by_row: list[list[tuple[int, int]]],
+    drivable_cums: np.ndarray | None,
+) -> int | None:
+    """단일선 좌우를 라인 전체 도로 분포로 1회 결정한다(행별 투표보다 견고).
+
+    단일 세그먼트 행들의 도로(주행가능) 좌/우 픽셀을 모두 합산해 우세한 쪽으로
+    정한다. 도로가 희박해도 전 행을 합치면 신호가 서고, 프레임 내 좌우 흔들림이
+    사라진다. 반환: BOUNDARY_SOURCE_LEFT / RIGHT / None(우열 없음).
+    """
+    if drivable_cums is None or drivable_cums.shape[0] == 0:
+        return None
+    width = drivable_cums.shape[1] - 1
+    total_left = 0.0
+    total_right = 0.0
+    for v, segments in enumerate(segments_by_row):
+        if v >= drivable_cums.shape[0] or len(segments) != 1:
+            continue
+        cum = drivable_cums[v]
+        start_u = max(0, min(int(segments[0][0]), width))
+        end_u = max(0, min(int(segments[0][1]) + 1, width))
+        total_left += float(cum[start_u])
+        total_right += float(cum[width] - cum[end_u])
+    if (
+        total_left < SINGLE_LINE_ROAD_SIDE_MIN_PX
+        and total_right < SINGLE_LINE_ROAD_SIDE_MIN_PX
+    ):
+        return None
+    if total_right >= total_left * SINGLE_LINE_ROAD_SIDE_RATIO:
+        return BOUNDARY_SOURCE_LEFT  # 도로가 오른쪽에 더 많다 → 선은 왼쪽 경계
+    if total_left >= total_right * SINGLE_LINE_ROAD_SIDE_RATIO:
+        return BOUNDARY_SOURCE_RIGHT  # 도로가 왼쪽에 더 많다 → 선은 오른쪽 경계
+    return None
+
+
 def track_boundary_path(
     boundary_mask: np.ndarray,
     reference_centerline: np.ndarray | None,
@@ -1982,6 +2021,10 @@ def track_boundary_path(
         boundary_segments_by_row
         if boundary_segments_by_row is not None
         else find_line_segments_by_row(boundary_mask)
+    )
+    # 단일선 좌우를 라인 전체 집계로 1회 결정(행별 투표보다 견고, 프레임 내 일관).
+    single_line_side_hint = _aggregate_single_line_side(
+        segments_by_row, drivable_cums
     )
     slopes_by_row = estimate_segment_slopes(segments_by_row, height)
     if use_single_line_angle_bias:
@@ -2045,6 +2088,7 @@ def track_boundary_path(
                 row_angle_deg,
                 dbg,
                 None if drivable_cums is None else drivable_cums[v],
+                single_line_side_hint,
             )
             if row_candidates:
                 out[v] = row_candidates
@@ -2782,88 +2826,6 @@ def _column_hard_wall_skate_cut(
         return out
     # Keep the first wall contact as tip; drop everything farther.
     out[:first_wall] = np.nan
-    return out
-
-
-def _trim_column_past_paint(
-    columns_u: np.ndarray,
-    mark_mask: np.ndarray | None,
-    *,
-    assoc_m: float = 0.16,
-    max_miss: int = 5,
-) -> np.ndarray:
-    """From near→far: after consecutive paint-association misses, cut tipward."""
-
-    out = np.asarray(columns_u, dtype=np.float32).copy()
-    if mark_mask is None or mark_mask.size == 0:
-        return out
-    if mark_mask.shape[:2] != (BEV_HEIGHT, BEV_WIDTH):
-        return out
-    assoc_px = float(max(2.0, assoc_m / METERS_PER_PIXEL))
-    valid = np.flatnonzero(~np.isnan(out))
-    if valid.size == 0:
-        return out
-    miss = 0
-    miss_start: int | None = None
-    for row in valid[::-1]:  # near → far
-        cols = np.flatnonzero(mark_mask[int(row)] > 0)
-        bad = cols.size == 0
-        if not bad:
-            err = float(np.min(np.abs(cols.astype(np.float32) - float(out[row]))))
-            bad = err > assoc_px
-        if bad:
-            if miss_start is None:
-                miss_start = int(row)
-            miss += 1
-            if miss >= int(max_miss) and miss_start is not None:
-                # Drop tipward of the last paint-associated row.
-                out[: miss_start + 1] = np.nan
-                break
-        else:
-            miss = 0
-            miss_start = None
-    return out
-
-
-def _frenet_offset_column(
-    outer_u: np.ndarray,
-    *,
-    side: str,
-    width_m: float,
-) -> np.ndarray:
-    """Path-normal offset of ``outer_u`` by ``width_m`` (signed by side)."""
-
-    o = np.asarray(outer_u, dtype=np.float32)
-    xy = _boundary_u_to_vehicle_points(o)
-    out = np.full(BEV_HEIGHT, np.nan, dtype=np.float32)
-    if xy.shape[0] < 3:
-        return out
-    sign = -1.0 if side == "left" else 1.0
-    buckets: dict[int, list[float]] = {}
-    for i in range(xy.shape[0]):
-        j0 = max(0, i - 1)
-        j1 = min(xy.shape[0] - 1, i + 1)
-        d = xy[j1] - xy[j0]
-        nrm = float(np.linalg.norm(d))
-        if nrm < 1e-6:
-            t = np.array([1.0, 0.0], dtype=np.float32)
-        else:
-            t = (d / nrm).astype(np.float32)
-        n_left = np.array([-t[1], t[0]], dtype=np.float32)
-        p = xy[i] + sign * float(width_m) * n_left
-        row = int(round((X_MAX_M - float(p[0])) / METERS_PER_PIXEL))
-        if row < 0 or row >= BEV_HEIGHT:
-            continue
-        u = (BEV_WIDTH - 1) / 2.0 - float(p[1]) / METERS_PER_PIXEL
-        if u < 0.0 or u > float(BEV_WIDTH - 1):
-            continue
-        buckets.setdefault(row, []).append(float(u))
-    for row, us in buckets.items():
-        out[row] = float(np.median(us))
-    # Only keep rows that still have an observed outer (no inventing tip).
-    for row in range(BEV_HEIGHT):
-        if np.isnan(o[row]):
-            out[row] = np.nan
     return out
 
 
@@ -4048,73 +4010,6 @@ DASH_CHAIN_CURVE_FIT_ITERATIONS = 3
 DASH_CHAIN_CURVE_MIN_COMPONENTS = 3
 
 
-def find_crossing_lines(
-    color_bev: np.ndarray,
-    road_mask: np.ndarray | None = None,
-    road_segments_by_row: list[list[tuple[int, int]]] | None = None,
-) -> np.ndarray:
-    """도로를 가로지르는 실선을 행별 수평 길이로 찾는다.
-
-    road_mask가 있으면 기존 도로 폭 대비 커버리지 방식도 지원한다. 런타임 차선
-    생성에서는 도로 HSV를 쓰지 않으므로 road_mask=None으로 호출하고, 이때는
-    최소 실제 길이를 넘는 수평 색 구간만 검출한다. 세로 차선은 한 행에서의
-    두께가 짧으므로 제외되고, warp 왜곡이 큰 원거리(상단)도 제외한다.
-
-    커버리지는 '연속된 도로 구간마다' 따로 잰다. 한 행의 최좌단~최우단을 도로
-    폭으로 보면, 갈림길·회전교차로처럼 떨어진 옆 도로가 같이 보일 때 span이
-    통째로 커져 커버리지가 희석된다. 그러면 내 도로를 100% 가로지르는 실선도
-    검출에서 탈락하고, 그 선이 셀 커터에 남아 도로를 끊어 버린다.
-    """
-
-    result = np.zeros_like(color_bev)
-    top_cut = int(BEV_HEIGHT * CROSSING_TOP_EXCLUDE_RATIO)
-    min_span_px = int(round(CROSSING_MIN_SPAN_M / METERS_PER_PIXEL))
-    for row in range(top_cut, BEV_HEIGHT):
-        if road_mask is None:
-            for left, right in find_line_segments(color_bev[row]):
-                if right - left + 1 >= min_span_px:
-                    result[row, left:right + 1] = 255
-            continue
-
-        road_segments = (
-            road_segments_by_row[row]
-            if road_segments_by_row is not None
-            else find_line_segments(road_mask[row])
-        )
-        for left, right in road_segments:
-            span = right - left + 1
-            if span < min_span_px:
-                continue
-            color_count = int(
-                np.count_nonzero(color_bev[row, left:right + 1])
-            )
-            if color_count / span >= CROSSING_COVERAGE_RATIO:
-                result[row, left:right + 1] = 255
-    return result
-
-
-def has_crossing_line(crossing_mask: np.ndarray) -> bool:
-    """가로 실선 마스크가 충분한 행 수를 가지는지(단발 노이즈 배제)."""
-
-    if crossing_mask.size == 0:
-        return False
-    return int(np.count_nonzero(crossing_mask.any(axis=1))) >= CROSSING_MIN_ROWS
-
-
-def remove_crossing_from_boundary_mask(
-    boundary_mask: np.ndarray,
-    crossing_mask: np.ndarray,
-) -> np.ndarray:
-    """가로 실선과 주변 행을 세로 차선 추적용 마스크에서만 제거한다."""
-
-    margin_rows = make_odd(
-        int(round(CROSSING_REMOVAL_MARGIN_M / METERS_PER_PIXEL))
-    )
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, margin_rows))
-    removal_mask = cv2.dilate(crossing_mask, kernel, iterations=1)
-    return cv2.bitwise_and(boundary_mask, cv2.bitwise_not(removal_mask))
-
-
 def temporally_smooth_boundary(
     current: np.ndarray,
     previous: np.ndarray | None,
@@ -4566,96 +4461,6 @@ def make_boundary_preview(
     return preview
 
 
-def make_interpolation_preview(
-    boundary_mask: np.ndarray,
-    interpolated_left: np.ndarray,
-    interpolated_right: np.ndarray,
-    label: str,
-) -> np.ndarray:
-    """추적에 실제 사용한 경계 마스크 위에 보간 결과를 표시한다."""
-
-    preview = cv2.cvtColor(boundary_mask, cv2.COLOR_GRAY2BGR)
-    draw_boundary(preview, interpolated_left, INTERPOLATED_LINE_COLOR)
-    draw_boundary(preview, interpolated_right, INTERPOLATED_LINE_COLOR)
-
-    cv2.putText(
-        preview,
-        f"{label}  BOUNDARY MASK + INTERPOLATED BOUNDARIES",
-        (4, 16),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.34,
-        (0, 255, 255),
-        1,
-        cv2.LINE_AA,
-    )
-    return preview
-
-
-def show_visualization(
-    cropped_frame: np.ndarray,
-    bev: np.ndarray,
-    white_bev: np.ndarray,
-    yellow_bev: np.ndarray,
-    red_bev: np.ndarray,
-    yellow_dash_points_bev: np.ndarray | None,
-    yellow_connected_bev: np.ndarray,
-    road_clean: np.ndarray,
-    white_left: np.ndarray,
-    white_right: np.ndarray,
-    yellow_left: np.ndarray,
-    yellow_right: np.ndarray,
-    yellow_side_debug: dict[str, object] | None,
-) -> None:
-    """HSV 마스크만 추가 창으로 띄운다 (ON 모드).
-
-    경계·주행면·갈림은 ``Lane drive`` 한 창에서만 본다. 예전 개별 창
-    (lane_origin / boundaries / interpolation / road_branches / line_fill)은 제거.
-    """
-
-    def scaled(image: np.ndarray, nearest: bool = False) -> np.ndarray:
-        interpolation = cv2.INTER_NEAREST if nearest else cv2.INTER_LINEAR
-        return cv2.resize(
-            image,
-            None,
-            fx=VISUALIZATION_SCALE,
-            fy=VISUALIZATION_SCALE,
-            interpolation=interpolation,
-        )
-
-    if window_enabled("HSV masks"):
-        left = scaled(white_bev, nearest=True)
-        right = scaled(yellow_bev, nearest=True)
-        if left.ndim == 2:
-            left = cv2.cvtColor(left, cv2.COLOR_GRAY2BGR)
-        if right.ndim == 2:
-            right = cv2.cvtColor(right, cv2.COLOR_GRAY2BGR)
-        h = max(left.shape[0], right.shape[0])
-
-        def _fit(panel: np.ndarray) -> np.ndarray:
-            if panel.shape[0] == h:
-                return panel
-            scale = h / float(panel.shape[0])
-            return cv2.resize(
-                panel,
-                (max(1, int(round(panel.shape[1] * scale))), h),
-                interpolation=cv2.INTER_NEAREST,
-            )
-
-        canvas = np.hstack([_fit(left), _fit(right)])
-        cv2.putText(
-            canvas,
-            "WHITE HSV | YELLOW HSV",
-            (4, 16),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (255, 255, 255),
-            1,
-            cv2.LINE_AA,
-        )
-        cv2.imshow("HSV masks", canvas)
-    cv2.waitKey(1)
-
-
 def make_drive_preview(
     bev: np.ndarray,
     road_clean: np.ndarray,
@@ -4825,32 +4630,14 @@ def detect_with_debug(
         else np.full_like(white_bev, 255)
     )
 
-    # 가로 정지선/진입선은 이벤트 검출에는 남기되 세로 노란 경계
-    # 추적에서는 제거해 경계 끝이 ㄴ자로 꺾이는 것을 막는다.
-    crossing_mask = find_crossing_lines(
-        yellow_bev,
-    )
-    white_crossing_mask = find_crossing_lines(
-        white_bev,
-    )
+    # 가로선(crossing) 검출 제거됨 — 정지선/진입선을 경계에서 걸러내지 않는다.
 
-    # 가로 마킹은 '도로 위에 그려진' 것이다. 그 자리도 당연히 주행가능 영역인데,
-    # 마킹 픽셀은 흑색 도로로 안 잡히고 가장자리 안티에일리어싱은 어느 색으로도
-    # 안 잡혀 도로에 가로 구멍이 뚫린다. fill_road_surface_holes의 line-support
-    # 게이트로는 이 구멍이 안 메워져서, 셀이 가로로 끊기고 갈래 추적이 분기점에
-    # 닿기도 전에 끝나 버린다(end@NN). 그래서 검출한 가로 마킹을 도로로 되돌린다.
-    road_clean = cv2.bitwise_or(
-        road_clean,
-        cv2.dilate(
-            cv2.bitwise_or(crossing_mask, white_crossing_mask),
-            CROSSING_FILL_KERNEL,
-        ),
-    )
+    # 단일선 좌우 판정(도로-방향 투표)용 신호. 빨강(아루코 매트)도 주행가능으로
+    # 포함한다 — 좌/우 한 표로만 쓰므로 경계 기하엔 영향 없다. road_clean(검정)만
+    # 쓰면 빨강 구간에서 도로 신호가 비어 중심 기준으로 떨어져 좌우가 뒤집혔다.
+    drivable_for_vote = cv2.bitwise_or(road_clean, red_bev)
 
-    yellow_boundary_raw_bev = remove_crossing_from_boundary_mask(
-        yellow_bev,
-        crossing_mask,
-    )
+    yellow_boundary_raw_bev = yellow_bev
     yellow_dash_points_bev = (
         extract_dash_point_mask(yellow_boundary_raw_bev)
         if window_enabled("yellow_dash_points")
@@ -4861,12 +4648,7 @@ def detect_with_debug(
         visibility_bev,
     )
 
-    # 흰 가로 마킹(갈림길 입구의 점선 진입선)도 코스 경계가 아니다. 셀 커터에
-    # 남으면 도로를 가로로 끊어, 갈래 추적이 분기점에 닿기도 전에 끝나 버린다.
-    white_cut_bev = remove_crossing_from_boundary_mask(
-        white_bev,
-        white_crossing_mask,
-    )
+    white_cut_bev = white_bev
     # 세로형 흰 점선(갈림/합류 가이드) — 가로 진입선은 extract에서 걸러진다.
     white_dash_points_bev = extract_dash_point_mask(white_cut_bev)
     white_dash_connected_bev = connect_dashed_components(
@@ -4922,8 +4704,8 @@ def detect_with_debug(
         boundary_segments_by_row=white_segments_by_row,
         opposite_segments_by_row=yellow_segments_by_row,
         find_alternate=find_alternate,
-        # 단일선 좌우 판정용 도로 신호(좌/우 한 표만; 경계 기하엔 미사용).
-        drivable_mask=road_clean,
+        # 단일선 좌우 판정용 도로 신호(좌/우 한 표만; 경계 기하엔 미사용). 빨강 포함.
+        drivable_mask=drivable_for_vote,
     )
     white_centerline = centerline_from_boundaries(white_left, white_right)
 
@@ -4986,8 +4768,8 @@ def detect_with_debug(
         boundary_segments_by_row=yellow_segments_by_row,
         opposite_segments_by_row=white_segments_by_row,
         find_alternate=find_alternate,
-        # 단일선 좌우 판정용 도로 신호(좌/우 한 표만; 경계 기하엔 미사용).
-        drivable_mask=road_clean,
+        # 단일선 좌우 판정용 도로 신호(좌/우 한 표만; 경계 기하엔 미사용). 빨강 포함.
+        drivable_mask=drivable_for_vote,
     )
 
     yellow_left = temporally_smooth_boundary(
@@ -5021,66 +4803,17 @@ def detect_with_debug(
     # 분기가 아니다). 갈림길이 아니면 단일 경로 1개다.
     # 노란선은 점선이므로 연결 처리한 yellow_boundary_bev를 커터로 쓴다.
     # 흰/노란 가로 마킹은 둘 다 제거한 마스크를 쓴다(도로를 끊으면 안 된다).
-    road_branches, road_cells, ego_road_color = build_road_branches_cells(
-        road_clean,
-        white_cut_bev,
-        yellow_boundary_bev,
-    )
-    fork_active = len(road_branches) >= 2
-    fork_split_source = "cells" if road_branches else ""
-
+    # 갈림길 검출 비활성화 — 전체 검출의 ~47%(select_course_fork_pairs) + 셀
+    # 추적(build_road_branches_cells)을 건너뛴다. 정상 주행은 centerline 을 쓰고
+    # planner 의 fork 로직은 모두 len(branches)>=2 / fork_active 게이트라, branches
+    # 를 비워도 안전하게 centerline 주행으로 폴백한다.
+    road_branches: list = []
+    road_cells = None
+    ego_road_color = None
+    fork_active = False
+    fork_split_source = ""
     fork_lane_pairs: list = []
     fork_mark_tracks: list = []
-    marking_branches: list = []
-    fork_mark_color = ""
-    if enable_fork:
-        # Marking / dual-course → 갈래(branches).
-        # Out(prefer_yellow=False): 흰·road_split만 — 노란 갈래로 덮지 않음.
-        # In(prefer_yellow=True): 노란 우선 → road_split/흰 폴백.
-        fork_lane_pairs, fork_mark_tracks, marking_branches, fork_mark_color = (
-            select_course_fork_pairs(
-                prefer_yellow=prefer_yellow,
-                yellow_left=yellow_left,
-                yellow_right=yellow_right,
-                yellow_alt_left=yellow_alt_left,
-                yellow_alt_right=yellow_alt_right,
-                yellow_boundary_bev=yellow_boundary_bev,
-                white_left=white_left,
-                white_right=white_right,
-                white_alt_left=white_alt_left,
-                white_alt_right=white_alt_right,
-                white_dash_connected_bev=white_dash_connected_bev,
-                road_clean=road_clean,
-            )
-        )
-
-        if len(marking_branches) >= 2 and fork_source_allowed_for_course(
-            fork_mark_color,
-            prefer_yellow=prefer_yellow,
-            yellow_is_detected=yellow_is_detected,
-            ego_road_color=ego_road_color,
-        ):
-            road_branches = marking_branches
-            fork_active = True
-            fork_split_source = f"{fork_mark_color}_marks"
-
-        # Out: yellow-ego cell forks must not publish without a white mark source.
-        if (
-            prefer_yellow is False
-            and fork_split_source == "cells"
-            and ego_road_color == "yellow"
-        ):
-            road_branches = []
-            fork_active = False
-            fork_split_source = ""
-    else:
-        # Planner-disabled fork (OUT without recent turn sign): single-course only.
-        if len(road_branches) >= 2:
-            road_branches = road_branches[:1]
-        fork_active = False
-        fork_split_source = ""
-        fork_lane_pairs = []
-        fork_mark_tracks = []
 
     # 흰/노란 차선 센터라인(좌우 경계 중점) → base_link 점열
     white_centerline_points = boundary_to_vehicle_points(
@@ -5089,9 +4822,9 @@ def detect_with_debug(
     yellow_centerline_points = boundary_to_vehicle_points(
         centerline_from_boundaries(yellow_left, yellow_right)
     )
-    # 노란 가로 실선(정지선/진입선) 등장 여부
-    yellow_crossing_line = has_crossing_line(crossing_mask)
-    white_crossing_line = has_crossing_line(white_crossing_mask)
+    # 가로선 검출 제거됨 — crossing 이벤트는 항상 False.
+    yellow_crossing_line = False
+    white_crossing_line = False
 
     observable = observable_bev
     if observable is not None and observable.size == red_bev.size:
@@ -5107,50 +4840,6 @@ def detect_with_debug(
         red_coverage = float(red_pixel_count) / float(total)
 
     bev_color = warp_metric_ipm(frame, METRIC_IPM_PARAMS)
-
-    if VISUALIZE:
-        bev = bev_color
-        if window_enabled("Lane drive"):
-            drive = make_drive_preview(
-                bev,
-                road_clean,
-                white_left=white_left,
-                white_right=white_right,
-                yellow_left=yellow_left,
-                yellow_right=yellow_right,
-                prefer_yellow=prefer_yellow,
-                fork_active=fork_active,
-                fork_lane_pairs=fork_lane_pairs,
-                road_branches=road_branches,
-                road_cells=road_cells,
-                fork_split_source=fork_split_source,
-                ego_road_color=ego_road_color,
-            )
-            cv2.imshow(
-                "Lane drive",
-                cv2.resize(
-                    drive,
-                    None,
-                    fx=VISUALIZATION_SCALE,
-                    fy=VISUALIZATION_SCALE,
-                    interpolation=cv2.INTER_NEAREST,
-                ),
-            )
-        show_visualization(
-            cropped_frame=frame,
-            bev=bev,
-            white_bev=white_bev,
-            yellow_bev=yellow_bev,
-            red_bev=red_bev,
-            yellow_dash_points_bev=yellow_dash_points_bev,
-            yellow_connected_bev=yellow_boundary_bev,
-            road_clean=road_clean,
-            white_left=white_left,
-            white_right=white_right,
-            yellow_left=yellow_left,
-            yellow_right=yellow_right,
-            yellow_side_debug=None,
-        )
 
     boundary_candidates = (
         (
@@ -5218,8 +4907,6 @@ def detect_with_debug(
         yellow_connected_bev=yellow_boundary_bev,
         white_dash_points_bev=white_dash_points_bev,
         white_dash_connected_bev=white_dash_connected_bev,
-        crossing_mask=crossing_mask,
-        white_crossing_mask=white_crossing_mask,
         white_left=white_left,
         white_right=white_right,
         yellow_left=yellow_left,
@@ -5634,18 +5321,28 @@ def build_fork_lane_pairs_from_tracks(
 
 
 def _nan_moving_average(series: np.ndarray, window: int = 5) -> np.ndarray:
-    """Nan-aware 1D moving average along BEV rows (near↔far)."""
+    """Nan-aware 1D moving average along BEV rows (near↔far). Vectorized.
+
+    각 i의 창 [max(0,i-half), min(n,i+half+1)) 에서 non-nan 평균. 창에 유효값이
+    없으면 원래 값 유지. cumsum 으로 O(n) — 원소별 np.mean 루프를 제거한다.
+    """
 
     out = series.astype(np.float32, copy=True)
     n = len(out)
+    if n == 0:
+        return out
     half = max(1, window // 2)
-    for i in range(n):
-        lo = max(0, i - half)
-        hi = min(n, i + half + 1)
-        chunk = series[lo:hi]
-        vals = chunk[~np.isnan(chunk)]
-        if vals.size:
-            out[i] = float(np.mean(vals))
+    valid = ~np.isnan(series)
+    vals = np.where(valid, series, 0.0).astype(np.float64)
+    csum = np.concatenate(([0.0], np.cumsum(vals)))
+    ccnt = np.concatenate(([0.0], np.cumsum(valid.astype(np.float64))))
+    idx = np.arange(n)
+    lo = np.maximum(0, idx - half)
+    hi = np.minimum(n, idx + half + 1)
+    wsum = csum[hi] - csum[lo]
+    wcnt = ccnt[hi] - ccnt[lo]
+    have = wcnt > 0
+    out[have] = (wsum[have] / wcnt[have]).astype(np.float32)
     return out
 
 
@@ -5669,65 +5366,6 @@ def _interpolate_nans_1d(series: np.ndarray) -> np.ndarray:
         out[idx],
     ).astype(np.float32)
     return out
-
-
-def _snap_series_to_paint(
-    series: np.ndarray,
-    mark_mask: np.ndarray | None,
-    *,
-    tol_px: float,
-    band_lo: np.ndarray | None = None,
-    band_hi: np.ndarray | None = None,
-) -> np.ndarray:
-    """Pull each sample to the nearest paint column within ``tol_px``.
-
-    Optional ``band_lo``/``band_hi`` restrict candidates so a left-inner does
-    not snap onto the left-outer dash (and vice versa).
-    """
-
-    if mark_mask is None or mark_mask.size == 0:
-        return series
-    if mark_mask.shape[:2] != (BEV_HEIGHT, BEV_WIDTH):
-        return series
-    out = series.astype(np.float32, copy=True)
-    for row in range(BEV_HEIGHT):
-        v = out[row]
-        if np.isnan(v):
-            continue
-        cols = np.flatnonzero(mark_mask[row] > 0)
-        if cols.size == 0:
-            continue
-        if band_lo is not None and not np.isnan(band_lo[row]):
-            cols = cols[cols >= float(band_lo[row]) - 1.0]
-        if band_hi is not None and not np.isnan(band_hi[row]):
-            cols = cols[cols <= float(band_hi[row]) + 1.0]
-        if cols.size == 0:
-            continue
-        j = int(np.argmin(np.abs(cols.astype(np.float32) - v)))
-        if abs(float(cols[j]) - float(v)) <= tol_px:
-            out[row] = float(cols[j])
-    return out
-
-
-def _paint_in_band(
-    mark_mask: np.ndarray | None,
-    row: int,
-    lo: float,
-    hi: float,
-) -> float:
-    """Median paint column in ``[lo, hi]``, or NaN if empty."""
-
-    if mark_mask is None or mark_mask.size == 0:
-        return float("nan")
-    if row < 0 or row >= mark_mask.shape[0] or hi <= lo:
-        return float("nan")
-    cols = np.flatnonzero(mark_mask[row] > 0)
-    if cols.size == 0:
-        return float("nan")
-    hit = cols[(cols >= lo) & (cols <= hi)]
-    if hit.size == 0:
-        return float("nan")
-    return float(np.median(hit.astype(np.float32)))
 
 
 def stitch_fork_stem_continuity(
@@ -6021,18 +5659,6 @@ def _limit_column_jumps_zoned(
     _pass(range(BEV_HEIGHT - 1, -1, -1))
     _pass(range(BEV_HEIGHT))
     return out
-
-
-def _limit_column_jumps(series: np.ndarray, max_step_px: float) -> np.ndarray:
-    """Clamp consecutive valid samples so lateral jumps stay ≤ max_step_px."""
-
-    return _limit_column_jumps_zoned(
-        series,
-        far_end=max(1, int(round(BEV_HEIGHT * FORK_FAR_ZONE_RATIO))),
-        near0=int(round(BEV_HEIGHT * (1.0 - FORK_NEAR_ZONE_RATIO))),
-        max_far=max_step_px,
-        max_near=max_step_px,
-    )
 
 
 def fork_lane_pairs_to_road_branches(
@@ -7740,7 +7366,7 @@ def render_mode_preview(mode: str, debug: LaneDebugFrame) -> np.ndarray:
         )
         # Dash points (cyan) + connected (yellow tint) for quick check.
         overlay = base.copy()
-        if debug.yellow_dash_points_bev.size:
+        if debug.yellow_dash_points_bev is not None and debug.yellow_dash_points_bev.size:
             overlay[debug.yellow_dash_points_bev > 0] = (255, 255, 0)
         if debug.yellow_connected_bev.size:
             connected = cv2.cvtColor(
