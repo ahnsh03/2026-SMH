@@ -1,9 +1,10 @@
 # 차선 인지 요건·개발 방향 (갈림·소실·중앙선)
 
-> 개정: 2026-07-15 (안승현) — **Out 표지 게이트 · In/Out tip_mode 분리 · 원형 fork-PP 억제**  
+> 개정: 2026-07-15 (안승현) — **In 탈출 직전 mask 게이트** · Out 표지 게이트 · tip_mode · 원형 fork-PP 억제  
+> 이전: 2026-07-15 — Out 표지 게이트 · In/Out tip_mode 분리 · 원형 fork-PP 억제  
 > 이전: 2026-07-14 — 용어·코스색·viz·forced_turn 전면 정합 · Out=흰만 · In=노란우선  
 > 범위: `modules/lane_detection.py` + `pipeline.py` 갈림 게이트 (조향 게인 튜닝은 [main-planner.md](./main-planner.md))  
-> 관련: [lane-perception-topic.md](./lane-perception-topic.md) · [main-planner.md](./main-planner.md) · [competition.md](./competition.md) · [roles.md](./roles.md)
+> 관련: [lane-perception-topic.md](./lane-perception-topic.md) · [main-planner.md](./main-planner.md) · [hsv-profiles.md](./hsv-profiles.md) · [competition.md](./competition.md) · [roles.md](./roles.md)
 
 ---
 
@@ -345,6 +346,170 @@ YAML: `config/main_planner.yaml` → `route.out_fork_*`, `roundabout.circle_igno
 
 ---
 
+## 5.1.2 In 탈출 직전 시점 — yellow mask 게이트 (2026-07-15 lock)
+
+**목표:** 회전교차로 **유지(좌) vs 탈출(우)** 직전을 다른 시점과 혼동하지 않고 포착.  
+**범위:** 시점 감지 규칙만 SSOT. L/R 선택·반폭 추종·`yellow_alt` PP 연결은 **후속**.
+
+### 샘플 (IN bag `from_bag/in` · mosaics `raw_hsv_masks/in/`)
+
+| id | stem | 비고 |
+|----|------|------|
+| **0008** | `frame_20260715_045830_994784_0714` | far Y gore 깊음, ego도 Y |
+| **0009** | `frame_20260715_045837_397668_0734` | 분기 꼭지 가깝고 양갈래 뚜렷 |
+| **0019** | `frame_20260715_045902_029012_1174` | ego는 단일 CC여도 **노란 far dual** 선명 (재접근/다른 랩) |
+
+주의: **ego blob CC 개수만으로는 불가** (0019는 morph 후 한 덩어리). 주도 신호 = **yellow**.
+
+### 밴드 정의 (Metric IPM BEV, 예: 271×386)
+
+| 밴드 | 행 비율 (이미지 위→아래, v=0=far) |
+|------|----------------------------------|
+| far | 5% – 45% |
+| mid | 40% – 70% |
+| near | 70% – 95% |
+| top20 | 0% – 20% |
+
+`free = road_raw & ~dilate(yellow)` (`road_raw` = black\|red\|cyan, HSV SSOT는 [hsv-profiles.md](./hsv-profiles.md)).
+
+### 주 게이트 `in_circle_fork_moment`
+
+전제: `route_mode=in` / `prefer_yellow`.
+
+**hard_base (노란 통계 AND):**
+
+1. far에서 yellow **row-run ≥ 2** 인 행 비율 **≥ 70%** (`far_dualY`)
+2. 그 dual 행들의 좌·우 yellow mid 간격 median **≥ 55 px** (`far_sep`)
+3. far yellow CC 상위 면적비 `a2/a1` **≥ 0.20** (`ya2_ratio`)
+4. mid `dualY` **≥ 35%**
+
+**hard (런타임 SSOT = hard_base + AND)** — 단일 차로 L/R 노란(캡처 0004) 오탐 억제:
+
+5. far에서 `free=road&~dilate(yellow)` dual-run 비율 **≥ 70%** (`far_dualF`)
+6. `span_ratio = far_free_span / near_free_span` **≥ 1.3**
+
+### 보강 (OR, 있으면 신뢰↑)
+
+- `span_ratio ≥ 1.5` **또는** top20% `dualFree ≥ 60%` (`boosted`)
+
+### 명시적 제외
+
+| 실패 패턴 | 예 (캡처 id) | 이유 |
+|-----------|--------------|------|
+| far dualY≈0 + free dual만 큼 | 0010, 0017–18, 0020 | 도로 gore/개방 — **노란 없음** |
+| near/mid만 dual, far 약함 | 0002 | 곡선 점선 노이즈 |
+| farY 중간 + gore만 큼 | 0015 | hard에서 farY 70% 미만으로 탈락 |
+
+### bag 수치 요약 (2026-07-15 오프라인)
+
+| id | farY% | midY% | far_sep | ya2/ya1 | spanR | topF% | hard |
+|----|-------|-------|---------|---------|-------|-------|------|
+| 0008 | 100 | 100 | 123 | 0.46 | 2.2 | 96 | hard |
+| 0009 | 88 | 53 | 185 | 0.87 | 2.5 | 100 | hard |
+| 0019 | 100 | 100 | 96 | 0.40 | 2.6 | 65 | hard |
+| 0021 | 100 | (farF 100) | 107 | 0.99 | 2.0 | 100 | hard (재접근, 미라벨·허용) |
+| 0007 | 100 | 70 | 73 | 0.73 | 0.83 | 43 | hard_base only (early arm) |
+| 0004 | 100 | — | 92 | 0.84 | **1.03** | 100 | hard_base만 — **span으로 기각** |
+| 0010 | 0 | 7 | 0 | 0 | 1.2 | 41 | miss |
+| 0015 | 55 | 98 | 247 | 0.23 | 2.3 | 100 | miss |
+| 0002 | 33 | 100 | 43 | 0.13 | 0.8 | 0 | miss |
+
+### 시간 안정화
+
+- `hard`가 **K프레임 연속** (플래너 `branch_on_frames`≈6과 맞춤) → rising `in_circle_fork_moment`
+- falling: far dualY 붕괴 (0010류)로 자연 해제
+- **0007**은 `hard_base`만 (span 부족) — 조기 arm이 필요하면 `hard_base` debounce를 별도 arm에 쓰고, 조향 게이트는 **`hard`만** 사용
+
+### 기존 갈림·제어와의 관계
+
+| 계층 | 역할 |
+|------|------|
+| 본 게이트 | **시점 포착** (yellow 통계). blob ego와 독립 플래그로 둘 것 |
+| `yellow_alt_marks` / `fork_lane_pairs_from_dual_courses` | 갈래 2개 geometry (후속·기존 legacy) |
+| MainPlanner | L=탈출 / R=유지 잠금; circle 중 `circle_ignore_fork_for_control`이면 fork는 **이벤트만** |
+
+후속(미구현): 선택 rank outer±half_w · 노란 커팅 단일 갈래 · 기존 `RoadBranch` PP.
+
+### 오프라인 검증 (스크립트)
+
+```bash
+# 2026-smh-sim
+PYTHONPATH=scripts/vision_tune:src/inference python3 scripts/vision_tune/score_in_fork_moment.py \
+  --folder data/captures/from_bag/in \
+  --csv data/captures/raw_hsv_masks/in_fork_moment_scores.csv
+```
+
+런타임 API: [`perception/fork/moment.py`](../src/inference/inference/modules/perception/fork/moment.py) `score_in_circle_fork_moment`  
+오프라인: [`scripts/vision_tune/score_in_fork_moment.py`](../scripts/vision_tune/score_in_fork_moment.py)  
+데이터·코드 맵: [fork-moment-detection.md](./fork-moment-detection.md)  
+입력/지표: yellow · free=(black|red|cyan)&~dilate(yellow) → far/mid dualY, far_sep, ya2_ratio, spanR, top_dualFree.
+
+OUT 흰 갈림에 이 규칙 **금지** (`prefer_yellow` 가드).
+
+---
+
+## 5.1.3 Out 갈림 직전 시점 — white + road 게이트 (2026-07-15)
+
+**목표:** Out **진짜 갈림** 직전(흰 유도선/고어가 보이며 차로가 벌어지는 순간)을 직선·곡선·개방 영역과 혼동하지 않고 포착.  
+IN 탈출(`§5.1.2`)과 구별할 필요는 없음. **분기가 아닌 구간의 오탐만 금지.**
+
+### 샘플 (`from_bag/out` · `raw_hsv_masks/out/`)
+
+| id | stem | 비고 |
+|----|------|------|
+| **0011** | `frame_20260715_045046_248624_1758` | stem→Y, 상단 gore 뚜렷 |
+| **0012** | `frame_20260715_045053_939644_1784` | 분기 더 가깝고 ego Y 넓음 |
+| 0013 | `…045104…1976` | **분기 직후** 한 갈래 선택 — 직전 게이트에서는 miss가 정상 |
+
+주도 신호 = **white** (OUT 차선). road dual/span만 쓰면 개방·합류에서 대량 오탐.
+
+### 런타임 hard `out_fork_moment` (필수 AND)
+
+전제: `route_mode=out` / `prefer_yellow=False`.
+
+| # | 조건 | 임계 |
+|---|------|------|
+| 1 | far white dual-run 비율 | **≥ 90%** |
+| 2 | mid white dual-run | **≥ 70%** |
+| 3 | far white 좌·우 mid 간격 `sepW` | **≥ 150 px** (단일 차로 L/R ≈80–100px보다 큼) |
+| 4 | far white CC `a2/a1` | **≥ 0.50** |
+| 5 | far road dual-run | **≥ 80%** |
+| 6 | `span_road = far_road_span / near_road_span` | **≥ 2.2** |
+| 7 | 전체 `road_pct` | **≥ 28%** (직전 Y가 마스크에서 넓음; 0013=21%로 걸러짐) |
+
+밴드 정의는 §5.1.2와 동일 (far 5–45%, mid 40–70%, near 70–95%).
+
+### 왜 이렇게 나뉘나
+
+| 실패 패턴 | 예 | 차단 조건 |
+|-----------|-----|-----------|
+| 도로만 벌어짐·흰 갈림 약함 | 0010, 0015, 0021… | farWd / sepW |
+| 평행 흰 레일만 (차로폭 sep) | 0001, 0004, 0025… | **sepW ≥ 150** |
+| 개방/원 주변 넓은 free | 다수 | white dual 필수 |
+| 분기 통과 후 한 줄기 | 0013 | road_pct / span 조합 |
+
+### bag 검증 (2026-07-15, n=37)
+
+```bash
+PYTHONPATH=scripts/vision_tune:src/inference python3 scripts/vision_tune/score_out_fork_moment.py \
+  --folder data/captures/from_bag/out \
+  --csv data/captures/raw_hsv_masks/out_fork_moment_scores.csv
+```
+
+| 결과 | |
+|------|--|
+| 양성 0011·0012 hard | **PASS** |
+| nontarget hard FP | **0 (PASS)** |
+| hard hit | **0011, 0012 only** |
+
+런타임 API: [`perception/fork/moment.py`](../src/inference/inference/modules/perception/fork/moment.py) `score_out_fork_moment`  
+오프라인: [`scripts/vision_tune/score_out_fork_moment.py`](../scripts/vision_tune/score_out_fork_moment.py)  
+데이터·코드 맵: [fork-moment-detection.md](./fork-moment-detection.md)
+
+후속: `enable_fork`/표지 게이트와 AND로 연결 · L/R은 기존 `road_split` / `white_*` · FSM.
+
+---
+
 ## 5.2 통합 결정 (2026-07-14)
 
 | 소스 | 역할 | 채택 |
@@ -367,6 +532,7 @@ YAML: `config/main_planner.yaml` → `route.out_fork_*`, `roundabout.circle_igno
 1. P3 설계 구현 착수: **근거리 2선 앵커 → 전방 4선 분기 → 쌍 중앙 → RoadBranch**.  
 2. 검증: `teleport out_fork` / `in_roundabout_exit` + `tune_lane_detect --mode fork` + `c`.  
 3. 점선 yaml(`gap=0.30` 등)은 커터용으로 유지, KPI에서 제외.
+4. **In 탈출 직전:** §5.1.2 `in_circle_fork_moment` 게이트를 blob/legacy에 플래그로 이식 → 이후 L/R 추종(반폭·yellow_alt PP). 조향은 게이트 SSOT **이후** 작업.
 
 ---
 

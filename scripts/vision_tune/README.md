@@ -330,6 +330,9 @@ Metric IPM이면 종·횡이 이미 등방이라 검증용; 사다리꼴 쓸 때
 | `hsv.py` | HSV load/save/mask |
 | `viz_raw_hsv_masks.py` | BEV · morph · **ego blob** (road=`black\|red\|cyan`) |
 | `viz_cyan_ab.py` | 시안 전후 ego A/B 모자이크 (`out_glare`) |
+| `score_in_fork_moment.py` | IN keep/exit 직전 게이트 오프라인 (`fork.moment` thin CLI) |
+| `score_out_fork_moment.py` | OUT 갈림 직전 게이트 오프라인 (`fork.moment` thin CLI) |
+| → 코드·데이터 SSOT | [`docs/fork-moment-detection.md`](../../docs/fork-moment-detection.md) · [`perception/fork/moment.py`](../../src/inference/inference/modules/perception/fork/moment.py) |
 | `tune_lane_control.py` | **Pure Pursuit** 게인 튜너 (레거시 경로) |
 | `window_layout.py` | OpenCV 창 화면 안 배치 (`w`) |
 | `tune_bev_roi.py` | 사다리꼴만 (참고) |

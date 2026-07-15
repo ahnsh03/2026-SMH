@@ -25,6 +25,7 @@
 | [lane-drive-strategy.md](./lane-drive-strategy.md) | Metric IPM·인지 설계 배경 (제어 SSOT는 main-planner) |
 | [out-route-reference.md](./out-route-reference.md) | OUT 맵 **직선·코너·S자** 로봇 보조지표 / CTE 합격선 |
 | [lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md) | **소실·Out 갈림·In 탈출** 인지 전략 + **용어 SSOT** (승현) ★ |
+| [fork-moment-detection.md](./fork-moment-detection.md) | **IN/OUT 직전 시점 게이트** + 기존 차로쌍 갈림 코드·**데이터 라벨** 보관 ★ |
 | [hsv-profiles.md](./hsv-profiles.md) | **시뮬·실차 HSV + 주행가능(road\|시안→ego blob) SSOT** ★ |
 | [../scripts/vision_tune/README.md](../scripts/vision_tune/README.md) | **`tune_bev`** · **`tune_hsv`** · **`tune_lane_control`** · 캡처 |
 | [../config/lane_vision.yaml](../config/lane_vision.yaml) | `metric_ipm:` + `hsv.profiles` (sim / real_car) |

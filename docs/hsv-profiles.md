@@ -68,6 +68,8 @@ python3 scripts/vision_tune/viz_raw_hsv_masks.py --from-bag out_glare --all
 python3 scripts/vision_tune/viz_cyan_ab.py --from-bag out_glare --clean
 ```
 
+IN 회전교차로 **유지/탈출 직전** 시점 감지(yellow far dual)는 차로 마스크 SSOT와 별도 — [lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md) **§5.1.2**, 코드·데이터는 [fork-moment-detection.md](./fork-moment-detection.md).
+
 ---
 
 ## 2. 프로필 비교표
