@@ -25,8 +25,9 @@
 | [lane-drive-strategy.md](./lane-drive-strategy.md) | Metric IPM·인지 설계 배경 (제어 SSOT는 main-planner) |
 | [out-route-reference.md](./out-route-reference.md) | OUT 맵 **직선·코너·S자** 로봇 보조지표 / CTE 합격선 |
 | [lane-occlusion-fork-strategy.md](./lane-occlusion-fork-strategy.md) | **소실·Out 갈림·In 탈출** 인지 전략 + **용어 SSOT** (승현) ★ |
+| [hsv-profiles.md](./hsv-profiles.md) | **시뮬·실차 HSV 프로필** · 보드 적용 절차 ★ |
 | [../scripts/vision_tune/README.md](../scripts/vision_tune/README.md) | **`tune_bev`** · **`tune_hsv`** · **`tune_lane_control`** · 캡처 |
-| [../config/lane_vision.yaml](../config/lane_vision.yaml) | `metric_ipm:` 잠정 파라미터 (`y_half=0.77`) |
+| [../config/lane_vision.yaml](../config/lane_vision.yaml) | `metric_ipm:` + `hsv.profiles` (sim / real_car) |
 | [../config/lane_control.yaml](../config/lane_control.yaml) | planner P/EMA/rate/look-ahead (시뮬·실차 공용) |
 | [vehicle-geometry.md](./vehicle-geometry.md) | D-Racer ↔ LIMO 휠베이스·트레드·조향 스펙 (제어 튜닝) ★ |
 | [meetings/2026-07-10.md](./meetings/2026-07-10.md) | 최근 회의록 (역할 재분배) |

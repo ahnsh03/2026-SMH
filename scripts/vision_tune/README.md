@@ -39,10 +39,15 @@ source install/setup.bash
 기본 시작 모드 = **`dash` (Phase A)**.
 
 ```bash
-python3 scripts/vision_tune/tune_lane_detect.py              # dash부터
+python3 scripts/vision_tune/tune_lane_detect.py              # dash부터 (legacy backend)
 python3 scripts/vision_tune/tune_lane_detect.py --mode fork
 python3 scripts/vision_tune/tune_lane_detect.py --folder data/captures/lane_tune_logs
 ```
+
+> **레거시 전용.** 이 튜너는 polyfit/11자 rail·fork 스윕용. 시작 시  
+> `lane_detection.set_perception_backend('legacy')` 를 쓰거나 yaml을  
+> `perception.backend: legacy` 로 둔다. 일반 추종 검증은  
+> [`preview_out_drivable.py`](preview_out_drivable.py) (blob) 를 쓴다.
 
 | 키 | 동작 |
 |----|------|
@@ -199,19 +204,29 @@ python3 scripts/vision_tune/tune_lane_control.py --drive
 
 ---
 
-## HSV 마스크 튜너 (Phase 1 · 시뮬·실차 공용)
+## HSV 마스크 튜너 (Phase 1 · 시뮬·실차 분리)
 
 흰/노란 차선 · 검정/빨강 차로 마스크를 Metric IPM BEV에서 맞춘다.  
-**툴·yaml 저장 = 승현**, 대회용 **최종 정밀값 = 원태**와 맞춤. 시드는 원태 브랜치 기본값.
+**프로필 SSOT:** [`docs/hsv-profiles.md`](../../docs/hsv-profiles.md) · `config/lane_vision.yaml` → `hsv.profiles.{sim,real_car}`
+
+| 프로필 | 환경 | 보드 적용 |
+|--------|------|-----------|
+| `sim` | Gazebo | ❌ (시뮬 전용) |
+| `real_car` | D3-G bag 캡처 튜닝 | ✅ **`hsv.active: real_car`** |
 
 ```bash
+# 프로필 전환 (런타임 평탄화 채널도 같이 갱신)
+python3 scripts/vision_tune/hsv.py --apply-profile sim
+python3 scripts/vision_tune/hsv.py --apply-profile real_car
+
+# 실차 bag 캡처로 튜닝
 python3 scripts/vision_tune/tune_hsv.py --from-bag in
 python3 scripts/vision_tune/tune_hsv.py --folder data/captures/from_bag/out
 python3 scripts/vision_tune/tune_hsv.py --channel yellow
 ```
 
-기준값: `origin/board` 브랜치 실차 튜닝(bag_20260711_144948) → `config/lane_vision.yaml` `hsv:`  
-추가 미세조정 후 `s` 저장. `b`=board 기준으로 되돌리기, `d`=원태 시드.
+기준값: `real_car` = bag `from_bag` 캡처 (커밋 `0191811`, `35ba99e`).  
+추가 미세조정 후 `s` 저장. `d`=sim 시드, `b`=origin/board 1차 실차(레거시).
 
 | 창 | 역할 |
 |----|------|
@@ -220,47 +235,50 @@ python3 scripts/vision_tune/tune_hsv.py --channel yellow
 | 키 | 동작 |
 |----|------|
 | `1`–`4` | white / yellow / black_road / red_road |
-| `b` | 활성 채널 → **origin/board** 실차 기준값 |
+| `d` | 활성 채널 → **sim** (Gazebo / 원태 시드) |
+| `b` | 활성 채널 → origin/board 1차 실차 (레거시) |
 | 클릭 | ORIGIN/BEV 패널에서 해당 픽셀 HSV로 범위 **확장** |
-| `d` | 활성 채널을 원태 시드 기본값으로 |
-| `s` | `config/lane_vision.yaml` → `hsv:` 저장 |
+| `s` | `config/lane_vision.yaml` → `profiles[active]` + 평탄화 저장 |
 | `n` / `p` | 폴더 모드 다음/이전 |
 | `q` / ESC | 종료 |
 
 ---
 
-## OUT/IN 주행가능 영역 프리뷰 (road + fitted rails)
+## OUT/IN 주행가능 영역 프리뷰 (blob corridor)
 
-road는 항상 **검정|빨강 HSV 합집합**, 코리도는 **인지 피팅 레일 사이 채움**  
-(OUT=흰, IN=노란 — 두 색을 OR하지 않음). raw white 좌·우 극값 fill은 쓰지 않음.
+기본 인지 백엔드 = **`perception.backend: blob`**  
+지금은 **차선 mid/리본 보정 없음** — `black|red` 도로 마스크 + open/close 노이즈 제거 + ego-near 최대 blob 1개.  
+S·곡선·원형은 마스크 추종(`mask_pursuit`)에 맡김.
+
+road = **검정|빨강**, 코리도 = **`road_clean` blob**.  
+갈림만 `--fork` / 표지 게이트 (legacy).
+
+레거시 폴리핏: `perception.backend: legacy` 또는  
+`lane_detection.set_perception_backend('legacy')` / `tune_lane_detect.py`.
 
 ```bash
 python3 scripts/vision_tune/preview_out_drivable.py --from-bag out --course out
-python3 scripts/vision_tune/preview_out_drivable.py --from-bag out --start 11 --fork   # out_fork만
+python3 scripts/vision_tune/preview_out_drivable.py --from-bag out --start 11 --fork
 python3 scripts/vision_tune/preview_out_drivable.py --from-bag in --course in
+python3 scripts/vision_tune/preview_out_drivable.py --from-bag out --start 5 --once
 ```
 
 | 키 | 합성 모드 |
 |----|----------|
-| `1` | `road` — black\|red only |
-| `2` | `between` — **피팅** 좌·우 레일 사이 (또는 `--fork` 시 out_fork 차로 쌍) |
-| `3` | `road_in` — road ∩ between (**기본**) |
-| `4` | `union` — between ∪ road |
-| `f` | `enable_fork` 토글 (**기본 OFF** — 갈림길 11–12만 ON) |
-| `g` | kinematic ego-band 가드 토글 (**기본 ON**) |
+| `1` | `road` — black\|red raw |
+| `2` | `between` — selected **blob** (**기본** 추종) |
+| `3` | `road_in` — road ∩ blob |
+| `4` | `union` — blob ∪ road |
+| `f` | `enable_fork` 토글 (**기본 OFF** — 11–12만) |
 | `0` | fork 갈래 필터 both → L → R |
 
-기본 경로는 **일반 흰/노란 피팅 + 기구학 밴드 가드** (앞차축·트레드·\(R_{\min}\)·차로폭).  
-`out_fork`는 일반 차로에서 튀므로 켜지 않음. 런타임도 표지판 게이트 뒤에서만 fork.  
-OUT 캡처 **11–12**만 `--fork` (또는 `f`) 후 mode 2/3 확인.
+코리도 생성: `black|red` morph denoise → ego-near largest blob. 차선 기하 보정 없음.
 
-기구학 가드: 레일 midpoint가 ego 도달가능 밴드 밖이면 track_width prior로 리셋하고, between를 밴드와 AND.  
-BEV 오버레이 갈색 = ego band.
+`n`/`p` · `SPACE` · `s` → `data/captures/out_drivable_preview/`  
+오버레이: road=회색 · blob=초록 · 차선 HSV · **mid 중심선**=시안
 
-`n`/`p` 프레임 · `SPACE` 자동 · `s` → `data/captures/out_drivable_preview/`  
-오버레이: road=회색 · between=초록 · 활성 차선 HSV · fitted L/R 점 · driv=시안
-
-헬퍼: [`out_drivable.py`](out_drivable.py) (`road_mask_from_hsv`, `fill_between_fitted_rails`, `build_kinematic_ego_band`).
+런타임 경로: [`modules/perception/blob/`](../../src/inference/inference/modules/perception/blob/)  
+레거시 격리: [`modules/perception/legacy/`](../../src/inference/inference/modules/perception/legacy/)
 
 ---
 

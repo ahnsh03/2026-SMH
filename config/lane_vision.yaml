@@ -34,6 +34,78 @@ metric_ipm:
   note: 'Team lock 2026-07-12: Metric IPM provisional SSOT. y_half_width_m=0.77 by
     default; set full_image_width only to expand.'
 hsv:
+  active: real_car
+  profiles:
+    sim:
+      meta:
+        environment: Gazebo LIMO (C920e 320x180 sim camera)
+        source: feature/wontae-lane seed
+        tuned: '2026-07-12'
+        tool: scripts/vision_tune/tune_hsv.py (key d)
+      white:
+        h_min: 0
+        h_max: 179
+        s_min: 0
+        s_max: 29
+        v_min: 174
+        v_max: 255
+      yellow:
+        h_min: 0
+        h_max: 55
+        s_min: 32
+        s_max: 255
+        v_min: 79
+        v_max: 255
+      black_road:
+        h_min: 0
+        h_max: 179
+        s_min: 0
+        s_max: 255
+        v_min: 0
+        v_max: 30
+      red_road:
+        h_min: 170
+        h_max: 179
+        s_min: 125
+        s_max: 192
+        v_min: 161
+        v_max: 229
+    real_car:
+      meta:
+        environment: D3-G field (C920e 320x180)
+        source: bag replay → data/captures/from_bag/{in,out}
+        bags: bag_20260711_150234 (IN), bag_20260711_144948 (OUT)
+        tuned: '2026-07-15'
+        tool: scripts/vision_tune/tune_hsv.py --from-bag
+        commits: 0191811, 35ba99e
+      white:
+        h_min: 0
+        h_max: 179
+        s_min: 0
+        s_max: 20
+        v_min: 210
+        v_max: 255
+      yellow:
+        h_min: 15
+        h_max: 50
+        s_min: 50
+        s_max: 150
+        v_min: 160
+        v_max: 255
+      black_road:
+        h_min: 17
+        h_max: 70
+        s_min: 0
+        s_max: 255
+        v_min: 50
+        v_max: 140
+      red_road:
+        h_min: 0
+        h_max: 9
+        s_min: 155
+        s_max: 255
+        v_min: 120
+        v_max: 255
   white:
     h_min: 0
     h_max: 179
@@ -62,8 +134,8 @@ hsv:
     s_max: 255
     v_min: 120
     v_max: 255
-  note: OpenCV HSV (H 0-179). Tuned with scripts/vision_tune/tune_hsv.py. Sim/real
-    shared; Won Tae may refine final competition values.
+  note: OpenCV HSV (H 0-179). Runtime reads flattened channels (= profiles[active]).
+    See docs/hsv-profiles.md. Tuned with scripts/vision_tune/tune_hsv.py.
 detect_tune:
   crossing_coverage_ratio: 0.4
   crossing_min_rows: 3

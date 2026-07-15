@@ -164,6 +164,8 @@ ros2 launch inference auto_driving.launch.py
 
 보드에서는 **feature 브랜치로 주행 테스트하지 않습니다.** merge된 `main`만 사용합니다.
 
+**HSV (인지 마스크):** 실차 프로필만 보드에 적용. `config/lane_vision.yaml`에서 `hsv.active: real_car`와 평탄화 채널(`hsv.white` …) 확인 → [hsv-profiles.md](./hsv-profiles.md) §4.
+
 ### 3.3 ArUco 보드 테스트 (검증됨)
 
 인쇄 크기(10 cm / 15 cm)는 **거리 계산에 쓰지 않습니다.**  

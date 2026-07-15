@@ -1,11 +1,13 @@
 """HSV ranges for lane / road masks — shared by tune_hsv and runtime stub.
 
-Schema (per channel) stored under ``config/lane_vision.yaml`` → ``hsv.<name>``:
+Schema: ``config/lane_vision.yaml`` → ``hsv``
 
-  h_min, h_max, s_min, s_max, v_min, v_max   # OpenCV HSV (H: 0–179)
+  active: sim | real_car
+  profiles.<name>.<channel>: h_min … v_max
+  <channel>: flattened active profile (runtime reads these)
 
-Tool owner: 안승현 (sim/real tuner). Precise final values: 장원태 may refine.
-Seed defaults match Won Tae ``feature/wontae-lane`` constants (good Gazebo start).
+Docs: docs/hsv-profiles.md
+Tool owner: 안승현. Sim seed: 장원태 ``feature/wontae-lane``.
 """
 
 from __future__ import annotations
@@ -19,9 +21,10 @@ import numpy as np
 import yaml
 
 CHANNEL_NAMES = ('white', 'yellow', 'black_road', 'red_road')
+PROFILE_NAMES = ('sim', 'real_car')
 
-# Won Tae branch defaults (OpenCV HSV).
-_DEFAULTS: dict[str, dict[str, int]] = {
+# Gazebo / Won Tae seed (OpenCV HSV).
+_SIM_DEFAULTS: dict[str, dict[str, int]] = {
     'white': {
         'h_min': 0,
         'h_max': 179,
@@ -92,6 +95,61 @@ _BOARD_DEFAULTS: dict[str, dict[str, int]] = {
     },
 }
 
+# Real-car field tune from bag replay captures (2026-07-15, commits 0191811 + 35ba99e).
+_REAL_CAR_DEFAULTS: dict[str, dict[str, int]] = {
+    'white': {
+        'h_min': 0,
+        'h_max': 179,
+        's_min': 0,
+        's_max': 20,
+        'v_min': 210,
+        'v_max': 255,
+    },
+    'yellow': {
+        'h_min': 15,
+        'h_max': 50,
+        's_min': 50,
+        's_max': 150,
+        'v_min': 160,
+        'v_max': 255,
+    },
+    'black_road': {
+        'h_min': 17,
+        'h_max': 70,
+        's_min': 0,
+        's_max': 255,
+        'v_min': 50,
+        'v_max': 140,
+    },
+    'red_road': {
+        'h_min': 0,
+        'h_max': 9,
+        's_min': 155,
+        's_max': 255,
+        'v_min': 120,
+        'v_max': 255,
+    },
+}
+
+_DEFAULTS = _SIM_DEFAULTS
+
+_PROFILE_META: dict[str, dict[str, Any]] = {
+    'sim': {
+        'environment': 'Gazebo LIMO (C920e 320x180 sim camera)',
+        'source': 'feature/wontae-lane seed',
+        'tuned': '2026-07-12',
+        'tool': 'scripts/vision_tune/tune_hsv.py (key d)',
+    },
+    'real_car': {
+        'environment': 'D3-G field (C920e 320x180)',
+        'source': 'bag replay → data/captures/from_bag/{in,out}',
+        'bags': 'bag_20260711_150234 (IN), bag_20260711_144948 (OUT)',
+        'tuned': '2026-07-15',
+        'tool': 'scripts/vision_tune/tune_hsv.py --from-bag',
+        'commits': '0191811, 35ba99e',
+    },
+}
+
 
 @dataclass(frozen=True)
 class HsvRange:
@@ -151,9 +209,33 @@ def default_config_path() -> Path:
 
 
 def default_range(channel: str) -> HsvRange:
-    if channel not in _DEFAULTS:
+    """Gazebo / Won Tae sim seed."""
+    if channel not in _SIM_DEFAULTS:
         raise KeyError(f'Unknown HSV channel: {channel}')
-    return HsvRange.from_dict(_DEFAULTS[channel], _DEFAULTS[channel])
+    return HsvRange.from_dict(_SIM_DEFAULTS[channel], _SIM_DEFAULTS[channel])
+
+
+def sim_range(channel: str) -> HsvRange:
+    return default_range(channel)
+
+
+def real_car_range(channel: str) -> HsvRange:
+    if channel not in _REAL_CAR_DEFAULTS:
+        raise KeyError(f'Unknown HSV channel: {channel}')
+    return HsvRange.from_dict(_REAL_CAR_DEFAULTS[channel], _REAL_CAR_DEFAULTS[channel])
+
+
+def profile_seed_defaults(name: str) -> dict[str, dict[str, int]]:
+    if name == 'sim':
+        return _SIM_DEFAULTS
+    if name == 'real_car':
+        return _REAL_CAR_DEFAULTS
+    raise KeyError(f'Unknown HSV profile: {name}')
+
+
+def profile_ranges(name: str) -> dict[str, HsvRange]:
+    seeds = profile_seed_defaults(name)
+    return {ch: HsvRange.from_dict(seeds[ch], seeds[ch]) for ch in CHANNEL_NAMES}
 
 
 def board_range(channel: str) -> HsvRange:
@@ -167,43 +249,139 @@ def board_ranges() -> dict[str, HsvRange]:
     return {name: board_range(name) for name in CHANNEL_NAMES}
 
 
+def _profile_block_from_seeds(
+    name: str,
+    seeds: dict[str, dict[str, int]],
+) -> dict[str, Any]:
+    block: dict[str, Any] = {'meta': dict(_PROFILE_META.get(name, {}))}
+    for ch in CHANNEL_NAMES:
+        block[ch] = dict(seeds[ch])
+    return block
+
+
+def _default_profiles() -> dict[str, Any]:
+    return {
+        'sim': _profile_block_from_seeds('sim', _SIM_DEFAULTS),
+        'real_car': _profile_block_from_seeds('real_car', _REAL_CAR_DEFAULTS),
+    }
+
+
+def _flatten_profile(profiles: dict[str, Any], active: str) -> dict[str, dict[str, int]]:
+    prof = profiles.get(active) or {}
+    out: dict[str, dict[str, int]] = {}
+    seeds = profile_seed_defaults(active)
+    for ch in CHANNEL_NAMES:
+        raw = prof.get(ch) if isinstance(prof, dict) else None
+        if isinstance(raw, dict):
+            out[ch] = {k: int(raw[k]) for k in ('h_min', 'h_max', 's_min', 's_max', 'v_min', 'v_max')}
+        else:
+            out[ch] = dict(seeds[ch])
+    return out
+
+
+def _read_config(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    with path.open('r', encoding='utf-8') as f:
+        return yaml.safe_load(f) or {}
+
+
+def active_profile_name(path: Path | None = None) -> str:
+    cfg_path = path or default_config_path()
+    data = _read_config(cfg_path)
+    raw = (data.get('hsv') or {}).get('active', 'real_car')
+    return raw if raw in PROFILE_NAMES else 'real_car'
+
+
 def load_hsv_ranges(path: Path | None = None) -> dict[str, HsvRange]:
     cfg_path = path or default_config_path()
     block: dict[str, Any] = {}
     if cfg_path.is_file():
-        with cfg_path.open('r', encoding='utf-8') as f:
-            data = yaml.safe_load(f) or {}
+        data = _read_config(cfg_path)
         raw = data.get('hsv') or {}
         if isinstance(raw, dict):
             block = raw
+    active = block.get('active', 'real_car')
+    if active not in PROFILE_NAMES:
+        active = 'real_car'
+    seeds = profile_seed_defaults(active)
     out: dict[str, HsvRange] = {}
     for name in CHANNEL_NAMES:
-        out[name] = HsvRange.from_dict(block.get(name), _DEFAULTS[name])
+        out[name] = HsvRange.from_dict(block.get(name), seeds[name])
     return out
 
 
 def save_hsv_ranges(
     ranges: dict[str, HsvRange],
     path: Path | None = None,
+    *,
+    profile: str | None = None,
 ) -> Path:
     cfg_path = path or default_config_path()
-    existing: dict[str, Any] = {}
-    if cfg_path.is_file():
-        with cfg_path.open('r', encoding='utf-8') as f:
-            existing = yaml.safe_load(f) or {}
-    hsv_block: dict[str, Any] = {}
+    existing = _read_config(cfg_path)
+    prev_hsv = existing.get('hsv') if isinstance(existing.get('hsv'), dict) else {}
+    active = profile or prev_hsv.get('active') or active_profile_name(cfg_path)
+    if active not in PROFILE_NAMES:
+        active = 'real_car'
+
+    profiles = prev_hsv.get('profiles') if isinstance(prev_hsv.get('profiles'), dict) else {}
+    if not profiles:
+        profiles = _default_profiles()
+    else:
+        for pname in PROFILE_NAMES:
+            if pname not in profiles:
+                profiles[pname] = _profile_block_from_seeds(
+                    pname,
+                    profile_seed_defaults(pname),
+                )
+
+    prof_entry = dict(profiles.get(active) or {})
+    prof_entry['meta'] = dict(_PROFILE_META.get(active, prof_entry.get('meta') or {}))
     for name in CHANNEL_NAMES:
-        rng = ranges.get(name) or default_range(name)
-        hsv_block[name] = rng.to_dict()
+        rng = ranges.get(name) or real_car_range(name)
+        prof_entry[name] = rng.to_dict()
+    profiles[active] = prof_entry
+
+    hsv_block: dict[str, Any] = {
+        'active': active,
+        'profiles': profiles,
+    }
+    for name in CHANNEL_NAMES:
+        hsv_block[name] = prof_entry[name]
     hsv_block['note'] = (
-        'OpenCV HSV (H 0-179). Tuned with scripts/vision_tune/tune_hsv.py. '
-        'Sim/real shared; Won Tae may refine final competition values.'
+        'OpenCV HSV (H 0-179). Runtime reads flattened channels (= profiles[active]). '
+        'See docs/hsv-profiles.md. Tuned with scripts/vision_tune/tune_hsv.py.'
     )
     existing['hsv'] = hsv_block
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with cfg_path.open('w', encoding='utf-8') as f:
         yaml.safe_dump(existing, f, sort_keys=False, allow_unicode=True)
     return cfg_path
+
+
+def apply_hsv_profile(name: str, path: Path | None = None) -> Path:
+    """Set ``hsv.active`` and flatten ``profiles[name]`` into runtime channels."""
+    if name not in PROFILE_NAMES:
+        raise KeyError(f'Unknown HSV profile: {name}')
+    cfg_path = path or default_config_path()
+    existing = _read_config(cfg_path)
+    prev_hsv = existing.get('hsv') if isinstance(existing.get('hsv'), dict) else {}
+    profiles = prev_hsv.get('profiles') if isinstance(prev_hsv.get('profiles'), dict) else {}
+    if not profiles:
+        profiles = _default_profiles()
+    else:
+        for pname in PROFILE_NAMES:
+            if pname not in profiles:
+                profiles[pname] = _profile_block_from_seeds(
+                    pname,
+                    profile_seed_defaults(pname),
+                )
+    flat = _flatten_profile(profiles, name)
+    ranges = {
+        ch: HsvRange.from_dict(flat[ch], profile_seed_defaults(name)[ch])
+        for ch in CHANNEL_NAMES
+    }
+    return save_hsv_ranges(ranges, cfg_path, profile=name)
 
 
 def make_mask(bgr: np.ndarray, rng: HsvRange, *, morph: bool = True) -> np.ndarray:
@@ -254,3 +432,26 @@ def expand_range_with_sample(
         v_min=min(p.v_min, max(0, v - v_pad)),
         v_max=max(p.v_max, min(255, v + v_pad)),
     ).clamp()
+
+
+def _main_cli() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description='HSV profile utilities')
+    parser.add_argument(
+        '--apply-profile',
+        choices=PROFILE_NAMES,
+        help='Set hsv.active and flatten profiles/<name> into runtime channels',
+    )
+    parser.add_argument('--config', type=Path, default=default_config_path())
+    args = parser.parse_args()
+    if args.apply_profile:
+        out = apply_hsv_profile(args.apply_profile, args.config)
+        print(f'Applied HSV profile {args.apply_profile!r} → {out}')
+        return 0
+    parser.print_help()
+    return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(_main_cli())
