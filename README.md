@@ -2,10 +2,14 @@
 
 **2026 SEA:ME 해커톤** — AIM 학술동아리 자율주행 팀 저장소
 
+> **이 체크아웃이 `board/race-control` 이면:** 실차·대회용 골격입니다.  
+> → 먼저 [**BOARD.md**](BOARD.md) · `./scripts/board_race_sync.sh` 를 사용하세요.  
+> PC feature 작업은 별도 폴더(`2026-SMH` worktree)에서 합니다.
+
 > Repo 이름은 대회 약자(SMH)를 사용합니다. 로컬 경로·셸 변수: `$SMH`
 
 > **PC(WSL) 상위 프로젝트**: [../README.md](../README.md)  
-> **D3-G 보드 단독 clone** (`~/2026-SMH`) — 아래 빠른 시작만으로 충분합니다.
+> **D3-G 보드** — `board/race-control` 권장 경로 `~/2026-SMH-board`
 
 | | |
 |---|---|
