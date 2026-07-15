@@ -1,19 +1,25 @@
 # Sign / signal weights (board/race-control)
 
-| File | Role | Source |
-|------|------|--------|
-| `sign_best.onnx` | Left/Right **direction signs only** (2-class) | `origin/board` |
-| `sign_light_best_v5b.onnx` | 4-class YOLO; runtime uses **Red/Green Light only** (cls 2/3) | `feature/seongjun-sign-traffic` |
+| File | Role | When loaded |
+|------|------|-------------|
+| `sign_best.onnx` | Left/Right **direction signs** (2-class) | **Always** (race) |
+| `sign_light_best_v5b.onnx` | 4-class; runtime uses **Red/Green only** | Only if `TRAFFIC_LIGHT_BACKEND` ≠ `opencv` |
 
-Sungjun의 표지판 클래스(0/1)는 쓰지 않습니다. 표지판은 항상 `sign_best.onnx`.
+## CPU policy (D3-G)
 
-## Traffic light backend
+**프레임당 YOLO는 최대 1개.** 표지판이 필수이므로 기본은:
+
+* 표지판 = `sign_best.onnx`
+* 신호등 = OpenCV HSV (`TRAFFIC_LIGHT_BACKEND=opencv`)
+
+신호등 YOLO는 정지 상태 A/B (`check_traffic_light_ab.py`)용으로만 켠다.  
+레이스에서 light YOLO를 켜면 표지판 YOLO와 **둘이 같이** 돌아가 지연이 커질 수 있다.
 
 ```bash
-export TRAFFIC_LIGHT_BACKEND=yolo_then_opencv   # default
-# opencv | yolo | yolo_then_opencv | opencv_then_yolo
+# race default (env optional — code default is already opencv)
+export TRAFFIC_LIGHT_BACKEND=opencv
 
+# A/B only (intentionally runs a second ONNX)
+export TRAFFIC_LIGHT_BACKEND=yolo
 PYTHONPATH=src/inference python3 scripts/check_traffic_light_ab.py --webcam 0
 ```
-
-트랙에서 A/B 후, 잘 되는 쪽으로 `TRAFFIC_LIGHT_BACKEND`만 고정하면 됩니다.

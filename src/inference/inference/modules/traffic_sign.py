@@ -1,14 +1,17 @@
-"""Traffic light & sign detection facade — 담당: 장원정 / 박성준(YOLO light).
+"""Traffic light & sign detection facade — 담당: 장원정 / 박성준(YOLO light A/B).
 
-Turn signs: ``direction_sign`` + ``weights/sign_best.onnx`` (board / 원정 2-class).
-Traffic lights: OpenCV HSV and/or Sungjun ``sign_light_best_v5b.onnx`` (classes 2/3 only).
+Board CPU budget (D3-G): **at most one YOLO forward per frame**.
 
-Backend (env ``TRAFFIC_LIGHT_BACKEND``, default ``yolo_then_opencv``):
+* **Signs (required):** ``direction_sign`` + ``weights/sign_best.onnx`` (2-class)
+* **Lights (default):** OpenCV HSV — cheap, no second ONNX
+* **Lights YOLO (optional A/B only):** Sungjun ``sign_light_best_v5b`` classes 2/3
+  via ``TRAFFIC_LIGHT_BACKEND=yolo|…`` — do **not** enable in race laps while
+  the sign model is also running.
 
-* ``opencv`` — HSV only
-* ``yolo`` — Sungjun YOLO lights only
-* ``yolo_then_opencv`` — YOLO, then HSV if UNKNOWN
-* ``opencv_then_yolo`` — HSV, then YOLO if UNKNOWN
+Backend (env ``TRAFFIC_LIGHT_BACKEND``, default ``opencv``):
+
+* ``opencv`` — HSV only ← race default (1 YOLO = signs)
+* ``yolo`` / ``yolo_then_opencv`` / ``opencv_then_yolo`` — second YOLO; bench only
 """
 
 from __future__ import annotations
@@ -24,9 +27,14 @@ _direction_detector_available = True
 
 
 def _light_backend() -> str:
-    raw = os.environ.get('TRAFFIC_LIGHT_BACKEND', 'yolo_then_opencv').strip().lower()
+    # Default opencv: keep the sole YOLO slot for mandatory direction signs.
+    raw = os.environ.get('TRAFFIC_LIGHT_BACKEND', 'opencv').strip().lower()
     allowed = {'opencv', 'yolo', 'yolo_then_opencv', 'opencv_then_yolo'}
-    return raw if raw in allowed else 'yolo_then_opencv'
+    return raw if raw in allowed else 'opencv'
+
+
+def _uses_light_yolo(backend: str | None = None) -> bool:
+    return (backend or _light_backend()) != 'opencv'
 
 
 def _detect_turn_safely(frame: np.ndarray) -> TurnSign:
@@ -55,7 +63,7 @@ def detect_signal(frame: np.ndarray) -> TrafficSignal:
         if signal is TrafficSignal.UNKNOWN:
             signal = detect_signal_yolo(frame)
         return signal
-    # yolo_then_opencv (default for A/B on track)
+    # yolo_then_opencv
     signal = detect_signal_yolo(frame)
     if signal is TrafficSignal.UNKNOWN:
         signal = detect_signal_opencv(frame)
@@ -63,12 +71,13 @@ def detect_signal(frame: np.ndarray) -> TrafficSignal:
 
 
 def detect_signal_both(frame: np.ndarray) -> dict[str, object]:
-    """Run both backends for track-side A/B (does not change driving)."""
+    """Run both light backends for offline/webcam A/B (expensive — not for race)."""
     return {
         'opencv': detect_signal_opencv(frame),
         'yolo': detect_signal_yolo(frame),
         'selected': detect_signal(frame),
         'mode': _light_backend(),
+        'two_yolo_risk': _uses_light_yolo(),
     }
 
 

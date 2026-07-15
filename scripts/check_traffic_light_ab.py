@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Compare OpenCV vs Sungjun YOLO traffic-light backends side by side.
 
-Usage (on board / PC with camera or image):
+WARNING: enabling the light YOLO while the sign YOLO is also used means
+two ONNX forwards per frame — fine for a parked A/B check, not for race.
+
+Usage:
 
   PYTHONPATH=src/inference python3 scripts/check_traffic_light_ab.py --image frame.jpg
   PYTHONPATH=src/inference python3 scripts/check_traffic_light_ab.py --webcam 0
