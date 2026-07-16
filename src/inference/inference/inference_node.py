@@ -79,12 +79,20 @@ class InferenceNode(Node):
         # Monitor BEV overlays (lane paint + drivable road) at this rate.
         self.declare_parameter('bev_debug_hz', 5.0)
         self.declare_parameter(
-            'bev_lane_topic', '/debug/bev/lane/compressed'
+            'bev_lane_topic', '/debug/bev/white/compressed'
         )
         self.declare_parameter(
-            'bev_road_topic', '/debug/bev/road/compressed'
+            'bev_road_topic', '/debug/bev/in/compressed'
+        )
+        self.declare_parameter(
+            'bev_out_topic', '/debug/bev/out/compressed'
         )
         self.declare_parameter('publish_bev_debug', True)
+        # Board bringup: when traffic_pass and planner would send ~0 throttle
+        # (path_lost / wait), still crawl so ESC + monitor show motion.
+        self.declare_parameter('bringup_crawl_throttle', 0.20)
+        self.declare_parameter('drive_debug_log', True)
+        self.declare_parameter('drive_debug_hz', 2.0)
 
         self.vehicle_config_file = os.path.expanduser(
             str(self.get_parameter('vehicle_config_file').value)
@@ -114,7 +122,17 @@ class InferenceNode(Node):
         self.bev_debug_hz = max(0.5, float(self.get_parameter('bev_debug_hz').value))
         bev_lane_topic = str(self.get_parameter('bev_lane_topic').value)
         bev_road_topic = str(self.get_parameter('bev_road_topic').value)
+        bev_out_topic = str(self.get_parameter('bev_out_topic').value)
         self._last_bev_debug_sec: float | None = None
+        self._traffic_pass = bool(traffic_pass)
+        self.bringup_crawl_throttle = float(
+            np.clip(float(self.get_parameter('bringup_crawl_throttle').value), 0.0, 1.0)
+        )
+        self.drive_debug_log = bool(self.get_parameter('drive_debug_log').value)
+        self.drive_debug_hz = max(0.2, float(self.get_parameter('drive_debug_hz').value))
+        self._last_drive_debug_sec: float | None = None
+        self._bev_publish_ok = False
+        self._bev_skip_reason = 'not_yet'
 
         if publish_hz <= 0.0:
             raise ValueError('publish_hz must be greater than 0')
@@ -185,6 +203,9 @@ class InferenceNode(Node):
         self.bev_road_pub = self.create_publisher(
             CompressedImage, bev_road_topic, jpeg_qos
         )
+        self.bev_out_pub = self.create_publisher(
+            CompressedImage, bev_out_topic, jpeg_qos
+        )
         self.create_timer(1.0 / publish_hz, self.publish_control)
 
         self.get_logger().info(
@@ -196,7 +217,7 @@ class InferenceNode(Node):
             f'require_green={planner_config.require_green_to_start}, '
             f'stop_on_red={planner_config.stop_on_red}, '
             f'bev_debug={self.publish_bev_debug} '
-            f'({bev_lane_topic}, {bev_road_topic}), '
+            f'({bev_lane_topic}, {bev_road_topic}, {bev_out_topic}), '
             f'planner_config={planner_config_file}'
         )
         if traffic_pass:
@@ -247,10 +268,28 @@ class InferenceNode(Node):
 
     def run_pipeline(self, frame: np.ndarray) -> None:
         """Run synchronized perception/planning and publish debug outputs."""
-        now_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
-        output = self.planner.step(frame, now_sec=now_sec)
-        self.latest_command = output.command
-        self._last_frame_time_sec = now_sec
+        # Stamp used by the planner (sign hysteresis etc.). Watchdog must NOT use
+        # this — step() often takes > command_watchdog_sec, and using the pre-step
+        # time makes the heartbeat timer immediately overwrite /control with zeros.
+        step_now_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
+        output = self.planner.step(frame, now_sec=step_now_sec)
+        command = output.command
+        # traffic_pass bringup: path_lost often zeros throttle while steer updates.
+        if (
+            self._traffic_pass
+            and self.bringup_crawl_throttle > 0.0
+            and abs(float(command.throttle)) < 0.05
+            and str(output.decision) not in ('aruco_stop',)
+        ):
+            command = pipeline.ControlCommand(
+                steering=float(command.steering),
+                throttle=float(self.bringup_crawl_throttle),
+            )
+        self.latest_command = command
+        # Freshness for command_watchdog: time when this command became valid.
+        self._last_frame_time_sec = (
+            self.get_clock().now().nanoseconds / 1_000_000_000.0
+        )
         # Do not wait for the lower-rate heartbeat timer: a valid corner path
         # may exist for only one perception frame.
         self._publish_control_command(self.latest_command)
@@ -258,6 +297,28 @@ class InferenceNode(Node):
         self.publish_lane_detections(output.lane)
         self.publish_bev_debug_frames(output)
         self.publish_planner_debug(output)
+        self._log_drive_debug(output, command, self._last_frame_time_sec)
+
+    def _log_drive_debug(self, output, command, now_sec: float) -> None:
+        if not self.drive_debug_log:
+            return
+        period = 1.0 / self.drive_debug_hz
+        if (
+            self._last_drive_debug_sec is not None
+            and now_sec - self._last_drive_debug_sec < period
+        ):
+            return
+        self._last_drive_debug_sec = now_sec
+        dbg = output.debug or {}
+        self.get_logger().info(
+            f'[drive] thr={float(command.throttle):+.3f} '
+            f'str={float(command.steering):+.3f} '
+            f'state={output.state.value} decision={output.decision} '
+            f'path={output.path_source.value} '
+            f'traffic_pass={self._traffic_pass} '
+            f'signal={dbg.get("traffic_signal", "?")} '
+            f'bev={self._bev_publish_ok} ({self._bev_skip_reason})'
+        )
 
     @staticmethod
     def _overlay_mask_bgr(
@@ -265,7 +326,7 @@ class InferenceNode(Node):
         mask: np.ndarray,
         color: tuple[int, int, int],
         *,
-        alpha: float = 0.50,
+        alpha: float = 0.45,
     ) -> np.ndarray:
         out = bev.copy()
         if mask is None or getattr(mask, 'size', 0) == 0:
@@ -285,6 +346,22 @@ class InferenceNode(Node):
         ).astype(np.uint8)
         return out
 
+    @staticmethod
+    def _bev_hsv_mask(
+        bev: np.ndarray,
+        lo: np.ndarray,
+        hi: np.ndarray,
+        *,
+        morph: bool = True,
+    ) -> np.ndarray:
+        """Same as tune_hsv.make_mask: HSV on BEV pixels (+ light open)."""
+        hsv = cv2.cvtColor(bev, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, lo, hi)
+        if morph:
+            kernel = np.ones((3, 3), np.uint8)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        return mask
+
     def _publish_jpeg(self, pub, bgr: np.ndarray, *, frame_id: str) -> None:
         ok, buf = cv2.imencode('.jpg', bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         if not ok:
@@ -296,9 +373,41 @@ class InferenceNode(Node):
         msg.data = buf.tobytes()
         pub.publish(msg)
 
+    @staticmethod
+    def _mask_to_bgr(mask: np.ndarray, label: str) -> np.ndarray:
+        """Binary mask → BGR JPEG frame with a small label (no BEV underlay)."""
+        if mask is None or getattr(mask, 'size', 0) == 0:
+            out = np.zeros((64, 64, 3), dtype=np.uint8)
+        else:
+            out = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        px = int(np.count_nonzero(mask)) if mask is not None else 0
+        cv2.putText(
+            out,
+            f'{label}  px={px}',
+            (8, 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 200, 255),
+            1,
+            cv2.LINE_AA,
+        )
+        return out
+
+    def _course_drivable_mask(
+        self, frame: np.ndarray, *, prefer_yellow: bool
+    ) -> tuple[np.ndarray, np.ndarray, str]:
+        """Bag SSOT ego blob (extract_five): paint|road → morph 3/13 → bottom ego."""
+        from inference.modules.perception.blob.masks import course_ego_blob
+
+        white, ego, _bev = course_ego_blob(frame, prefer_yellow=prefer_yellow)
+        tag = 'IN' if prefer_yellow else 'OUT'
+        return white, np.asarray(ego, dtype=np.uint8), f'{tag} ego'
+
     def publish_bev_debug_frames(self, output) -> None:
-        """BEV + course lane paint, BEV + drivable road — for monitor panels."""
+        """Binary masks: white / IN ego / OUT ego (pre-PDC extract_five SSOT)."""
         if not self.publish_bev_debug:
+            self._bev_publish_ok = False
+            self._bev_skip_reason = 'disabled'
             return
         now_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
         period = 1.0 / self.bev_debug_hz
@@ -307,60 +416,44 @@ class InferenceNode(Node):
             and now_sec - self._last_bev_debug_sec < period
         ):
             return
-        dbg = getattr(output, 'lane_debug', None)
-        if dbg is None:
-            return
-        bev = np.asarray(getattr(dbg, 'bev', None))
-        if bev.ndim != 3 or bev.size == 0:
+
+        frame = self.latest_frame
+        if frame is None or getattr(frame, 'size', 0) == 0:
+            self._bev_publish_ok = False
+            self._bev_skip_reason = 'no_frame'
             return
 
-        prefer_yellow = bool(output.debug.get('prefer_yellow', False))
-        if str(output.debug.get('route', '')).lower() == 'out':
-            prefer_yellow = False
         try:
-            from inference.modules.perception.blob.rail_corridor import (
-                resolve_course_lane_mask,
+            white, in_blob, in_method = self._course_drivable_mask(
+                frame, prefer_yellow=True
             )
-
-            lane_mask, used_y = resolve_course_lane_mask(
-                getattr(dbg, 'white_bev', None),
-                getattr(dbg, 'yellow_bev', None),
-                prefer_yellow=prefer_yellow,
+            _w2, out_blob, out_method = self._course_drivable_mask(
+                frame, prefer_yellow=False
             )
-        except Exception:  # noqa: BLE001
-            lane_mask = getattr(dbg, 'white_bev', None)
-            used_y = False
-        lane_color = (0, 255, 255) if used_y else (255, 255, 255)  # BGR
-        lane_ov = self._overlay_mask_bgr(bev, lane_mask, lane_color)
-        cv2.putText(
-            lane_ov,
-            f'lane ({"Y" if used_y else "W"})',
-            (8, 18),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (0, 200, 255),
-            1,
-            cv2.LINE_AA,
-        )
+        except Exception as exc:  # noqa: BLE001
+            self._bev_publish_ok = False
+            self._bev_skip_reason = f'drivable:{exc}'
+            self.get_logger().warning(f'bev mask publish failed: {exc}')
+            return
 
-        road = getattr(dbg, 'road_clean', None)
-        if road is None or getattr(road, 'size', 0) == 0:
-            road = getattr(output.lane, 'drivable_area', None)
-        road_ov = self._overlay_mask_bgr(bev, road, (0, 220, 0))
-        cv2.putText(
-            road_ov,
-            'road / drivable',
-            (8, 18),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (0, 255, 0),
-            1,
-            cv2.LINE_AA,
+        self._publish_jpeg(
+            self.bev_lane_pub,
+            self._mask_to_bgr(white, 'white'),
+            frame_id='mask_white',
         )
-
-        self._publish_jpeg(self.bev_lane_pub, lane_ov, frame_id='bev_lane')
-        self._publish_jpeg(self.bev_road_pub, road_ov, frame_id='bev_road')
+        self._publish_jpeg(
+            self.bev_road_pub,
+            self._mask_to_bgr(in_blob, in_method),
+            frame_id='mask_in',
+        )
+        self._publish_jpeg(
+            self.bev_out_pub,
+            self._mask_to_bgr(out_blob, out_method),
+            frame_id='mask_out',
+        )
         self._last_bev_debug_sec = now_sec
+        self._bev_publish_ok = True
+        self._bev_skip_reason = 'ok'
 
     def publish_planner_debug(self, output) -> None:
         """Publish sign/fork decisions immediately and periodic snapshots."""
@@ -468,8 +561,19 @@ class InferenceNode(Node):
             or now_sec - self._last_frame_time_sec > self.planner.config.command_watchdog_sec
         )
         if stale:
-            self.planner.neutralize_steering()
-            command = pipeline.ControlCommand(steering=0.0, throttle=0.0)
+            if (
+                self._traffic_pass
+                and self.bringup_crawl_throttle > 0.0
+                and self._last_frame_time_sec is not None
+            ):
+                # Camera still alive but perception gap: keep crawl, don't hard-stop.
+                command = pipeline.ControlCommand(
+                    steering=float(self.latest_command.steering),
+                    throttle=float(self.bringup_crawl_throttle),
+                )
+            else:
+                self.planner.neutralize_steering()
+                command = pipeline.ControlCommand(steering=0.0, throttle=0.0)
         else:
             command = self.latest_command
         self._publish_control_command(command)

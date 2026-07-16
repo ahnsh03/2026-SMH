@@ -10,9 +10,9 @@ pure_pursuit:
   # Team R_min=0.385 m, D-Racer L=0.175 → δ_max=atan(L/R)≈0.4266 rad (24.44°).
   wheelbase_m: 0.175
   max_steer_angle_rad: 0.4266
-  # Slightly softer rate than sim if the servo hunts.
-  steering_rate_limit_per_sec: 10.0
-  steer_command_deadband: 0.03
+  # Match main_planner soft slew (servo hunt / snap).
+  steering_rate_limit_per_sec: 3.0
+  steer_command_deadband: 0.04
 
 speed:
   # Was 0.22 (often no roll on D-Racer). Match main_planner.yaml board cruise.

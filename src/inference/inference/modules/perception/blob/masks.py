@@ -153,9 +153,7 @@ def _red_inrange(hsv: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     return cv2.bitwise_or(main, cv2.inRange(hsv, wrap_lo, wrap_hi))
 
 
-# Runtime BEV (camera HSV → warp). in_cam bottom-band red:
-#   frames ~97–110 ≥273 px (user 99–110; 97–98 stronger approach); 111=0.
-# Frame 38 has ~700 red but all in upper BEV — require bottom band.
+# Kept for tests / diagnostics; road fill SSOT no longer uses red-only gating.
 _MIN_RED_ROAD_PX = 250
 _RED_BOTTOM_Y_FRAC = 0.55
 
@@ -183,46 +181,118 @@ def compose_road_raw(
     red: np.ndarray,
     cyan1: np.ndarray,
     cyan2: np.ndarray,
-    yellow: np.ndarray,
+    yellow: np.ndarray | None = None,
     *,
-    prefer_yellow: bool,
+    prefer_yellow: bool = False,
     keep_near_fn=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Build ``road_raw`` / cyan from channel masks.
+    """Build ``road_raw`` = black_near | red | cyan_near (pre-PDC / bag SSOT).
 
-    Rules (2026-07-16):
-      - red asphalt ≥ ``_MIN_RED_ROAD_PX`` in lower BEV → ``road_raw = red`` only
-      - cyan2 (``black_cyan_2``) only on IN (``prefer_yellow``)
-      - cyan1 (``black_cyan``) skipped when yellow lane is visible
-      - else ``road_raw = black_near | cyan_near`` (+ sparse red is a no-op OR)
-
-    Returns ``(road_raw, cyan_near, cyan_raw_selected)``.
+    Cyan1∨cyan2 → near-ego CC before morph. ``prefer_yellow`` / ``yellow`` are
+    API-compat only and do not gate fill (camera-retune gates removed).
     """
 
+    del yellow, prefer_yellow
     from inference.modules.perception.blob.morph_blob import keep_near_floor_blob
-    from inference.modules.perception.blob.rail_corridor import yellow_lane_present
 
     near = keep_near_fn or keep_near_floor_blob
     shape = black.shape if getattr(black, 'size', 0) else red.shape
     empty = np.zeros(shape, dtype=np.uint8)
 
-    if red_road_present(red):
-        return red.copy(), empty, empty
-
     cyan_sel = empty.copy()
-    if not yellow_lane_present(yellow):
-        if cyan1 is not None and getattr(cyan1, 'size', 0):
-            cyan_sel = cv2.bitwise_or(cyan_sel, cyan1)
-    if prefer_yellow and cyan2 is not None and getattr(cyan2, 'size', 0):
+    if cyan1 is not None and getattr(cyan1, 'size', 0):
+        cyan_sel = cv2.bitwise_or(cyan_sel, cyan1)
+    if cyan2 is not None and getattr(cyan2, 'size', 0):
         cyan_sel = cv2.bitwise_or(cyan_sel, cyan2)
-
     cyan = near(cyan_sel) if np.any(cyan_sel) else empty
+
     road = black.copy() if getattr(black, 'size', 0) else empty.copy()
-    if getattr(cyan, 'size', 0):
-        road = cv2.bitwise_or(road, cyan)
     if getattr(red, 'size', 0) and np.any(red):
         road = cv2.bitwise_or(road, red)
+    if getattr(cyan, 'size', 0):
+        road = cv2.bitwise_or(road, cyan)
     return road, cyan, cyan_sel
+
+
+def _bev_channel_mask(
+    bev: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    *,
+    morph_open: bool = True,
+) -> np.ndarray:
+    """HSV inRange on already-warped BEV (tune_hsv / extract_five)."""
+
+    hsv = cv2.cvtColor(bev, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, lo, hi)
+    if morph_open:
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    return mask
+
+
+def course_ego_blob(
+    frame: np.ndarray,
+    *,
+    prefer_yellow: bool,
+    open_k: int = 3,
+    close_k: int = 13,
+    max_hole_px: int = 3000,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Bag SSOT ego blob: paint|road → morph open3/close13 → bottom ego.
+
+    Matches ``viz_raw_hsv_masks.extract_five`` (pre-PDC / race SSOT). Returns
+    ``(white_mask, ego_blob, bev)``.
+    """
+
+    from inference.modules.perception.blob.morph_blob import (
+        keep_bottom_ego_blob,
+        keep_near_floor_blob,
+        morph_clean_road,
+    )
+    from inference.modules.perception.blob.rail_corridor import (
+        resolve_course_lane_mask,
+    )
+
+    if frame is None or getattr(frame, 'size', 0) == 0:
+        empty = np.empty((0, 0), dtype=np.uint8)
+        return empty, empty, np.empty((0, 0, 3), dtype=np.uint8)
+
+    h, w = frame.shape[:2]
+    ensure_ipm_maps(w, h)
+    bounds = hsv_bounds()
+    bev = warp_bgr(frame)
+
+    white = _bev_channel_mask(bev, bounds['white'][0], bounds['white'][1])
+    yellow = _bev_channel_mask(bev, bounds['yellow'][0], bounds['yellow'][1])
+    black_raw = _bev_channel_mask(
+        bev, bounds['black_road'][0], bounds['black_road'][1], morph_open=False
+    )
+    black = keep_near_floor_blob(black_raw)
+    red = _bev_channel_mask(bev, bounds['red_road'][0], bounds['red_road'][1])
+    cyan1 = _bev_channel_mask(
+        bev, bounds['black_cyan'][0], bounds['black_cyan'][1], morph_open=False
+    )
+    cyan2 = _bev_channel_mask(
+        bev, bounds['black_cyan_2'][0], bounds['black_cyan_2'][1], morph_open=False
+    )
+    cyan = keep_near_floor_blob(cv2.bitwise_or(cyan1, cyan2))
+    road = cv2.bitwise_or(cv2.bitwise_or(black, red), cyan)
+
+    paint, _used = resolve_course_lane_mask(
+        white, yellow, prefer_yellow=bool(prefer_yellow)
+    )
+    if paint is None or getattr(paint, 'size', 0) == 0:
+        paint = np.zeros_like(road)
+    lane_road = cv2.bitwise_or(paint, road)
+    cleaned = morph_clean_road(
+        lane_road,
+        open_k=int(open_k),
+        close_k=int(close_k),
+        max_hole_px=int(max_hole_px),
+    )
+    ego = keep_bottom_ego_blob(cleaned)
+    return white, ego, bev
 
 
 def extract_bev_masks(
@@ -232,10 +302,12 @@ def extract_bev_masks(
 ) -> dict[str, np.ndarray]:
     """Return BEV uint8 masks: white, yellow, black, red, cyan, road_raw, bev.
 
-    ``road_raw`` via :func:`compose_road_raw` (red-only / course cyan gates).
-    Black and selected cyan use near-robot CC *before* road morph.
+    ``road_raw`` = black_near | red | cyan_near — near-robot CC on black and cyan
+    *before* road morph (pre-PDC / bag SSOT). ``prefer_yellow`` kept for call-site
+    compat; it does not alter road fill.
     """
 
+    del prefer_yellow
     from inference.modules.perception.blob.morph_blob import keep_near_floor_blob
 
     if frame is None or frame.size == 0:
@@ -292,7 +364,7 @@ def extract_bev_masks(
         cyan1,
         cyan2,
         yellow,
-        prefer_yellow=prefer_yellow,
+        prefer_yellow=False,
         keep_near_fn=keep_near_floor_blob,
     )
     bev = warp_bgr(frame)

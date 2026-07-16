@@ -1392,12 +1392,12 @@ class MainPlanner:
         update_ema: bool = True,
         use_path_correction_override: bool | None = None,
     ) -> PursuitResult:
-        """Free-space mask COM proportional steer (limo_sim BEV follower style).
+        """Soft ego-blob mask pursuit (bag SSOT region follower).
 
-        Uses Metric-IPM ``drivable_area``. Optional ``color_path`` (course
-        white/yellow centerline in base_link) constrains COM via
-        ``mask_corridor_mode`` so OUT/IN forks do not average into the wrong
-        course. CTE metrics always prefer the color path when present.
+        Uses Metric-IPM ``drivable_area`` (``course_ego_blob`` / paint|road →
+        morph → bottom ego). Optional ``color_path`` constrains via
+        ``mask_corridor_mode`` at forks. CTE metrics prefer color path when
+        present.
         """
         import cv2
         from inference.modules import lane_detection as ld
@@ -1702,12 +1702,17 @@ class MainPlanner:
         e_y_m = -(float(cx) - half_w) * mpp
         if law == 'sim_v2':
             # D-Racer: (cx-half)/W · π · k  ≡  -angular_z of limo_sim_code_v2.
+            # Soft follow: deadband on tiny COM noise, then tanh soft-sat so
+            # mid-offset does not slam full-lock before EMA/rate-limit.
             w_px = float(max(width - 1, 1))
+            offset = (float(cx) - half_w) / w_px
+            # error_deadband is hybrid-scale (~error_norm); map to /W (~half).
+            db = 0.5 * float(self.config.mask_error_deadband)
+            e = math.copysign(max(0.0, abs(offset) - db), offset)
+            raw_lin = e * math.pi * self.config.mask_steer_k
             raw_p = float(
                 np.clip(
-                    ((float(cx) - half_w) / w_px)
-                    * math.pi
-                    * self.config.mask_steer_k,
+                    math.tanh(raw_lin),
                     -self.config.max_steering_command,
                     self.config.max_steering_command,
                 )
@@ -1793,6 +1798,9 @@ class MainPlanner:
             paint_add = paint_w * (float(cte_steering) + float(heading_steering))
 
         raw = float(filtered) + float(paint_add)
+        dead = float(self.config.steer_command_deadband)
+        if dead > 0.0 and abs(raw) < dead:
+            raw = 0.0
         dt = self.config.nominal_control_dt_sec if dt_sec is None else max(0.0, dt_sec)
         if apply_rate_limit:
             steered = self._apply_rate_limited_steering(raw, dt)

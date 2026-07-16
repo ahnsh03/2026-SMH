@@ -34,8 +34,8 @@ IMAGE_DISPLAY_HEIGHT: 360
 # true: monitor shows BEV debug panels (lane + road from inference).
 # false: less Wi-Fi load for pure lap runs.
 OPENCV_DEBUG_MODE: true
-# Remap Kit OpenCV slots → team Metric-IPM HSV overlays (inference_node).
-OPENCV_GRAYSCALE_TOPIC: /debug/bev/lane/compressed
-OPENCV_BLUR_TOPIC: /debug/bev/road/compressed
-# Unused third panel (empty unless something publishes here).
-OPENCV_EDGE_TOPIC: /debug/bev/unused/compressed
+# Remap Kit OpenCV slots → binary HSV masks (inference_node).
+# Panel order: white / IN (yellow+road) / OUT (white+road).
+OPENCV_GRAYSCALE_TOPIC: /debug/bev/white/compressed
+OPENCV_BLUR_TOPIC: /debug/bev/in/compressed
+OPENCV_EDGE_TOPIC: /debug/bev/out/compressed

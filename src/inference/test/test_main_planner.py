@@ -1619,11 +1619,16 @@ def test_load_planner_config_has_track_and_stanley():
     cfg = load_planner_config(route_mode='out')
     assert cfg.track_half_width_m > 0.0
     assert cfg.stanley_k_cte > 0.0
+    # Soft ego-blob follow pack (main_planner.yaml).
     assert cfg.stanley_k_cte == 1.0
     assert cfg.stanley_k_yaw == 1.2
-    assert cfg.stanley_steer_alpha == 0.25
+    assert cfg.stanley_steer_alpha == 0.28
     assert cfg.circle_tracker == 'pp'
-    assert cfg.roundabout_lookahead_m == 0.45
+    assert cfg.roundabout_lookahead_m == 0.55
+    assert cfg.normal_tracker == 'mask_p'
+    assert cfg.mask_center_mode == 'row_mid'
+    assert cfg.mask_steer_k == 1.30
+    assert cfg.cruise_throttle == 0.24
 
 
 def test_traffic_pass_skips_green_wait_and_red_stop():

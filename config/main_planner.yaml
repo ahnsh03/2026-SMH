@@ -27,12 +27,12 @@ route:
   # IN: yellow-first for roundabout paint. OUT forces white in code.
   prefer_yellow: true
 pure_pursuit:
-  # Trusted geometry (R_min SSOT) — soft gains for low-speed lap follow.
-  lookahead_m: 0.70
-  curve_lookahead_m: 0.50
+  # Soft fork/circle PP — ego-blob mask_p is primary on NORMAL.
+  lookahead_m: 0.75
+  curve_lookahead_m: 0.55
   curvature_full_scale: 0.8
-  lookahead_shrink_rate_m: 0.20
-  lookahead_grow_rate_m: 0.08
+  lookahead_shrink_rate_m: 0.18
+  lookahead_grow_rate_m: 0.06
   curvature_near_m: 0.30
   curvature_mid_m: 0.60
   curvature_far_m: 0.90
@@ -40,48 +40,46 @@ pure_pursuit:
   near_path_extrapolation_max_m: 0.35
   # board/race-control: D-Racer real-car geometry ONLY (not LIMO/Gazebo).
   # L=0.175 m, R_min=0.385 m → δ_max=atan(L/R)≈0.4266 rad (≈24.44°).
-  # Re-check with joystick full-lock later; do not mix sim L=0.24 / δ=0.5574.
   wheelbase_m: 0.175
   max_steer_angle_rad: 0.4266
   max_steering_command: 1.0
-  steering_rate_limit_per_sec: 10.0
-  path_lost_steering_return_rate_per_sec: 4.0
+  # ~0.40/frame @ 10 Hz — keep lane; was lagging off ego center.
+  steering_rate_limit_per_sec: 4.0
+  path_lost_steering_return_rate_per_sec: 2.5
   nominal_control_dt_sec: 0.10
   cte_gain: 0.10
-  cte_softening_m: 0.20
+  cte_softening_m: 0.22
   cte_deadband_m: 0.02
-  max_cte_steering: 0.22
-  heading_gain: 0.30
-  heading_preview_m: 0.45
+  max_cte_steering: 0.20
+  heading_gain: 0.24
+  heading_preview_m: 0.50
   heading_sample_span_m: 0.15
-  max_heading_steering: 0.25
+  max_heading_steering: 0.20
   steer_command_deadband: 0.03
 
 speed:
-  # D-Racer needs more than LIMO-sim crawl; 0.22 often sits below static friction
-  # (steer twitches, car never rolls). Raise further if still stuck on carpet.
-  cruise_throttle: 0.32
-  curve_throttle: 0.20
-  curve_steering_threshold: 0.28
+  # -0.02 vs prior pack; give steering headroom to hold center.
+  cruise_throttle: 0.24
+  curve_throttle: 0.18
+  curve_steering_threshold: 0.25
   default_throttle: 0.0
-  error_speed_cte_full_m: 0.20
-  error_speed_steer_full: 0.50
-  error_speed_min_scale: 0.55
+  error_speed_cte_full_m: 0.18
+  error_speed_steer_full: 0.42
+  error_speed_min_scale: 0.45
 
-# NORMAL: free-space mask COM (sim_v2) on blob road_clean — no lane ribbon.
-# Switch to stanley|pp only for paint-path A/B. Fork still PP when forkish.
+# NORMAL: ego-blob row-mid P — responsive hold, not laggy soft.
+# Fork still PP when forkish.
 tracker:
   normal: mask_p
 
-# Phase A: temporal lateral track + half-width path hold (shared by mask/stanley).
+# Faster lateral track so COM error does not lag behind the car.
 track_state:
-  err_alpha: 0.30
-  err_max_jump: 0.32
-  path_y_alpha: 0.28
+  err_alpha: 0.35
+  err_max_jump: 0.28
+  path_y_alpha: 0.30
   path_y_max_jump_m: 0.10
   half_width_m: 0.175
   enable_path_hold: true
-  # Phase C real-car: set 0.06–0.12 if hunting remains after trim/geometry.
   delay_pred_sec: 0.0
   throttle_speed_scale_mps: 1.0
 
@@ -89,42 +87,42 @@ track_state:
 stanley:
   k_cte: 1.0
   k_yaw: 1.2
-  v_soft: 0.18
-  curvature_ff_gain: 0.35
-  steer_alpha: 0.25
+  v_soft: 0.16
+  curvature_ff_gain: 0.32
+  steer_alpha: 0.28
 
 mask_pursuit:
-  # limo_sim_code_v2 recipe on road_clean: largest-blob area COM + simple P.
-  # No soft corridor / far_blend / temporal COM hold (those lagged corners).
-  # IMU not required — same as v2/minyong (vision lateral error only).
+  # Follow course_ego_blob (paint|road → morph 3/13 → bottom ego).
+  # Higher k / faster EMA / looser rate — hold center without waiting.
   # steer_law: sim_v2 | image_p | lateral_atan
   # center_mode: area | row_mid | dist_ridge
   steer_law: sim_v2
-  steer_k: 2.0
-  steer_alpha: 0.40
-  near_band_ratio: 0.85
-  far_band_ratio: 0.95
-  far_blend: 0.0
+  steer_k: 1.30
+  steer_alpha: 0.28
+  near_band_ratio: 0.78
+  far_band_ratio: 0.92
+  # Slight far bias for earlier bend hold.
+  far_blend: 0.18
   use_path_correction: false
-  # Drivable COM first; when paint is clean/strong, pull toward course CTE+heading.
-  # w = paint_blend_max * smoothstep(path_conf, lo, hi)
-  paint_blend_max: 0.40
-  paint_blend_lo: 0.25
-  paint_blend_hi: 0.60
-  center_mode: area
-  erode_px: 0
+  # Mild paint pull when centerline confidence is high.
+  paint_blend_max: 0.28
+  paint_blend_lo: 0.28
+  paint_blend_hi: 0.65
+  center_mode: row_mid
+  erode_px: 1
   lane_width_m: 0.35
   single_side_width_ratio: 0.72
-  occlusion_hold_frames: 5
-  error_deadband: 0.08
+  occlusion_hold_frames: 8
+  # Small deadband — react before offset grows.
+  error_deadband: 0.04
   blend_error_lo: 0.12
   blend_error_hi: 0.50
   blend_curvature_lo: 0.35
   blend_curvature_hi: 1.00
-  hybrid_steer_alpha: 0.28
-  min_area_px: 100.0
-  curve_steer_threshold: 0.35
-  curve_speed_scale: 0.80
+  hybrid_steer_alpha: 0.25
+  min_area_px: 120.0
+  curve_steer_threshold: 0.32
+  curve_speed_scale: 0.72
   corridor_mode: off
   corridor_near_fork: true
   corridor_half_width_m: 0.42
@@ -166,9 +164,10 @@ roundabout:
   circle_ignore_fork_for_control: true
   # Circle: paint centerline PP (yellow), not road_clean COM.
   circle_tracker: pp
-  # Tight circle: short look-ahead for ring curvature.
-  lookahead_m: 0.45
-  throttle: 0.14
+  # Slightly longer Ld softens circle PP snaps (still short enough for ring).
+  lookahead_m: 0.55
+  # Match slow ego-follow cruise; raise if ring stalls on carpet.
+  throttle: 0.18
 
 signals:
   # Mission: wait green → drive → ArUco stop (resume when gone) → red stop.
@@ -180,7 +179,9 @@ signals:
   traffic_pass: false
 
 safety:
-  command_watchdog_sec: 0.5
+  # Perception on this board often takes 0.8–1.5s/frame. Watchdog freshness is
+  # stamped AFTER step(); keep margin above one missed frame gap.
+  command_watchdog_sec: 2.0
 
 debug:
   log_state_changes: true
