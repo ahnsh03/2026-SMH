@@ -32,9 +32,10 @@ _CLASS_TO_SIGNAL = {
 }
 
 _INPUT_SIZE = 416
-_CONF_THRESHOLD = 0.25
+# Match team-new SignLightYolo defaults (lane_control sign_light_conf).
+_CONF_THRESHOLD = 0.35
 _IOU_THRESHOLD = 0.45
-_INTRA_OP_THREADS = 4
+_INTRA_OP_THREADS = 2
 _PAD_VALUE = 114
 
 _session = None

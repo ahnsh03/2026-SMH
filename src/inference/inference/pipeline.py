@@ -93,6 +93,7 @@ class PlannerConfig:
     yellow_valid_on_frames: int = 3
     path_lost_hold_frames: int = 2
     path_lost_stop_frames: int = 10
+    path_lost_crawl_throttle: float = 0.14
     fork_exit_off_frames: int = 8
     roundabout_entry_on_yellow: bool = True
     min_lap_time_sec: float = 5.0
@@ -117,6 +118,8 @@ class PlannerConfig:
     stop_on_red: bool = False
     # When false: still detect ArUco for debug, but keep lane follow (no hard stop).
     stop_on_aruco: bool = True
+    # WAIT_GREEN: if no green seen within this many seconds, assume green and go.
+    green_wait_timeout_sec: float = 30.0
     command_watchdog_sec: float = 0.5
     log_state_changes: bool = True
     log_decision_changes: bool = True
@@ -332,6 +335,9 @@ def load_planner_config(
             0, int(path_cfg.get('path_lost_hold_frames', 2))
         ),
         path_lost_stop_frames=max(1, int(path_cfg.get('path_lost_stop_frames', 10))),
+        path_lost_crawl_throttle=float(
+            np.clip(path_cfg.get('path_lost_crawl_throttle', 0.14), 0.0, 1.0)
+        ),
         fork_exit_off_frames=max(1, int(path_cfg.get('fork_exit_off_frames', 8))),
         roundabout_entry_on_yellow=bool(rb.get('entry_on_yellow', True)),
         min_lap_time_sec=max(0.0, float(rb.get('min_lap_time_sec', 5.0))),
@@ -358,6 +364,9 @@ def load_planner_config(
         require_green_to_start=require_green,
         stop_on_red=stop_red,
         stop_on_aruco=bool(signals.get('stop_on_aruco', True)),
+        green_wait_timeout_sec=max(
+            0.0, float(signals.get('green_wait_timeout_sec', 30.0))
+        ),
         command_watchdog_sec=max(0.1, float(safety.get('command_watchdog_sec', 0.5))),
         log_state_changes=bool(debug.get('log_state_changes', True)),
         log_decision_changes=bool(debug.get('log_decision_changes', True)),
@@ -547,6 +556,8 @@ class MainPlanner:
             self.config.branch_on_frames, self.config.branch_off_frames
         )
         self._in_fork_pass_count = 0
+        self._wait_green_started_at: float | None = None
+        self._green_assumed = False
         self._out_capture_latched = False
         self._last_fork_arm_reason = 'none'
         self._roundabout_started_at: float | None = None
@@ -1660,17 +1671,20 @@ class MainPlanner:
                 area = float(area + far[2])
 
         law = str(self.config.mask_steer_law or 'sim_v2').lower()
-        # sim_v2 matches limo_sim_code_v2: no temporal COM freeze (it lags corners).
-        if law != 'sim_v2' and update_ema and self._track_com_cx is not None:
+        # Mild temporal COM (including sim_v2) — kills in-lane flicker / wobble.
+        if update_ema and self._track_com_cx is not None:
             jump_u = abs(float(cx) - float(self._track_com_cx))
             max_jump_u = max(
                 6.0,
                 float(self.config.mask_lane_width_m) / max(mpp, 1e-6) * 0.45,
             )
             if jump_u > max_jump_u:
-                cx = 0.70 * float(self._track_com_cx) + 0.30 * float(cx)
+                cx = 0.75 * float(self._track_com_cx) + 0.25 * float(cx)
             elif single_ratio >= 0.55:
-                cx = 0.40 * float(self._track_com_cx) + 0.60 * float(cx)
+                cx = 0.45 * float(self._track_com_cx) + 0.55 * float(cx)
+            elif str(self.config.mask_steer_law or '').lower() == 'sim_v2':
+                # Stronger hold near center than corner-responsive pack.
+                cx = 0.60 * float(self._track_com_cx) + 0.40 * float(cx)
             else:
                 cx = 0.55 * float(self._track_com_cx) + 0.45 * float(cx)
         if update_ema:
@@ -1679,13 +1693,7 @@ class MainPlanner:
         # Image-center error: road left of center → need left (negative) steer.
         # normalized_error in [-1, 1]: +1 means road is fully to the right.
         error_norm_raw = (cx - half_w) / half_w
-        if law == 'sim_v2':
-            # External BEV P: trust one frame COM (EMA only on command below).
-            error_norm = float(error_norm_raw)
-            err_jumped = False
-            if update_ema:
-                self._track_e_norm = float(error_norm)
-        elif update_ema:
+        if update_ema:
             jump_lim = float(self.config.track_err_max_jump)
             if single_ratio >= 0.55:
                 jump_lim = min(jump_lim, 0.28)
@@ -1702,14 +1710,15 @@ class MainPlanner:
         e_y_m = -(float(cx) - half_w) * mpp
         if law == 'sim_v2':
             # D-Racer: (cx-half)/W · π · k  ≡  -angular_z of limo_sim_code_v2.
-            # Soft follow: deadband on tiny COM noise, then tanh soft-sat so
-            # mid-offset does not slam full-lock before EMA/rate-limit.
+            # Soft follow: deadband + near-center soft zone + tanh sat.
             w_px = float(max(width - 1, 1))
             offset = (float(cx) - half_w) / w_px
             # error_deadband is hybrid-scale (~error_norm); map to /W (~half).
             db = 0.5 * float(self.config.mask_error_deadband)
             e = math.copysign(max(0.0, abs(offset) - db), offset)
-            raw_lin = e * math.pi * self.config.mask_steer_k
+            # Soft zone: half authority near mid-lane (anti-wobble).
+            soft = 0.50 + 0.50 * min(1.0, abs(e) / 0.12)
+            raw_lin = e * soft * math.pi * self.config.mask_steer_k
             raw_p = float(
                 np.clip(
                     math.tanh(raw_lin),
@@ -1720,8 +1729,8 @@ class MainPlanner:
         elif law == 'image_p':
             raw_p = float(error_norm) * self.config.mask_steer_k
         else:
-            # Lateral target in meters (BEV +u=right). Road left of center → +e_y
-            # (path-left convention) → negative D-Racer steer after /δ_max.
+            # Geometry (docs/vehicle-geometry.md): e_y [m] → δ=atan(k e / v) / δ_max.
+            # Soft near center via cte_deadband; L/δ_max already in bicycle scale.
             e_eff = math.copysign(
                 max(0.0, abs(e_y_m) - float(self.config.cte_deadband_m)),
                 e_y_m,
@@ -1870,7 +1879,7 @@ class MainPlanner:
     def _mask_occlusion_hold_or_fail(
         self, dt_sec: float | None
     ) -> PursuitResult:
-        """Hold last mask steer briefly when free-space vanishes (corner FOV)."""
+        """Hold last mask steer + crawl when free-space flickers (breakthrough)."""
         hold_n = int(self.config.mask_occlusion_hold_frames)
         can_hold = (
             hold_n > 0
@@ -1878,19 +1887,22 @@ class MainPlanner:
             and (
                 self._track_com_cx is not None
                 or abs(float(self._steer_f)) > 0.02
+                or abs(float(self._steering)) > 0.02
             )
         )
         if not can_hold:
             return PursuitResult(False)
         self._mask_occlusion_hold_frames += 1
+        # Prefer last filtered command; fall back to rate-limited output.
         held = float(self._steer_f)
+        if abs(held) < 0.02:
+            held = float(self._steering)
         dt = (
             self.config.nominal_control_dt_sec
             if dt_sec is None
             else max(0.0, float(dt_sec))
         )
         steered = self._apply_rate_limited_steering(held, dt)
-        # Force curve throttle — do not blast cruise while free-space is gone.
         self._last_mask_debug = {
             **getattr(self, '_last_mask_debug', {}),
             'mask_occlusion_hold': True,
@@ -2474,8 +2486,20 @@ class MainPlanner:
             else max(0.0, now_sec - self._roundabout_started_at)
         )
 
-        if self.state is DrivingState.WAIT_GREEN and traffic.signal is TrafficSignal.GREEN:
-            self._set_state(DrivingState.NORMAL, now_sec)
+        if self.state is DrivingState.WAIT_GREEN:
+            if self._wait_green_started_at is None:
+                self._wait_green_started_at = float(now_sec)
+            timeout = float(self.config.green_wait_timeout_sec)
+            waited = float(now_sec) - float(self._wait_green_started_at)
+            if traffic.signal is TrafficSignal.GREEN:
+                self._green_assumed = False
+                self._set_state(DrivingState.NORMAL, now_sec)
+                self._wait_green_started_at = None
+            elif timeout > 0.0 and waited >= timeout:
+                # No green within timeout → assume clear and start.
+                self._green_assumed = True
+                self._set_state(DrivingState.NORMAL, now_sec)
+                self._wait_green_started_at = None
 
         color_path, path_source, path_confidence = self._color_path(lane)
 
@@ -2511,6 +2535,12 @@ class MainPlanner:
                 elif self.desired_turn is not TurnSign.UNKNOWN:
                     self._lock_fork_selection()
                     self._set_state(DrivingState.FORK_TURN, now_sec)
+                elif self._sign_candidate is TurnSign.UNKNOWN:
+                    # No sign seen / confirm in progress — competition default
+                    # (default_out_branch_rank=1 = RIGHT).
+                    self._lock_fork_selection()
+                    self._set_state(DrivingState.FORK_TURN, now_sec)
+                # else: sign candidate confirming — wait before locking.
 
             if self.state is DrivingState.ROUNDABOUT_CIRCLE:
                 enough_time = elapsed >= self.config.min_lap_time_sec
@@ -2866,25 +2896,19 @@ class MainPlanner:
             command = self._drive(pursuit)
         elif path_source is not PathSource.STOP:
             self._path_lost_frames += 1
-            if self._path_lost_frames <= self.config.path_lost_hold_frames:
-                # A one-frame centerline dropout must not erase a valid corner
-                # command before the actuator receives it. Hold briefly, then
-                # return toward neutral if perception does not recover.
-                held_steering = self._steering
-                loss_action = 'hold'
+            # Breakthrough: keep last steer + low crawl (do not yank to neutral).
+            held_steering = float(self._steering)
+            crawl = float(self.config.path_lost_crawl_throttle)
+            if self._path_lost_frames >= self.config.path_lost_stop_frames:
+                # Long blackout only — stop throttle (steer still held).
+                throttle = 0.0
+                loss_action = 'hold_stop'
             else:
-                held_steering = self._return_steering_to_neutral(dt_sec)
-                loss_action = 'return'
-            command = (
-                ControlCommand(
-                    float(np.clip(held_steering + self.steer_trim, -1.0, 1.0)),
-                    self.config.default_throttle,
-                )
-                if self._path_lost_frames >= self.config.path_lost_stop_frames
-                else ControlCommand(
-                    float(np.clip(held_steering + self.steer_trim, -1.0, 1.0)),
-                    self.config.curve_throttle,
-                )
+                throttle = crawl
+                loss_action = 'hold_crawl'
+            command = ControlCommand(
+                float(np.clip(held_steering + self.steer_trim, -1.0, 1.0)),
+                float(throttle),
             )
             path_source = PathSource.HOLD_PREVIOUS
             decision = f'{decision}_path_lost_{loss_action}'
@@ -2897,6 +2921,8 @@ class MainPlanner:
                 not self.config.require_green_to_start
                 and not self.config.stop_on_red
             ),
+            'green_assumed': bool(self._green_assumed),
+            'green_wait_timeout_sec': float(self.config.green_wait_timeout_sec),
             'state': self.state.value,
             'decision': decision,
             'mission_freeze': bool(mission_freeze),

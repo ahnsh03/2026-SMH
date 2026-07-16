@@ -2,8 +2,10 @@
 
 Course split (SSOT):
 
-* **OUT ``out_fork``:** camera turn **sign** AND ``out_fork_capture`` (tip+stretch)
-  together arm fork perception / ``FORK_TURN``. Sign picks L/R rank.
+* **OUT ``out_fork``:** ``out_fork_capture`` (tip+stretch) arms fork perception /
+  ``FORK_TURN``. Camera turn **sign** picks L/R when confirmed; on sign miss
+  competition uses ``default_out_branch_rank`` (RIGHT=1). Optional
+  ``require_sign`` can gate arming for stricter runs.
 * **IN ``in_exit``:** ``in_circle_fork_moment`` alone (no sign) arms keep/exit
   selection. Pass policy: **1st rising → right (rank 1) = circle keep**;
   **2nd rising → left (rank 0) = exit**. Enables legacy fork follow ON for

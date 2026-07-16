@@ -4,17 +4,15 @@
 route:
   # OUT forks/S-curve soft-corridor pack was unstable; IN + simple mask COM for now.
   mode: IN
-  # OUT/IN fork layers: 0 = left, 1 = right (direction sign selects).
-  default_out_branch_rank: 0
+  # OUT/IN fork layers: 0 = left, 1 = right. Competition default = RIGHT on sign miss.
+  default_out_branch_rank: 1
   # Confirm the same direction before latching it. Once a fork starts, its
   # direction/rank stays locked until the manoeuvre completes.
   sign_confirm_frames: 3
-  # OUT: only run fork/branch perception after a turn sign is seen.
-  # After the sign disappears (and after FORK_TURN ends), disable again —
-  # normal driving is white centerline / mask only.
-  out_fork_require_sign: true
+  # OUT: arm on capture even if sign was missed; sign still preferred when seen.
+  out_fork_require_sign: false
   out_fork_sign_hold_sec: 3.0
-  # Also require tip+stretch capture (score_out_fork_capture) with the sign.
+  # Also require tip+stretch capture (score_out_fork_capture).
   out_fork_require_capture: true
   # Keep false: forced_turn:= only chooses L/R rank, does not arm forks all lap.
   # Set true only for sign-less fork unit tests / rail review.
@@ -43,22 +41,22 @@ pure_pursuit:
   wheelbase_m: 0.175
   max_steer_angle_rad: 0.4266
   max_steering_command: 1.0
-  # ~0.40/frame @ 10 Hz — keep lane; was lagging off ego center.
-  steering_rate_limit_per_sec: 4.0
-  path_lost_steering_return_rate_per_sec: 2.5
+  # ~0.28/frame @ 10 Hz — hold center without in-lane snap/wobble.
+  steering_rate_limit_per_sec: 2.8
+  path_lost_steering_return_rate_per_sec: 2.0
   nominal_control_dt_sec: 0.10
-  cte_gain: 0.10
+  cte_gain: 0.08
   cte_softening_m: 0.22
-  cte_deadband_m: 0.02
-  max_cte_steering: 0.20
-  heading_gain: 0.24
+  cte_deadband_m: 0.025
+  max_cte_steering: 0.16
+  heading_gain: 0.20
   heading_preview_m: 0.50
   heading_sample_span_m: 0.15
-  max_heading_steering: 0.20
-  steer_command_deadband: 0.03
+  max_heading_steering: 0.16
+  steer_command_deadband: 0.04
 
 speed:
-  # -0.02 vs prior pack; give steering headroom to hold center.
+  # Competition cruise; soft ego-follow scales down on error/curve.
   cruise_throttle: 0.24
   curve_throttle: 0.18
   curve_steering_threshold: 0.25
@@ -67,17 +65,17 @@ speed:
   error_speed_steer_full: 0.42
   error_speed_min_scale: 0.45
 
-# NORMAL: ego-blob row-mid P — responsive hold, not laggy soft.
+# NORMAL: ego-blob row-mid — soft zone + temporal COM (anti-wobble).
 # Fork still PP when forkish.
 tracker:
   normal: mask_p
 
-# Faster lateral track so COM error does not lag behind the car.
+# Stronger temporal hold — kills in-lane COM flicker.
 track_state:
-  err_alpha: 0.35
-  err_max_jump: 0.28
-  path_y_alpha: 0.30
-  path_y_max_jump_m: 0.10
+  err_alpha: 0.22
+  err_max_jump: 0.20
+  path_y_alpha: 0.22
+  path_y_max_jump_m: 0.08
   half_width_m: 0.175
   enable_path_hold: true
   delay_pred_sec: 0.0
@@ -85,44 +83,43 @@ track_state:
 
 # Stanley-lite: yaw (lane angle) first, gentle CTE, EMA + rate-limit.
 stanley:
-  k_cte: 1.0
-  k_yaw: 1.2
+  k_cte: 0.90
+  k_yaw: 1.05
   v_soft: 0.16
-  curvature_ff_gain: 0.32
-  steer_alpha: 0.28
+  curvature_ff_gain: 0.28
+  steer_alpha: 0.20
 
 mask_pursuit:
-  # Follow course_ego_blob (paint|road → morph 3/13 → bottom ego).
-  # Higher k / faster EMA / looser rate — hold center without waiting.
+  # Geometry follow (docs/vehicle-geometry.md): e_y[m] → atan / δ_max.
+  # Already-coded lateral_atan — no new experimental tracker.
   # steer_law: sim_v2 | image_p | lateral_atan
   # center_mode: area | row_mid | dist_ridge
-  steer_law: sim_v2
-  steer_k: 1.30
-  steer_alpha: 0.28
+  steer_law: lateral_atan
+  steer_k: 1.0
+  steer_alpha: 0.20
   near_band_ratio: 0.78
   far_band_ratio: 0.92
-  # Slight far bias for earlier bend hold.
-  far_blend: 0.18
+  far_blend: 0.08
   use_path_correction: false
-  # Mild paint pull when centerline confidence is high.
-  paint_blend_max: 0.28
-  paint_blend_lo: 0.28
+  paint_blend_max: 0.12
+  paint_blend_lo: 0.30
   paint_blend_hi: 0.65
   center_mode: row_mid
   erode_px: 1
+  # Course free-space prior (~lane); tread T=0.12 used as half-width elsewhere.
   lane_width_m: 0.35
   single_side_width_ratio: 0.72
-  occlusion_hold_frames: 8
-  # Small deadband — react before offset grows.
-  error_deadband: 0.04
-  blend_error_lo: 0.12
-  blend_error_hi: 0.50
+  # Long hold so brief blob loss keeps last steer (breakthrough).
+  occlusion_hold_frames: 28
+  error_deadband: 0.05
+  blend_error_lo: 0.14
+  blend_error_hi: 0.55
   blend_curvature_lo: 0.35
   blend_curvature_hi: 1.00
-  hybrid_steer_alpha: 0.25
-  min_area_px: 120.0
-  curve_steer_threshold: 0.32
-  curve_speed_scale: 0.72
+  hybrid_steer_alpha: 0.18
+  min_area_px: 80.0
+  curve_steer_threshold: 0.35
+  curve_speed_scale: 0.70
   corridor_mode: off
   corridor_near_fork: true
   corridor_half_width_m: 0.42
@@ -138,10 +135,10 @@ path:
   white_min_confidence: 0.15
   yellow_min_confidence: 0.12
   yellow_valid_on_frames: 2
-  # Preserve a valid corner command across brief centerline flicker. Longer
-  # loss still returns steering to neutral and eventually stops throttle.
-  path_lost_hold_frames: 4
-  path_lost_stop_frames: 12
+  # Perception flicker: hold last steer + crawl (do not snap neutral / stop early).
+  path_lost_hold_frames: 20
+  path_lost_stop_frames: 80
+  path_lost_crawl_throttle: 0.14
   fork_exit_off_frames: 8
 
 roundabout:
@@ -170,12 +167,14 @@ roundabout:
   throttle: 0.18
 
 signals:
-  # Mission: wait green → drive → ArUco stop (resume when gone) → red stop.
+  # Competition: YOLO lights + ArUco + direction signs ALL ON.
+  # OpenCV HSV lights disabled (false positives on nearby colors).
+  # Mid-track only: traffic_pass:=true (skips green wait / red stop).
   require_green_to_start: true
+  # No green within this many seconds → assume green and start.
+  green_wait_timeout_sec: 30.0
   stop_on_red: true
   stop_on_aruco: true
-  # Mid-track tests without a light: launch with traffic_pass:=true
-  # (also sets require_green/stop_on_red false). YAML flag is optional.
   traffic_pass: false
 
 safety:

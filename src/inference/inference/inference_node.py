@@ -226,8 +226,11 @@ class InferenceNode(Node):
                 '(ArUco still stops) ***'
             )
         elif planner_config.require_green_to_start:
+            timeout = float(planner_config.green_wait_timeout_sec)
             self.get_logger().warn(
-                '*** WAIT_GREEN armed (throttle=0 until green). '
+                f'*** WAIT_GREEN armed (throttle=0 until YOLO green, '
+                f'or assume green after {timeout:.0f}s). '
+                'OpenCV HSV lights disabled. '
                 'Mid-track test: traffic_pass:=true ***'
             )
         if forced_turn_raw in ('left', 'right'):

@@ -1619,16 +1619,137 @@ def test_load_planner_config_has_track_and_stanley():
     cfg = load_planner_config(route_mode='out')
     assert cfg.track_half_width_m > 0.0
     assert cfg.stanley_k_cte > 0.0
-    # Soft ego-blob follow pack (main_planner.yaml).
-    assert cfg.stanley_k_cte == 1.0
-    assert cfg.stanley_k_yaw == 1.2
-    assert cfg.stanley_steer_alpha == 0.28
+    # Soft anti-wobble ego-blob pack (main_planner.yaml).
+    assert cfg.stanley_k_cte == 0.90
+    assert cfg.stanley_k_yaw == 1.05
+    assert cfg.stanley_steer_alpha == 0.20
     assert cfg.circle_tracker == 'pp'
     assert cfg.roundabout_lookahead_m == 0.55
     assert cfg.normal_tracker == 'mask_p'
     assert cfg.mask_center_mode == 'row_mid'
-    assert cfg.mask_steer_k == 1.30
+    assert cfg.mask_steer_k == 1.0
+    assert cfg.mask_steer_law == 'lateral_atan'
     assert cfg.cruise_throttle == 0.24
+    assert cfg.path_lost_crawl_throttle == 0.14
+    assert cfg.default_out_branch_rank == 1
+    assert cfg.out_fork_require_sign is False
+    assert cfg.require_green_to_start is True
+    assert cfg.stop_on_red is True
+    assert cfg.stop_on_aruco is True
+    assert cfg.green_wait_timeout_sec == 30.0
+
+
+def test_wait_green_timeout_assumes_green_and_starts():
+    """No green for green_wait_timeout_sec → leave WAIT_GREEN as if green."""
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=np.empty((0, 2), dtype=np.float32),
+        white_confidence=0.9,
+        yellow_confidence=0.0,
+        white_visible=True,
+        yellow_visible=False,
+        fork_active=False,
+        yellow_crossing_line=False,
+        out_fork_capture=False,
+        in_circle_fork_moment=False,
+        branches=(),
+        drivable_area=np.ones((40, 40), dtype=np.uint8) * 255,
+        meters_per_pixel=0.01,
+        x_forward_max=1.0,
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.OUT,
+            require_green_to_start=True,
+            green_wait_timeout_sec=30.0,
+            stop_on_red=True,
+            stop_on_aruco=False,
+            normal_tracker='pp',
+            min_points=5,
+            mask_require_color_path=False,
+            steering_rate_limit_per_sec=100.0,
+        )
+    )
+    assert planner.state is DrivingState.WAIT_GREEN
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    with patch(
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
+    ), patch(
+        'inference.pipeline.traffic_sign.detect',
+        return_value=TrafficResult(signal=TrafficSignal.UNKNOWN),
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        early = planner.step(frame, now_sec=1.0)
+        assert early.state is DrivingState.WAIT_GREEN
+        assert early.decision == 'wait_green'
+        late = planner.step(frame, now_sec=31.5)
+    assert late.state is DrivingState.NORMAL
+    assert planner._green_assumed is True
+    assert late.debug.get('green_assumed') is True
+
+
+def test_out_fork_sign_miss_defaults_to_right():
+    """Competition: fork visible, no sign → lock default_out_branch_rank (RIGHT=1)."""
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=np.empty((0, 2), dtype=np.float32),
+        white_confidence=0.9,
+        yellow_confidence=0.0,
+        white_visible=True,
+        yellow_visible=False,
+        fork_active=True,
+        yellow_crossing_line=False,
+        out_fork_capture=True,
+        in_circle_fork_moment=False,
+        branches=(
+            SimpleNamespace(points=path, confidence=0.9, lateral_rank=0),
+            SimpleNamespace(points=path, confidence=0.9, lateral_rank=1),
+        ),
+        drivable_area=np.ones((40, 40), dtype=np.uint8) * 255,
+        meters_per_pixel=0.01,
+        x_forward_max=1.0,
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.OUT,
+            out_fork_require_sign=False,
+            out_fork_require_capture=True,
+            sign_confirm_frames=3,
+            branch_on_frames=1,
+            branch_off_frames=1,
+            min_points=5,
+            default_out_branch_rank=1,
+            require_green_to_start=False,
+            stop_on_aruco=False,
+            mask_require_color_path=False,
+            normal_tracker='pp',
+            steering_rate_limit_per_sec=100.0,
+        )
+    )
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    with patch(
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
+    ), patch(
+        'inference.pipeline.traffic_sign.detect',
+        return_value=TrafficResult(turn=TurnSign.UNKNOWN),
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        out = planner.step(frame, now_sec=1.0)
+    assert out.state is DrivingState.FORK_TURN
+    assert out.debug['selected_branch_rank'] == 1
+    assert planner._fork_selection_reason == 'default_unknown'
 
 
 def test_traffic_pass_skips_green_wait_and_red_stop():
