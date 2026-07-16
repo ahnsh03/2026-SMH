@@ -170,10 +170,13 @@ class InferenceNode(Node):
         self.aruco_debug_pub = self.create_publisher(String, aruco_debug_topic, 10)
         self.planner_debug_pub = self.create_publisher(String, planner_debug_topic, 10)
         self.control_pub = self.create_publisher(Control, control_topic, 10)
+        # Monitor subscribes with default RELIABLE (depth=10). BEST_EFFORT
+        # publishers never match → empty Grayscale/Blur panels.
+        # Match camera_node (RELIABLE) so /debug/bev/* shows on the web UI.
         jpeg_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
         self.bev_lane_pub = self.create_publisher(
@@ -200,6 +203,11 @@ class InferenceNode(Node):
             self.get_logger().warn(
                 '*** TRAFFIC_PASS active: skip WAIT_GREEN / red stop '
                 '(ArUco still stops) ***'
+            )
+        elif planner_config.require_green_to_start:
+            self.get_logger().warn(
+                '*** WAIT_GREEN armed (throttle=0 until green). '
+                'Mid-track test: traffic_pass:=true ***'
             )
         if forced_turn_raw in ('left', 'right'):
             # One more loud line so experimental runs are easy to confirm.
