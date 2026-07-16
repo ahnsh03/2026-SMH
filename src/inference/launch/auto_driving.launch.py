@@ -4,6 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def get_vehicle_config_path() -> str:
@@ -26,6 +27,7 @@ def generate_launch_description():
     vehicle_config_path = get_vehicle_config_path()
     planner_config_path = get_planner_config_path()
     route_mode = LaunchConfiguration('route_mode')
+    traffic_pass = LaunchConfiguration('traffic_pass')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -33,6 +35,15 @@ def generate_launch_description():
             default_value='',
             choices=['', 'in', 'out'],
             description='Optional route override; empty uses main_planner.yaml',
+        ),
+        DeclareLaunchArgument(
+            'traffic_pass',
+            default_value='false',
+            choices=['true', 'false'],
+            description=(
+                'Skip WAIT_GREEN and red stop for mid-track tests '
+                '(ArUco still stops)'
+            ),
         ),
         Node(
             package='camera',
@@ -93,6 +104,7 @@ def generate_launch_description():
                     'vehicle_config_file': vehicle_config_path,
                     'planner_config_file': planner_config_path,
                     'route_mode': route_mode,
+                    'traffic_pass': ParameterValue(traffic_pass, value_type=bool),
                     # ArUco 보드 테스트: ros2 topic echo /debug/aruco
                     'aruco_debug_topic': '/debug/aruco',
                     'planner_debug_topic': '/debug/planner',

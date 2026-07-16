@@ -16,4 +16,6 @@ mkdir -p external && ln -sfn ~/D-Racer-Kit external/D-Racer-Kit
 ./scripts/board_race_sync.sh --no-pull
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py route_mode:=in
+# 신호등 없이 중간 배치 테스트:
+# ros2 launch inference auto_driving.launch.py route_mode:=in traffic_pass:=true
 ```

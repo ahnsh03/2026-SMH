@@ -9,6 +9,7 @@ cd ~/2026-SMH-board   # 또는 PC worktree 2026-SMH-board
 ./scripts/board_race_sync.sh
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py route_mode:=in   # or out
+# 신호등 없이 트랙 중간 테스트: traffic_pass:=true  (초록 대기·빨간 정지 스킵, ArUco는 유지)
 # 모니터: http://<보드IP>:5000
 ```
 
@@ -30,10 +31,11 @@ ros2 launch inference auto_driving.launch.py route_mode:=in   # or out
 ## 미션 FSM
 
 1. `route_mode:=in|out`  
-2. 초록불 → 출발  
-3. OUT: S자·갈림 / IN: 회전교차로  
-4. ArUco 보이면 정지, 사라지면 재출발  
-5. 빨간불 → 정지  
+2. (테스트) `traffic_pass:=true` → 초록 대기/빨간 정지 스킵  
+3. 초록불 → 출발  
+4. OUT: S자·갈림 / IN: 회전교차로  
+5. ArUco 보이면 정지, 사라지면 재출발  
+6. 빨간불 → 정지  
 
 ## 실차 SSOT 요약
 

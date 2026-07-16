@@ -205,6 +205,7 @@ def load_planner_config(
     path: str | Path | None = None,
     *,
     route_mode: str | None = None,
+    traffic_pass: bool | None = None,
 ) -> PlannerConfig:
     cfg_path = Path(path).expanduser() if path else default_planner_config_path()
     data: dict[str, Any] = {}
@@ -233,6 +234,14 @@ def load_planner_config(
         prefer_yellow = bool(route.get('prefer_yellow', True))
     else:
         prefer_yellow = bool(route.get('prefer_yellow', False))
+    # Mid-track tests: skip green-wait and red-stop (ArUco still active).
+    require_green = bool(signals.get('require_green_to_start', False))
+    stop_red = bool(signals.get('stop_on_red', False))
+    if traffic_pass is True or (
+        traffic_pass is None and bool(signals.get('traffic_pass', False))
+    ):
+        require_green = False
+        stop_red = False
     return PlannerConfig(
         route_mode=mode,
         prefer_yellow=prefer_yellow,
@@ -346,8 +355,8 @@ def load_planner_config(
             rb.get('circle_ignore_fork_for_control', True)
         ),
         circle_tracker=str(rb.get('circle_tracker', 'pp') or 'pp').strip().lower(),
-        require_green_to_start=bool(signals.get('require_green_to_start', False)),
-        stop_on_red=bool(signals.get('stop_on_red', False)),
+        require_green_to_start=require_green,
+        stop_on_red=stop_red,
         stop_on_aruco=bool(signals.get('stop_on_aruco', True)),
         command_watchdog_sec=max(0.1, float(safety.get('command_watchdog_sec', 0.5))),
         log_state_changes=bool(debug.get('log_state_changes', True)),
@@ -2876,6 +2885,10 @@ class MainPlanner:
         debug = {
             'route': self.config.route_mode.value,
             'prefer_yellow': self.config.prefer_yellow,
+            'traffic_pass': (
+                not self.config.require_green_to_start
+                and not self.config.stop_on_red
+            ),
             'state': self.state.value,
             'decision': decision,
             'mission_freeze': bool(mission_freeze),

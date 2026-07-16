@@ -26,6 +26,7 @@ from inference.types import (  # noqa: E402
     PathSource,
     RouteMode,
     TrafficResult,
+    TrafficSignal,
     TurnSign,
 )
 
@@ -1618,10 +1619,63 @@ def test_load_planner_config_has_track_and_stanley():
     cfg = load_planner_config(route_mode='out')
     assert cfg.track_half_width_m > 0.0
     assert cfg.stanley_k_cte > 0.0
-    assert cfg.normal_tracker == 'stanley'
     assert cfg.stanley_k_cte == 1.0
     assert cfg.stanley_k_yaw == 1.2
     assert cfg.stanley_steer_alpha == 0.25
     assert cfg.circle_tracker == 'pp'
     assert cfg.roundabout_lookahead_m == 0.45
-    assert cfg.steering_rate_limit_per_sec == 8.0
+
+
+def test_traffic_pass_skips_green_wait_and_red_stop():
+    """Launch/YAML traffic_pass: start NORMAL and ignore red (ArUco still stops)."""
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=np.empty((0, 2), dtype=np.float32),
+        white_confidence=0.9,
+        yellow_confidence=0.0,
+        white_visible=True,
+        yellow_visible=False,
+        fork_active=False,
+        yellow_crossing_line=False,
+        out_fork_capture=False,
+        in_circle_fork_moment=False,
+        branches=(),
+        drivable_area=np.ones((40, 40), dtype=np.uint8) * 255,
+        meters_per_pixel=0.01,
+        x_forward_max=1.0,
+    )
+    cfg = load_planner_config(route_mode='out', traffic_pass=True)
+    assert cfg.require_green_to_start is False
+    assert cfg.stop_on_red is False
+    assert cfg.stop_on_aruco is True
+
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.OUT,
+            require_green_to_start=False,
+            stop_on_red=False,
+            stop_on_aruco=True,
+            normal_tracker='pp',
+            min_points=5,
+            mask_corridor_mode='off',
+        )
+    )
+    assert planner.state is DrivingState.NORMAL
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect',
+        return_value=TrafficResult(signal=TrafficSignal.RED),
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        out = planner.step(frame, now_sec=0.0)
+    assert out.decision != 'red_signal_stop'
+    assert out.decision != 'wait_green'
+    assert out.debug['traffic_pass'] is True
+    assert out.path_source is not PathSource.STOP

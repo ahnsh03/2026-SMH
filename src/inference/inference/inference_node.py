@@ -70,6 +70,8 @@ class InferenceNode(Node):
             'forced_turn',
             '',
         )  # left|right|'' — sim test override (IN: left=exit, right=stay)
+        # Mid-track board tests: skip WAIT_GREEN / red stop (ArUco still on).
+        self.declare_parameter('traffic_pass', False)
         self.declare_parameter('aruco_debug_log', True)
         self.declare_parameter('publish_hz', 10.0)
         self.declare_parameter('steer_trim', 0.0)
@@ -86,6 +88,16 @@ class InferenceNode(Node):
         planner_config_file = str(self.get_parameter('planner_config_file').value)
         route_mode = str(self.get_parameter('route_mode').value).strip() or None
         forced_turn_raw = str(self.get_parameter('forced_turn').value).strip().lower()
+        traffic_pass_raw = self.get_parameter('traffic_pass').value
+        if isinstance(traffic_pass_raw, str):
+            traffic_pass = traffic_pass_raw.strip().lower() in (
+                '1',
+                'true',
+                'yes',
+                'on',
+            )
+        else:
+            traffic_pass = bool(traffic_pass_raw)
         self.aruco_debug_log = bool(self.get_parameter('aruco_debug_log').value)
         publish_hz = float(self.get_parameter('publish_hz').value)
         self.steer_trim = float(self.load_steer_trim())
@@ -105,6 +117,7 @@ class InferenceNode(Node):
         planner_config = load_planner_config(
             planner_config_file,
             route_mode=route_mode,
+            traffic_pass=True if traffic_pass else None,
         )
         self.latest_frame: np.ndarray | None = None
         self.latest_command = pipeline.ControlCommand(
@@ -150,8 +163,16 @@ class InferenceNode(Node):
             f'image_topic={image_topic}, lane_topic={lane_topic}, '
             f'control_topic={control_topic}, route={planner_config.route_mode.value}, '
             f'forced_turn={forced_turn_raw or "-"}, '
+            f'traffic_pass={traffic_pass}, '
+            f'require_green={planner_config.require_green_to_start}, '
+            f'stop_on_red={planner_config.stop_on_red}, '
             f'planner_config={planner_config_file}'
         )
+        if traffic_pass:
+            self.get_logger().warn(
+                '*** TRAFFIC_PASS active: skip WAIT_GREEN / red stop '
+                '(ArUco still stops) ***'
+            )
         if forced_turn_raw in ('left', 'right'):
             # One more loud line so experimental runs are easy to confirm.
             self.get_logger().warn(
