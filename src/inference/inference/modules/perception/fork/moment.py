@@ -20,13 +20,34 @@ MID = (0.40, 0.70)
 NEAR = (0.70, 0.95)
 TOP20 = (0.0, 0.20)
 
-# IN circle keep/exit moment (§5.1.2)
-IN_FAR_DUALY_MIN = 70.0
-IN_MID_DUALY_MIN = 35.0
-IN_FAR_SEP_MIN = 55.0
-IN_YA2_RATIO_MIN = 0.20
-IN_FAR_DUALF_MIN = 70.0
-IN_SPAN_RATIO_MIN = 1.3
+# IN circle keep/exit moment — retuned 2026-07-16 on in_cam (HSV after camera change).
+# Keep cluster ~677–711 (roomy road + strong dual); exit tip ~1010–1012 (sparse yellow).
+IN_KEEP_FAR_DUALY_MIN = 25.0
+IN_KEEP_MID_DUALY_MIN = 30.0
+IN_KEEP_SEP_MIN = 120.0
+IN_KEEP_YA2_MIN = 0.50
+IN_KEEP_NEAR_DUALY_MAX = 30.0
+IN_KEEP_FAR_DUALF_MIN = 60.0
+IN_KEEP_SPAN_MIN = 1.15
+IN_KEEP_SPAN_MAX = 2.60
+IN_KEEP_Y_PX_MIN = 300
+IN_KEEP_Y_PX_MAX = 1100
+IN_KEEP_ROAD_PCT_MIN = 15.0
+
+IN_EXIT_FAR_DUALY_MIN = 5.0
+IN_EXIT_FAR_DUALY_MAX = 35.0
+IN_EXIT_MID_DUALY_MIN = 12.0
+IN_EXIT_SEP_MIN = 125.0
+IN_EXIT_YA2_MIN = 0.35
+IN_EXIT_NEAR_DUALY_MAX = 5.0
+IN_EXIT_FAR_DUALF_MIN = 70.0
+IN_EXIT_SPAN_MIN = 1.20
+IN_EXIT_SPAN_MAX = 2.00
+IN_EXIT_Y_PX_MIN = 250
+IN_EXIT_Y_PX_MAX = 550
+IN_EXIT_ROAD_PCT_MAX = 12.0
+
+# Soft = approach (either path, slightly looser).
 IN_SPAN_SOFT = 1.5
 IN_TOP_DUAL_FREE_SOFT = 60.0
 
@@ -215,22 +236,41 @@ def score_in_circle_fork_moment(
     span = median_span_px(free, *far) / max(median_span_px(free, *near), 1.0)
     ya2 = top_area_ratio(y, *far)
     ypct = 100.0 * float(y.mean())
+    y_px = int(np.count_nonzero(y))
+    road_pct = 100.0 * float(r.mean())
 
-    hard_base = (
-        far_dual_y >= IN_FAR_DUALY_MIN
-        and far_sep >= IN_FAR_SEP_MIN
-        and ya2 >= IN_YA2_RATIO_MIN
-        and mid_dual_y >= IN_MID_DUALY_MIN
+    # Keep = first circle fork (strong dual + filled road).
+    keep = (
+        far_dual_y >= IN_KEEP_FAR_DUALY_MIN
+        and mid_dual_y >= IN_KEEP_MID_DUALY_MIN
+        and far_sep >= IN_KEEP_SEP_MIN
+        and ya2 >= IN_KEEP_YA2_MIN
+        and near_dual_y <= IN_KEEP_NEAR_DUALY_MAX
+        and far_dual_f >= IN_KEEP_FAR_DUALF_MIN
+        and IN_KEEP_SPAN_MIN <= span <= IN_KEEP_SPAN_MAX
+        and IN_KEEP_Y_PX_MIN <= y_px <= IN_KEEP_Y_PX_MAX
+        and road_pct >= IN_KEEP_ROAD_PCT_MIN
     )
-    hard = (
-        hard_base
-        and far_dual_f >= IN_FAR_DUALF_MIN
-        and span >= IN_SPAN_RATIO_MIN
+    # Exit tip = second circle fork (sparse yellow, large sep, low road fill).
+    exit_tip = (
+        IN_EXIT_FAR_DUALY_MIN <= far_dual_y < IN_EXIT_FAR_DUALY_MAX
+        and mid_dual_y >= IN_EXIT_MID_DUALY_MIN
+        and far_sep >= IN_EXIT_SEP_MIN
+        and ya2 >= IN_EXIT_YA2_MIN
+        and near_dual_y <= IN_EXIT_NEAR_DUALY_MAX
+        and far_dual_f >= IN_EXIT_FAR_DUALF_MIN
+        and IN_EXIT_SPAN_MIN <= span <= IN_EXIT_SPAN_MAX
+        and IN_EXIT_Y_PX_MIN <= y_px <= IN_EXIT_Y_PX_MAX
+        and road_pct <= IN_EXIT_ROAD_PCT_MAX
     )
+    hard_base = keep
+    hard = keep or exit_tip
     soft = (
-        far_dual_y >= 55.0
-        and far_sep >= 45.0
-        and mid_dual_y >= 25.0
+        far_dual_y >= 5.0
+        and mid_dual_y >= 10.0
+        and far_sep >= 100.0
+        and ya2 >= 0.30
+        and far_dual_f >= 60.0
         and (span >= IN_SPAN_SOFT or top_dual_f >= IN_TOP_DUAL_FREE_SOFT)
     )
     boosted = hard and (

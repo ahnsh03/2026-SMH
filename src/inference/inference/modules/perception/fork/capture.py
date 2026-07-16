@@ -2,10 +2,9 @@
 
 Hierarchy (neither replaces the other):
 
-* ``moment`` (``score_out_fork_moment``) — white+road **tip / approach** (sparse;
-  labeled POS ~1758, ~1784).
-* ``ego`` (``score_out_ego_fork_shape``) — ego_blob **Y-stretch** (long window;
-  bag ~1690–1783 geometry ≈1696–1811).
+* ``moment`` (``score_out_fork_moment``) — white+road **tip / approach**
+* ``ego`` (``score_out_ego_fork_shape``) — ego_blob **Y-stretch** (out_cam
+  label window **1280–1313** after camera retune)
 
 Combined flags (per frame, no temporal debounce here):
 

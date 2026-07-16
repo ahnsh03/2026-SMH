@@ -28,27 +28,24 @@ def test_out_moment_rejects_empty():
 
 
 def test_in_moment_hits_on_synthetic_dual_yellow_and_free():
-    """Far dual yellow + dual free corridor + wide far span → hard."""
+    """Far dual yellow + dual free corridor + keep-path road fill → hard."""
 
     h, w = 200, 300
     yellow = np.zeros((h, w), dtype=np.uint8)
     road = np.zeros((h, w), dtype=np.uint8)
-    # Far/mid: two yellow rails with gap; free fill in roads between/around.
-    for v in range(0, int(h * 0.70)):
-        yellow[v, 40:55] = 1
-        yellow[v, 245:260] = 1
-        road[v, 20:280] = 1
-    # Near: single corridor (narrower) so span_ratio rises.
+    # Far/mid dual yellow rails (sep≈214) with limited pixel count.
+    for v in range(int(h * 0.05), int(h * 0.50)):
+        yellow[v, 40:45] = 1
+        yellow[v, 255:260] = 1
+        road[v, 30:270] = 1
+    # Near: wider road so span stays ≤ keep max (2.60).
     for v in range(int(h * 0.70), h):
-        yellow[v, 120:140] = 1
-        yellow[v, 160:180] = 1
-        road[v, 100:200] = 1
+        road[v, 70:230] = 1
 
     s = score_in_circle_fork_moment(yellow * 255, road * 255)
-    assert s.far_dual_yellow >= 70.0
+    assert s.far_dual_yellow >= 25.0
+    assert s.far_sep_yellow >= 120.0
     assert s.hard_base is True
-    assert s.far_dual_free >= 70.0
-    assert s.span_ratio >= 1.3
     assert s.hard is True
 
 

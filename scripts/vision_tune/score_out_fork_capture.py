@@ -375,11 +375,10 @@ def run_bag(
     tip_in_window = [t for t in tip if label_from - 20 <= t <= label_to + 50]
     print(f'tip near mission: {tip_in_window}')
 
-    # Expect at least one tip near labeled POS frames (1758/1784) when stride allows
-    tip_near_pos = any(abs(t - 1758) <= stride * 2 or abs(t - 1784) <= stride * 2 for t in tip)
-    if stride <= 5 and not tip_near_pos and tip:
-        # soft warn if stride skipped exact POS
-        print('WARN: no tip within ±stride of 1758/1784 (stride may skip)')
+    # Expect tip near labeled OUT fork window when stride allows.
+    tip_near_label = any(label_from - 20 <= t <= label_to + 50 for t in tip)
+    if stride <= 5 and tip and not tip_near_label:
+        print('WARN: tip hits exist but none near label window')
 
     if distant:
         print(f'FAIL distant capture FP: {distant}')
@@ -406,8 +405,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument('--config', type=Path, default=default_config_path())
     ap.add_argument('--course', default='out')
     ap.add_argument('--stride', type=int, default=5)
-    ap.add_argument('--label-from', type=int, default=1690)
-    ap.add_argument('--label-to', type=int, default=1783)
+    ap.add_argument('--label-from', type=int, default=1280)
+    ap.add_argument('--label-to', type=int, default=1313)
     ap.add_argument('--recall-dense', action='store_true')
     ap.add_argument('--csv', type=Path, default=None)
     ap.add_argument(

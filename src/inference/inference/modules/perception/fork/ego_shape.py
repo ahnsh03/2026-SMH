@@ -21,26 +21,27 @@ NEAR = (0.70, 1.00)
 TOP55 = (0.00, 0.55)
 
 # Gate C (default hard) — OUT BEV ego_blob.
-# Distant FP = 0 on out.mp4 stride-5; remaining extras are approach/exit bleed.
-SEP_FAR_MIN = 130.0
-W_FAR_MIN = 220.0
-WR_FN_MIN = 2.2
+# Recalibrated 2026-07-16 on out_cam label 1280–1313 (camera-retune masks).
+# Distant FP = 0 on out_cam stride probe; early bleed ~1268–1279 is approach.
+SEP_FAR_MIN = 150.0
+W_FAR_MIN = 200.0
+WR_FN_MIN = 1.75
 DUAL_FAR_MIN = 50
-DUAL_NEAR_MAX = 5
-MAX_RUN_MIN = 45
-COV_MIN = 30.0
-SOLID_MIN = 0.68
-SOLID_MAX = 0.82
+DUAL_NEAR_MAX = 50
+MAX_RUN_MIN = 40
+COV_MIN = 25.0
+SOLID_MIN = 0.65
+SOLID_MAX = 0.85
 
-# Soft / approach (Gate B): earlier onset (~1681), longer exit bleed.
-SOFT_SEP_FAR_MIN = 120.0
-SOFT_W_FAR_MIN = 200.0
-SOFT_WR_FN_MIN = 2.0
+# Soft / approach: earlier onset, longer exit bleed.
+SOFT_SEP_FAR_MIN = 140.0
+SOFT_W_FAR_MIN = 190.0
+SOFT_WR_FN_MIN = 1.60
 SOFT_DUAL_FAR_MIN = 40
-SOFT_MAX_RUN_MIN = 40
-SOFT_COV_MIN = 25.0
-SOFT_SOLID_MIN = 0.65
-SOFT_SOLID_MAX = 0.85
+SOFT_MAX_RUN_MIN = 35
+SOFT_COV_MIN = 22.0
+SOFT_SOLID_MIN = 0.62
+SOFT_SOLID_MAX = 0.88
 SOFT_MAX_SEP_MIN = 140.0
 
 

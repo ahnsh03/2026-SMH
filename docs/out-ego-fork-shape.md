@@ -9,8 +9,8 @@
 
 | 계층 | API | 입력 | 역할 | bag 상 위치 |
 |------|-----|------|------|-------------|
-| **Tip / moment** (기존 §5.1.3) | `score_out_fork_moment` | **white** + road | 흰 유도선/고어가 벌어지는 **직전·선단** | POS still `…_1758`, `…_1784` |
-| **Stretch** (ego Y) | `score_out_ego_fork_shape` | **ego_blob** | far 이중 lobe + near 단일 throat **구간** | 기하 ≈ **1696–1811** (라벨 1690–1783) |
+| **Tip / moment** (기존 §5.1.3) | `score_out_fork_moment` | **white** + road | 흰 유도선/고어가 벌어지는 **직전·선단** | out_cam tip near **1280–1313** |
+| **Stretch** (ego Y) | `score_out_ego_fork_shape` | **ego_blob** | far 이중 lobe + near 단일 throat **구간** | out_cam label **1280–1313** (접근 1268–) |
 
 ```
 bag JPEG → Metric IPM BEV
