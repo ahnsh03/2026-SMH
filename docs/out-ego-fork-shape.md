@@ -78,9 +78,9 @@ CLI [`score_out_fork_capture.py`](../scripts/vision_tune/score_out_fork_capture.
 
 | 소스 | 기준 |
 |------|------|
-| **folder** | tip POS `1758`/`1784` hard · nontarget tip FP=0 · POS ⊂ `capture` |
-| **BEV / bag** | `capture` distant FP≈0 (라벨±≈80 밖) · stretch 단일 클러스터 · tip이 stretch/미션 근처 |
-| **recall** | label 1690–1783에서 `capture` ≥ ~90% |
+| **folder** | tip POS `1758`/`1784` hard · nontarget tip FP=0 · POS ⊂ `capture` (구 bag) |
+| **BEV / bag** | `out_cam` **1280–1313** capture 전 구간 · distant FP≈0 (접근 1268–1279만) |
+| **recall** | label 1280–1313에서 `capture` = 34/34 (stride 1) |
 
 ---
 
