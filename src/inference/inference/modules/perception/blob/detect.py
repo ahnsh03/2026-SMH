@@ -65,7 +65,7 @@ def detect_with_debug(
         return LaneDetections(), LaneDebugFrame()
 
     prefer = bool(prefer_yellow) if prefer_yellow is not None else False
-    masks = extract_bev_masks(frame)
+    masks = extract_bev_masks(frame, prefer_yellow=prefer)
     ipm = get_ipm_params()
     mpp = float(ipm.meters_per_pixel)
     track_w = float(ipm.track_width_m)

@@ -19,10 +19,10 @@ metric_ipm:
   camera:
     hfov_deg: 70.42
     height_ground_m: 0.13
-    pitch_down_deg: 13.8
+    pitch_down_deg: 10.0
   range:
     x_min_m: 0.22
-    x_max_m: 1.3
+    x_max_m: 1.5
     y_half_width_m: 0.77
     full_image_width: false
   meters_per_pixel: 0.004
@@ -86,71 +86,67 @@ hsv:
         v_max: 180
     real_car:
       meta:
-        environment: D3-G field (C920e 320x180)
-        source: bag replay → data/captures/from_bag/{in,out}
-        bags: bag_20260711_150234 (IN), bag_20260711_144948 (OUT)
+        environment: D3-G field (C920e 320x180, camera retune)
+        source: bag replay → data/captures/from_bag/{out_cam,in_cam}
+        bags: bag_20260715_230145 (OUT), bag_20260715_230316 (IN); signs 230515/230601
         tuned: '2026-07-16'
-        tool: scripts/vision_tune/tune_hsv.py --from-bag
-        commits: 0191811, 35ba99e, 2e37ae8
-        note: 'LOCKED HSV: black H17 V15-140; red Smin110; cyan S200-215 V190-238;
-          near CC + morph open3/close13/1'
+        tool: scripts/vision_tune/tune_hsv.py --from-bag out_cam|in_cam
+        metric_ipm: pitch_down_deg=10, x_max_m=1.5
       white: &id001
         h_min: 0
         h_max: 179
         s_min: 0
-        s_max: 20
-        v_min: 210
+        s_max: 65
+        v_min: 165
         v_max: 255
       yellow: &id002
-        h_min: 15
-        h_max: 50
-        s_min: 50
-        s_max: 150
-        v_min: 160
+        h_min: 10
+        h_max: 20
+        s_min: 75
+        s_max: 235
+        v_min: 130
         v_max: 255
       black_road: &id003
-        h_min: 17
-        h_max: 70
-        s_min: 0
+        h_min: 6
+        h_max: 35
+        s_min: 40
         s_max: 255
         v_min: 15
-        v_max: 140
+        v_max: 80
       red_road: &id004
         h_min: 0
-        h_max: 9
-        s_min: 110
+        h_max: 5
+        s_min: 235
         s_max: 255
-        v_min: 120
-        v_max: 255
+        v_min: 85
+        v_max: 185
       black_cyan: &id005
-        h_min: 90
-        h_max: 100
-        s_min: 200
-        s_max: 215
-        v_min: 190
-        v_max: 238
-      black_cyan_2: &id006
-        h_min: 97
-        h_max: 105
-        s_min: 240
+        h_min: 95
+        h_max: 104
+        s_min: 215
         s_max: 255
-        v_min: 105
-        v_max: 180
+        v_min: 85
+        v_max: 150
+      black_cyan_2: &id006
+        h_min: 0
+        h_max: 5
+        s_min: 30
+        s_max: 50
+        v_min: 125
+        v_max: 185
   white: *id001
   yellow: *id002
   black_road: *id003
   red_road: *id004
   black_cyan: *id005
   black_cyan_2: *id006
-  note: >-
-    OpenCV HSV (H 0-179). Runtime reads flattened channels (= profiles[active]).
-    See docs/hsv-profiles.md. Tuned 2026-07-16: keep black H17 V15-140; apply red
-    Smin110 + cyan S200-215 V190-238. LOCKED trial#1 near; morph open3/close13/1.
+  note: OpenCV HSV (H 0-179). Runtime reads flattened channels (= profiles[active]).
+    See docs/hsv-profiles.md. Tuned with scripts/vision_tune/tune_hsv.py. Camera retune
+    2026-07-16.
 perception:
   backend: blob
-  note: >-
-    2026-07-16 LOCKED blob SSOT: road=black_near|red|cyan_near → morph(3/13) →
-    near-ego CC (+ DT strip); legacy fork only when enable_fork.
+  note: '2026-07-16 LOCKED blob SSOT: road=black_near|red|cyan_near → morph(3/13)
+    → near-ego CC (+ DT strip); legacy fork only when enable_fork.'
 detect_tune:
   crossing_coverage_ratio: 0.4
   crossing_min_rows: 3

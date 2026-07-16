@@ -34,9 +34,11 @@ python3 scripts/vision_tune/hsv.py --apply-profile real_car   # 보드와 동일
 | `black_cyan` | 전광판·LED **시안 반사**가 덮인 아스팔트 | OUT 글레어 · IN 일부 |
 | `black_cyan_2` | 2차 시안/틸 아스팔트 패치 | IN bag (~930) |
 
-**도로 원시 마스크** `road_raw` = `black_near | red_road | cyan_near`  
-`black_near` / `cyan_near` = 각 채널의 **BEV 하단 ego CC만** (open/close **전**, trial #1).  
-시안은 white 차선과 OR하지 않음.
+**도로 원시 마스크** `road_raw` (`compose_road_raw`):
+- 빨강 아스팔트 **하단 BEV** ≥ **250 px** (in_cam ≈99–110; 접근 97–98 포함) → **red only**
+- 그 외 → `black_near | cyan_near`
+  - `cyan2` = **IN만** (`prefer_yellow`)
+  - `cyan1` = 노란 차선 보이면 **제외**
 
 차선은 코스별로 white **또는** yellow만 쓴다 (서로 OR 하지 않음).
 
@@ -46,20 +48,18 @@ python3 scripts/vision_tune/hsv.py --apply-profile real_car   # 보드와 동일
 
 ## 1.1 주행가능 영역 (drivable) 생성 — SSOT
 
-**LOCKED 2026-07-16 (trial #1 near + HSV final):**  
+**LOCKED 2026-07-16 (camera retune + 7ch):**  
 black/cyan = morph 전 **near-밴드 질량** CC · morph **open3/close13/1**.  
-`real_car` HSV (확정):
+`real_car` HSV (카메라 설정 변경 후 out_cam/in_cam):
 
 | 채널 | H | S | V |
 |------|---|---|---|
-| white | 0–179 | 0–20 | 210–255 |
-| yellow | 15–50 | 50–150 | 160–255 |
-| black_road | 17–70 | 0–255 | 15–140 |
-| red_road | 0–9 | **110–255** | 120–255 |
-| black_cyan | 90–100 | **200–215** | **190–238** |
-| black_cyan_2 | 97–105 | 240–255 | 105–180 |
-
-흑 H14/V180 retune은 기각. red S·cyan S/V만 반영. 영상: `ssot_near_morph3_13/`.
+| white | 0–179 | 0–65 | 165–255 |
+| yellow | 10–20 | 75–235 | 130–255 |
+| black_road | 6–35 | 40–255 | 15–80 |
+| red_road | 0–5 | 235–255 | 85–185 |
+| black_cyan | 95–104 | 215–255 | 85–150 |
+| black_cyan_2 | 0–5 | 30–50 | 125–185 |
 
 캡처 A/B(`viz_raw_hsv_masks.py` · `viz_cyan_ab.py`)로 확정한 순서:
 
@@ -67,7 +67,7 @@ black/cyan = morph 전 **near-밴드 질량** CC · morph **open3/close13/1**.
 BEV(Metric IPM)
   → HSV: white, yellow, black, red, black_cyan, black_cyan_2   (6채널)
   → black_near / cyan_near = near-band mass CC   ← morph 전 (trial #1)
-  → road_raw = black_near|red|cyan_near
+  → road_raw = compose_road_raw (red-only / cyan1·cyan2 gates)
   → course paint (never OR white∧yellow)
   → morph open 3 / close 13 / 1 iter + 소구멍
   → BEV 하단 ego CC (= 최종 ego blob; 밴드 질량 점수)  ← morph 후
