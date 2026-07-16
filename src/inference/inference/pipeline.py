@@ -2434,7 +2434,7 @@ class MainPlanner:
             out_capture=bool(self._out_capture_latched),
         )
         self._fork_perception_enabled = enable_fork
-        lane = lane_detection.detect(
+        lane, lane_debug = lane_detection.detect_with_debug(
             frame,
             active_branch_rank=active_rank,
             prefer_yellow=prefer_yellow,
@@ -2971,6 +2971,7 @@ class MainPlanner:
             path_source=path_source,
             decision=decision,
             debug=debug,
+            lane_debug=lane_debug,
         )
 
 

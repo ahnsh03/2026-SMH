@@ -10,6 +10,10 @@ cd ~/2026-SMH-board   # 또는 PC worktree 2026-SMH-board
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py route_mode:=in   # or out
 # 신호등 없이 트랙 중간 테스트: traffic_pass:=true  (초록 대기·빨간 정지 스킵, ArUco는 유지)
+# 모니터 패널: Lane (HSV paint) + Road (drivable). 조이스틱 노드 미기동.
+# 패치 적용(모니터 라벨·카메라 로그): ./scripts/board_init_workspace.sh 또는
+#   python3 patches/apply_monitor_bev_labels.py external/D-Racer-Kit
+#   python3 patches/apply_camera_quiet_logs.py external/D-Racer-Kit
 # 모니터: http://<보드IP>:5000
 ```
 

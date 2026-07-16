@@ -234,3 +234,4 @@ class PlannerOutput:
     path_source: PathSource
     decision: str
     debug: dict[str, Any] = field(default_factory=dict)
+    lane_debug: Any = None

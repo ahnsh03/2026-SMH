@@ -64,18 +64,7 @@ def generate_launch_description():
                 },
             ],
         ),
-        Node(
-            package='joystick',
-            executable='joystick_node',
-            name='gamepad_publisher',
-            output='screen',
-            parameters=[
-                {
-                    'calibration_mode': False,
-                    'vehicle_config_file': vehicle_config_path,
-                },
-            ],
-        ),
+        # joystick_node omitted — not needed for auto; E-Stop via Ctrl-C / stop publish.
         Node(
             package='battery',
             executable='battery_node',
@@ -90,7 +79,8 @@ def generate_launch_description():
             parameters=[
                 {
                     'vehicle_config_file': vehicle_config_path,
-                    'debug_image': False,
+                    # YAML OPENCV_* topics win; keep debug panels on.
+                    'debug_image': True,
                 },
             ],
         ),
@@ -105,11 +95,13 @@ def generate_launch_description():
                     'planner_config_file': planner_config_path,
                     'route_mode': route_mode,
                     'traffic_pass': ParameterValue(traffic_pass, value_type=bool),
-                    # ArUco 보드 테스트: ros2 topic echo /debug/aruco
                     'aruco_debug_topic': '/debug/aruco',
                     'planner_debug_topic': '/debug/planner',
                     'aruco_debug_log': True,
-                    # Real servo neutral is calibrated in vehicle_config.yaml.
+                    'publish_bev_debug': True,
+                    'bev_lane_topic': '/debug/bev/lane/compressed',
+                    'bev_road_topic': '/debug/bev/road/compressed',
+                    'bev_debug_hz': 5.0,
                     'use_vehicle_steer_trim': True,
                 },
             ],

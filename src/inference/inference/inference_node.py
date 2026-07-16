@@ -76,6 +76,15 @@ class InferenceNode(Node):
         self.declare_parameter('publish_hz', 10.0)
         self.declare_parameter('steer_trim', 0.0)
         self.declare_parameter('use_vehicle_steer_trim', True)
+        # Monitor BEV overlays (lane paint + drivable road) at this rate.
+        self.declare_parameter('bev_debug_hz', 5.0)
+        self.declare_parameter(
+            'bev_lane_topic', '/debug/bev/lane/compressed'
+        )
+        self.declare_parameter(
+            'bev_road_topic', '/debug/bev/road/compressed'
+        )
+        self.declare_parameter('publish_bev_debug', True)
 
         self.vehicle_config_file = os.path.expanduser(
             str(self.get_parameter('vehicle_config_file').value)
@@ -101,6 +110,11 @@ class InferenceNode(Node):
         self.aruco_debug_log = bool(self.get_parameter('aruco_debug_log').value)
         publish_hz = float(self.get_parameter('publish_hz').value)
         self.steer_trim = float(self.load_steer_trim())
+        self.publish_bev_debug = bool(self.get_parameter('publish_bev_debug').value)
+        self.bev_debug_hz = max(0.5, float(self.get_parameter('bev_debug_hz').value))
+        bev_lane_topic = str(self.get_parameter('bev_lane_topic').value)
+        bev_road_topic = str(self.get_parameter('bev_road_topic').value)
+        self._last_bev_debug_sec: float | None = None
 
         if publish_hz <= 0.0:
             raise ValueError('publish_hz must be greater than 0')
@@ -156,6 +170,18 @@ class InferenceNode(Node):
         self.aruco_debug_pub = self.create_publisher(String, aruco_debug_topic, 10)
         self.planner_debug_pub = self.create_publisher(String, planner_debug_topic, 10)
         self.control_pub = self.create_publisher(Control, control_topic, 10)
+        jpeg_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.bev_lane_pub = self.create_publisher(
+            CompressedImage, bev_lane_topic, jpeg_qos
+        )
+        self.bev_road_pub = self.create_publisher(
+            CompressedImage, bev_road_topic, jpeg_qos
+        )
         self.create_timer(1.0 / publish_hz, self.publish_control)
 
         self.get_logger().info(
@@ -166,6 +192,8 @@ class InferenceNode(Node):
             f'traffic_pass={traffic_pass}, '
             f'require_green={planner_config.require_green_to_start}, '
             f'stop_on_red={planner_config.stop_on_red}, '
+            f'bev_debug={self.publish_bev_debug} '
+            f'({bev_lane_topic}, {bev_road_topic}), '
             f'planner_config={planner_config_file}'
         )
         if traffic_pass:
@@ -220,7 +248,111 @@ class InferenceNode(Node):
         self._publish_control_command(self.latest_command)
         self.publish_aruco_debug(output.aruco)
         self.publish_lane_detections(output.lane)
+        self.publish_bev_debug_frames(output)
         self.publish_planner_debug(output)
+
+    @staticmethod
+    def _overlay_mask_bgr(
+        bev: np.ndarray,
+        mask: np.ndarray,
+        color: tuple[int, int, int],
+        *,
+        alpha: float = 0.50,
+    ) -> np.ndarray:
+        out = bev.copy()
+        if mask is None or getattr(mask, 'size', 0) == 0:
+            return out
+        if mask.shape[:2] != out.shape[:2]:
+            mask = cv2.resize(
+                mask, (out.shape[1], out.shape[0]), interpolation=cv2.INTER_NEAREST
+            )
+        selected = mask > 0
+        if not np.any(selected):
+            return out
+        tint = np.zeros_like(out)
+        tint[:] = color
+        out[selected] = (
+            (1.0 - alpha) * out[selected].astype(np.float32)
+            + alpha * tint[selected].astype(np.float32)
+        ).astype(np.uint8)
+        return out
+
+    def _publish_jpeg(self, pub, bgr: np.ndarray, *, frame_id: str) -> None:
+        ok, buf = cv2.imencode('.jpg', bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+        if not ok:
+            return
+        msg = CompressedImage()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = frame_id
+        msg.format = 'jpeg'
+        msg.data = buf.tobytes()
+        pub.publish(msg)
+
+    def publish_bev_debug_frames(self, output) -> None:
+        """BEV + course lane paint, BEV + drivable road — for monitor panels."""
+        if not self.publish_bev_debug:
+            return
+        now_sec = self.get_clock().now().nanoseconds / 1_000_000_000.0
+        period = 1.0 / self.bev_debug_hz
+        if (
+            self._last_bev_debug_sec is not None
+            and now_sec - self._last_bev_debug_sec < period
+        ):
+            return
+        dbg = getattr(output, 'lane_debug', None)
+        if dbg is None:
+            return
+        bev = np.asarray(getattr(dbg, 'bev', None))
+        if bev.ndim != 3 or bev.size == 0:
+            return
+
+        prefer_yellow = bool(output.debug.get('prefer_yellow', False))
+        if str(output.debug.get('route', '')).lower() == 'out':
+            prefer_yellow = False
+        try:
+            from inference.modules.perception.blob.rail_corridor import (
+                resolve_course_lane_mask,
+            )
+
+            lane_mask, used_y = resolve_course_lane_mask(
+                getattr(dbg, 'white_bev', None),
+                getattr(dbg, 'yellow_bev', None),
+                prefer_yellow=prefer_yellow,
+            )
+        except Exception:  # noqa: BLE001
+            lane_mask = getattr(dbg, 'white_bev', None)
+            used_y = False
+        lane_color = (0, 255, 255) if used_y else (255, 255, 255)  # BGR
+        lane_ov = self._overlay_mask_bgr(bev, lane_mask, lane_color)
+        cv2.putText(
+            lane_ov,
+            f'lane ({"Y" if used_y else "W"})',
+            (8, 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 200, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+        road = getattr(dbg, 'road_clean', None)
+        if road is None or getattr(road, 'size', 0) == 0:
+            road = getattr(output.lane, 'drivable_area', None)
+        road_ov = self._overlay_mask_bgr(bev, road, (0, 220, 0))
+        cv2.putText(
+            road_ov,
+            'road / drivable',
+            (8, 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 255, 0),
+            1,
+            cv2.LINE_AA,
+        )
+
+        self._publish_jpeg(self.bev_lane_pub, lane_ov, frame_id='bev_lane')
+        self._publish_jpeg(self.bev_road_pub, road_ov, frame_id='bev_road')
+        self._last_bev_debug_sec = now_sec
 
     def publish_planner_debug(self, output) -> None:
         """Publish sign/fork decisions immediately and periodic snapshots."""

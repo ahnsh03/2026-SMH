@@ -49,7 +49,17 @@ value (EILSEQ, verified across 3–2047), so exposure can only be *frozen* where
 camera's own AE leaves it (156), not chosen. To trim brightness, add `gain=<0..255>`
 to the param (`gain` *is* writable here); do not add `exposure_absolute`.
 
-## control-steer-invert.patch
+## monitor BEV panel labels (`apply_monitor_bev_labels.py`)
+
+Kit monitor debug panels default to Grayscale / Blur / Edge. Board remaps those
+slots to Metric-IPM **lane paint** and **drivable road** JPEG from
+`inference_node` (`/debug/bev/lane|road/compressed`). This script renames the
+two panel titles and drops the unused Edge panel (idempotent).
+
+## camera quiet logs (`apply_camera_quiet_logs.py`)
+
+Demotes per-frame `Published frame: N bytes` from INFO → DEBUG so launch logs
+are readable.
 
 The SSOT steering contract is **`+steering = right`** (perception emits `+y = left`,
 `pipeline._pure_pursuit` negates so a left target → negative steering → left; see

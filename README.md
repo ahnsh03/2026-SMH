@@ -18,4 +18,5 @@ source install/setup.bash
 ros2 launch inference auto_driving.launch.py route_mode:=in
 # 신호등 없이 중간 배치 테스트:
 # ros2 launch inference auto_driving.launch.py route_mode:=in traffic_pass:=true
+# 모니터: 카메라 + Lane(HSV) + Road(drivable) BEV 마스크 (조이스틱 노드 없음)
 ```

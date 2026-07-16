@@ -56,6 +56,8 @@ if [ -d "${PATCH_DIR}" ] && [ "${KIT_GIT}" -eq 1 ]; then
   apply_patch "${PATCH_DIR}/camera-native-caps.patch"
   apply_patch "${PATCH_DIR}/camera-v4l2-controls.patch"
   apply_patch "${PATCH_DIR}/control-steer-invert.patch"
+  python3 "${PATCH_DIR}/apply_monitor_bev_labels.py" "${VENDOR}" || true
+  python3 "${PATCH_DIR}/apply_camera_quiet_logs.py" "${VENDOR}" || true
 fi
 
 OFFICIAL_PKGS=(
