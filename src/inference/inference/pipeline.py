@@ -2020,12 +2020,13 @@ class MainPlanner:
             return 'off', require_path
         if not self._fork_perception_enabled:
             return 'off', require_path
+        # Only clip when fork geometry is visible — sign-hold alone must not
+        # force hard corridor (white path flicker → path_lost).
         if bool(getattr(lane, 'fork_active', False)):
             return 'hard', True
         if len(getattr(lane, 'branches', ()) or ()) >= 2:
             return 'hard', True
-        # Sign-hold window before fork_active latches — still clip bleed.
-        return 'hard', True
+        return 'off', require_path
 
     def _track_normal_path(
         self,
@@ -2385,9 +2386,15 @@ class MainPlanner:
         # EXIT_READY stays in explore so both candidates remain until exit starts.
         active_rank = None
         if (
-            self.state in (DrivingState.FORK_TURN, DrivingState.ROUNDABOUT_EXIT)
+            self.state
+            in (
+                DrivingState.FORK_TURN,
+                DrivingState.ROUNDABOUT_EXIT,
+                DrivingState.ROUNDABOUT_CIRCLE,
+            )
             and self._fork_selected_rank is not None
         ):
+            # CIRCLE keep/exit: drop opposite fork in perception once moment latched.
             active_rank = int(self._fork_selected_rank)
         # Course contract: Out → white-only forks; In → yellow-first.
         prefer_yellow = (
@@ -2399,8 +2406,19 @@ class MainPlanner:
         # Capture uses previous-frame latch (stretch lasts ≫1 frame).
         traffic = traffic_sign.detect(frame)
         aruco = aruco_detection.detect(frame)
-        self._note_out_sign_sighting(traffic.turn, now_sec)
-        self._update_desired_turn(traffic.turn)
+        # Freeze mission counters/FSM while stopped so ArUco/red cannot
+        # advance moment passes or arm forks under zero throttle.
+        mission_freeze = bool(
+            (self.config.stop_on_aruco and aruco.should_stop)
+            or (
+                self.config.stop_on_red
+                and traffic.signal is TrafficSignal.RED
+                and self.state is not DrivingState.WAIT_GREEN
+            )
+        )
+        if not mission_freeze:
+            self._note_out_sign_sighting(traffic.turn, now_sec)
+            self._update_desired_turn(traffic.turn)
         enable_fork = self._fork_perception_allowed(
             now_sec=now_sec,
             observed_sign=traffic.turn,
@@ -2411,21 +2429,28 @@ class MainPlanner:
             frame,
             active_branch_rank=active_rank,
             prefer_yellow=prefer_yellow,
-            enable_fork=enable_fork,
+            enable_fork=enable_fork and not mission_freeze,
         )
         # Refresh capture latch from this frame for next arm decision.
         # Hold while capture stays true; drop when stretch ends (unless mid FORK).
-        if bool(getattr(lane, 'out_fork_capture', False)):
-            self._out_capture_latched = True
-        elif self.state is not DrivingState.FORK_TURN:
-            self._out_capture_latched = False
+        if not mission_freeze:
+            if bool(getattr(lane, 'out_fork_capture', False)):
+                self._out_capture_latched = True
+            elif self.state is not DrivingState.FORK_TURN:
+                self._out_capture_latched = False
 
-        branch_event = self.branch_counter.update(bool(lane.fork_active))
-        crossing_event = self.crossing_counter.update(bool(lane.yellow_crossing_line))
-        moment_rising = self.moment_counter.update(
-            bool(getattr(lane, 'in_circle_fork_moment', False))
-        )
-        self._apply_in_moment_pass(moment_rising)
+        branch_event = False
+        crossing_event = False
+        moment_rising = False
+        if not mission_freeze:
+            branch_event = self.branch_counter.update(bool(lane.fork_active))
+            crossing_event = self.crossing_counter.update(
+                bool(lane.yellow_crossing_line)
+            )
+            moment_rising = self.moment_counter.update(
+                bool(getattr(lane, 'in_circle_fork_moment', False))
+            )
+            self._apply_in_moment_pass(moment_rising)
         elapsed = (
             0.0
             if self._roundabout_started_at is None
@@ -2437,65 +2462,81 @@ class MainPlanner:
 
         color_path, path_source, path_confidence = self._color_path(lane)
 
-        if (
-            self.config.route_mode is RouteMode.IN
-            and self.state is DrivingState.NORMAL
-            and self.config.roundabout_entry_on_yellow
-            and (
-                path_source is PathSource.YELLOW_CENTERLINE
-                or bool(lane.yellow_crossing_line)
-            )
-        ):
-            self._set_state(DrivingState.ROUNDABOUT_CIRCLE, now_sec)
-            elapsed = 0.0
-
-        if (
-            self.state is DrivingState.NORMAL
-            and self.config.route_mode is RouteMode.OUT
-            and enable_fork
-            and branch_event
-            and now_sec >= self._fork_cooldown_until_sec
-        ):
-            # forced_turn 실험: 카메라 표지로 덮어쓰지 않도록 강제 래치를 재적용.
-            if self._forced_turn is not TurnSign.UNKNOWN:
-                self.apply_forced_turn(self._forced_turn)
-            else:
-                self._lock_fork_selection()
-            self._set_state(DrivingState.FORK_TURN, now_sec)
-
-        if self.state is DrivingState.ROUNDABOUT_CIRCLE:
-            enough_time = elapsed >= self.config.min_lap_time_sec
-            if self.config.in_exit_use_moment:
-                # Moment pass policy: need completed keep-pass then exit pass.
-                branch_ready = self._in_fork_pass_count > int(
-                    self.config.in_keep_passes
-                )
-            else:
-                branch_ready = (
-                    self.branch_counter.events >= self.config.branch_required_events
-                )
-            crossing_ready = self.crossing_counter.events >= self.config.crossing_required_events
+        if not mission_freeze:
             if (
-                enough_time
-                and (branch_ready or crossing_ready)
-                and self._wants_roundabout_exit()
+                self.config.route_mode is RouteMode.IN
+                and self.state is DrivingState.NORMAL
+                and self.config.roundabout_entry_on_yellow
+                and (
+                    path_source is PathSource.YELLOW_CENTERLINE
+                    or bool(lane.yellow_crossing_line)
+                )
             ):
-                self._set_state(DrivingState.ROUNDABOUT_EXIT_READY, now_sec)
+                self._set_state(DrivingState.ROUNDABOUT_CIRCLE, now_sec)
+                elapsed = 0.0
 
-        if self.state is DrivingState.ROUNDABOUT_EXIT_READY:
-            if self._fork_selected_rank is None:
+            if (
+                self.state is DrivingState.NORMAL
+                and self.config.route_mode is RouteMode.OUT
+                and enable_fork
+                and now_sec >= self._fork_cooldown_until_sec
+                and (
+                    branch_event
+                    or bool(getattr(lane, 'fork_active', False))
+                )
+            ):
+                # Require a confirmed L/R before locking — never default_unknown
+                # when a sign is still being confirmed. Allow level fork_active
+                # so confirm can finish after the rising edge.
                 if self._forced_turn is not TurnSign.UNKNOWN:
                     self.apply_forced_turn(self._forced_turn)
-                else:
+                    self._set_state(DrivingState.FORK_TURN, now_sec)
+                elif self.desired_turn is not TurnSign.UNKNOWN:
                     self._lock_fork_selection()
-            exit_rank = int(
-                self._fork_selected_rank
-                if self._fork_selected_rank is not None
-                else self.config.exit_branch_rank
-            )
-            branch = self._ranked_branch(lane, exit_rank)
-            if branch is not None and len(lane.branches) >= 2:
-                self._set_state(DrivingState.ROUNDABOUT_EXIT, now_sec)
+                    self._set_state(DrivingState.FORK_TURN, now_sec)
+
+            if self.state is DrivingState.ROUNDABOUT_CIRCLE:
+                enough_time = elapsed >= self.config.min_lap_time_sec
+                if self.config.in_exit_use_moment:
+                    # Moment pass only — do not let yellow crossing alone exit.
+                    branch_ready = self._in_fork_pass_count > int(
+                        self.config.in_keep_passes
+                    )
+                    exit_gate = branch_ready
+                else:
+                    branch_ready = (
+                        self.branch_counter.events
+                        >= self.config.branch_required_events
+                    )
+                    crossing_ready = (
+                        self.crossing_counter.events
+                        >= self.config.crossing_required_events
+                    )
+                    exit_gate = branch_ready or crossing_ready
+                if (
+                    enough_time
+                    and exit_gate
+                    and self._wants_roundabout_exit()
+                ):
+                    self._set_state(DrivingState.ROUNDABOUT_EXIT_READY, now_sec)
+
+            if self.state is DrivingState.ROUNDABOUT_EXIT_READY:
+                if self._fork_selected_rank is None:
+                    if self._forced_turn is not TurnSign.UNKNOWN:
+                        self.apply_forced_turn(self._forced_turn)
+                    else:
+                        self._lock_fork_selection()
+                exit_rank = int(
+                    self._fork_selected_rank
+                    if self._fork_selected_rank is not None
+                    else self.config.exit_branch_rank
+                )
+                branch = self._ranked_branch(lane, exit_rank)
+                # Dual-branch preferred; single ranked branch OK after moment latch.
+                if branch is not None and (
+                    len(lane.branches) >= 2 or self.config.in_exit_use_moment
+                ):
+                    self._set_state(DrivingState.ROUNDABOUT_EXIT, now_sec)
 
         pursuit = PursuitResult(False)
         selected_branch_rank: int | None = None
@@ -2630,139 +2671,178 @@ class MainPlanner:
             if self._fork_absent_frames >= self.config.fork_exit_off_frames:
                 self._set_state(DrivingState.NORMAL, now_sec)
         else:
-            forkish = self._forkish_for_mask(lane)
-            tracker = str(self.config.normal_tracker or 'pp').lower()
-            # Circle: follow yellow/white paint path (PP/Stanley), not free-space COM.
-            if self.state is DrivingState.ROUNDABOUT_CIRCLE:
-                ct = str(self.config.circle_tracker or 'pp').strip().lower()
-                if ct in ('pp', 'stanley', 'mask_p', 'hybrid'):
-                    tracker = ct
-            use_mask = (
-                tracker == 'mask_p'
-                and self.state
-                in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
-                and not forkish
-            )
-            use_stanley = (
-                tracker == 'stanley'
-                and self.state
-                in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
-                and not forkish
-            )
-            use_hybrid = (
-                tracker == 'hybrid'
-                and self.state
-                in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
-                and not forkish
-            )
-            if use_hybrid:
-                self._last_mask_debug = {}
-                pursuit = self._hybrid_pursuit(
-                    lane, color_path, dt_sec, path_confidence=path_confidence
+            # IN CIRCLE: after moment latched keep/exit, follow that branch while
+            # fork geometry is visible (not just yellow centerline).
+            circle_rank_follow = False
+            if (
+                self.state is DrivingState.ROUNDABOUT_CIRCLE
+                and self._fork_selected_rank is not None
+                and (
+                    bool(getattr(lane, 'fork_active', False))
+                    or len(getattr(lane, 'branches', ()) or ()) >= 2
                 )
-                if pursuit.valid:
-                    w = float(
-                        (getattr(self, '_last_mask_debug', {}) or {}).get(
-                            'hybrid_w', 0.0
+            ):
+                rank = int(self._fork_selected_rank)
+                selected_branch_rank = rank
+                branch_selection_reason = self._fork_selection_reason
+                path = np.empty((0, 2), dtype=np.float32)
+                if lane.fork_active and len(lane.branches) >= 2:
+                    path, path_source, path_confidence = self._selected_layer_path(
+                        lane, rank
+                    )
+                if path.shape[0] < self.config.min_points:
+                    path, path_source, path_confidence = self._locked_ego_path(
+                        lane, rank
+                    )
+                if path.shape[0] >= self.config.min_points:
+                    self._fork_cached_path = path.copy()
+                    self._fork_cached_source = path_source
+                    self._fork_cached_confidence = path_confidence
+                    pursuit = self._pure_pursuit(path, dt_sec)
+                    tag = (
+                        'keep'
+                        if rank == int(self.config.in_keep_branch_rank)
+                        else 'exit'
+                    )
+                    decision = f'roundabout_circle_{tag}_rank{rank}'
+                    circle_rank_follow = True
+
+            if circle_rank_follow:
+                pass
+            else:
+                forkish = self._forkish_for_mask(lane)
+                tracker = str(self.config.normal_tracker or 'pp').lower()
+                # Circle: follow yellow/white paint path (PP/Stanley), not free-space COM.
+                if self.state is DrivingState.ROUNDABOUT_CIRCLE:
+                    ct = str(self.config.circle_tracker or 'pp').strip().lower()
+                    if ct in ('pp', 'stanley', 'mask_p', 'hybrid'):
+                        tracker = ct
+                use_mask = (
+                    tracker == 'mask_p'
+                    and self.state
+                    in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
+                    and not forkish
+                )
+                use_stanley = (
+                    tracker == 'stanley'
+                    and self.state
+                    in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
+                    and not forkish
+                )
+                use_hybrid = (
+                    tracker == 'hybrid'
+                    and self.state
+                    in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
+                    and not forkish
+                )
+                if use_hybrid:
+                    self._last_mask_debug = {}
+                    pursuit = self._hybrid_pursuit(
+                        lane, color_path, dt_sec, path_confidence=path_confidence
+                    )
+                    if pursuit.valid:
+                        w = float(
+                            (getattr(self, '_last_mask_debug', {}) or {}).get(
+                                'hybrid_w', 0.0
+                            )
                         )
-                    )
-                    path_source = (
-                        PathSource.MASK_DRIVABLE
-                        if w >= 0.5
-                        else path_source
-                    )
-                    decision = (
-                        'roundabout_circle_hybrid'
-                        if self.state is DrivingState.ROUNDABOUT_CIRCLE
-                        else 'normal_hybrid'
-                    )
-                else:
-                    pursuit = self._pure_pursuit(color_path, dt_sec)
-                    decision = (
-                        'roundabout_circle_hybrid_fallback_pp'
-                        if self.state is DrivingState.ROUNDABOUT_CIRCLE
-                        else 'normal_hybrid_fallback_pp'
-                    )
-            elif use_stanley:
-                self._last_mask_debug = {}
-                pursuit = self._stanley_pursuit(color_path, dt_sec)
-                if pursuit.valid:
-                    decision = (
-                        'roundabout_circle_stanley'
-                        if self.state is DrivingState.ROUNDABOUT_CIRCLE
-                        else 'normal_stanley'
-                    )
-                else:
-                    pursuit = self._pure_pursuit(color_path, dt_sec)
-                    decision = (
-                        'roundabout_circle_stanley_fallback_pp'
-                        if self.state is DrivingState.ROUNDABOUT_CIRCLE
-                        else 'normal_stanley_fallback_pp'
-                    )
-            elif use_mask:
-                self._last_mask_debug = {}
-                pursuit = self._mask_com_pursuit(
-                    lane,
-                    dt_sec,
-                    color_path=color_path,
-                    path_confidence=path_confidence,
-                )
-                if pursuit.valid:
-                    holding = bool(
-                        (self._last_mask_debug or {}).get('mask_occlusion_hold')
-                    )
-                    in_circle = self.state is DrivingState.ROUNDABOUT_CIRCLE
-                    if holding:
-                        path_source = PathSource.HOLD_PREVIOUS
+                        path_source = (
+                            PathSource.MASK_DRIVABLE
+                            if w >= 0.5
+                            else path_source
+                        )
                         decision = (
-                            'roundabout_circle_mask_occlusion_hold'
-                            if in_circle
-                            else 'normal_mask_occlusion_hold'
+                            'roundabout_circle_hybrid'
+                            if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                            else 'normal_hybrid'
                         )
                     else:
-                        path_source = PathSource.MASK_DRIVABLE
+                        pursuit = self._pure_pursuit(color_path, dt_sec)
                         decision = (
-                            'roundabout_circle_mask'
-                            if in_circle
-                            else 'normal_mask_follow'
+                            'roundabout_circle_hybrid_fallback_pp'
+                            if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                            else 'normal_hybrid_fallback_pp'
                         )
-                else:
+                elif use_stanley:
+                    self._last_mask_debug = {}
+                    pursuit = self._stanley_pursuit(color_path, dt_sec)
+                    if pursuit.valid:
+                        decision = (
+                            'roundabout_circle_stanley'
+                            if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                            else 'normal_stanley'
+                        )
+                    else:
+                        pursuit = self._pure_pursuit(color_path, dt_sec)
+                        decision = (
+                            'roundabout_circle_stanley_fallback_pp'
+                            if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                            else 'normal_stanley_fallback_pp'
+                        )
+                elif use_mask:
+                    self._last_mask_debug = {}
+                    pursuit = self._mask_com_pursuit(
+                        lane,
+                        dt_sec,
+                        color_path=color_path,
+                        path_confidence=path_confidence,
+                    )
+                    if pursuit.valid:
+                        holding = bool(
+                            (self._last_mask_debug or {}).get('mask_occlusion_hold')
+                        )
+                        in_circle = self.state is DrivingState.ROUNDABOUT_CIRCLE
+                        if holding:
+                            path_source = PathSource.HOLD_PREVIOUS
+                            decision = (
+                                'roundabout_circle_mask_occlusion_hold'
+                                if in_circle
+                                else 'normal_mask_occlusion_hold'
+                            )
+                        else:
+                            path_source = PathSource.MASK_DRIVABLE
+                            decision = (
+                                'roundabout_circle_mask'
+                                if in_circle
+                                else 'normal_mask_follow'
+                            )
+                    else:
+                        pursuit = self._pure_pursuit(color_path, dt_sec)
+                        decision = (
+                            'roundabout_circle_mask_fallback_pp'
+                            if self.state is DrivingState.ROUNDABOUT_CIRCLE
+                            else 'normal_mask_fallback_pp'
+                        )
+                elif (
+                    tracker in ('mask_p', 'hybrid', 'stanley')
+                    and forkish
+                    and self.state
+                    in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
+                ):
+                    # Keep color path_source so logs show fork guard, not mask COM.
                     pursuit = self._pure_pursuit(color_path, dt_sec)
                     decision = (
-                        'roundabout_circle_mask_fallback_pp'
+                        'roundabout_circle_mask_fork_pp'
                         if self.state is DrivingState.ROUNDABOUT_CIRCLE
-                        else 'normal_mask_fallback_pp'
+                        else 'normal_mask_fork_pp'
                     )
-            elif (
-                tracker in ('mask_p', 'hybrid', 'stanley')
-                and forkish
-                and self.state
-                in (DrivingState.NORMAL, DrivingState.ROUNDABOUT_CIRCLE)
-            ):
-                # Keep color path_source so logs show fork guard, not mask COM.
-                pursuit = self._pure_pursuit(color_path, dt_sec)
-                decision = (
-                    'roundabout_circle_mask_fork_pp'
-                    if self.state is DrivingState.ROUNDABOUT_CIRCLE
-                    else 'normal_mask_fork_pp'
-                )
-            else:
-                pursuit = self._pure_pursuit(color_path, dt_sec)
-                if self.state is DrivingState.ROUNDABOUT_CIRCLE:
-                    # Paint centerline PP (yellow IN / white fallback).
-                    decision = (
-                        'roundabout_circle_lane_pp'
-                        if path_source
-                        in (
-                            PathSource.YELLOW_CENTERLINE,
-                            PathSource.WHITE_CENTERLINE,
-                        )
-                        else 'roundabout_circle'
-                    )
-                elif self.state is DrivingState.ROUNDABOUT_EXIT_READY:
-                    decision = 'roundabout_exit_wait_branch'
                 else:
-                    decision = 'normal_lane_follow'
+                    pursuit = self._pure_pursuit(color_path, dt_sec)
+                    if self.state is DrivingState.ROUNDABOUT_CIRCLE:
+                        # Paint centerline PP (yellow IN / white fallback).
+                        decision = (
+                            'roundabout_circle_lane_pp'
+                            if path_source
+                            in (
+                                PathSource.YELLOW_CENTERLINE,
+                                PathSource.WHITE_CENTERLINE,
+                            )
+                            else 'roundabout_circle'
+                        )
+                    elif self.state is DrivingState.ROUNDABOUT_EXIT_READY:
+                        decision = 'roundabout_exit_wait_branch'
+                    else:
+                        decision = 'normal_lane_follow'
 
         if pursuit.valid and path_source is not PathSource.STOP:
             self._path_lost_frames = 0
@@ -2798,6 +2878,7 @@ class MainPlanner:
             'prefer_yellow': self.config.prefer_yellow,
             'state': self.state.value,
             'decision': decision,
+            'mission_freeze': bool(mission_freeze),
             'path_source': path_source.value,
             'path_confidence': round(float(path_confidence), 3),
             'normal_tracker': str(self.config.normal_tracker),

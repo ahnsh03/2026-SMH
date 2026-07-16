@@ -234,17 +234,22 @@ def test_effective_corridor_near_fork_out_only_when_armed():
     planner.state = DrivingState.NORMAL
     lane = SimpleNamespace(fork_active=False, branches=())
     planner._fork_perception_enabled = True
+    # Sign-hold alone must not force hard corridor.
     mode, require_path = planner._effective_mask_corridor_mode(lane)
-    assert mode == 'hard'
+    assert mode == 'off'
+
+    lane_fork = SimpleNamespace(fork_active=True, branches=())
+    mode_on, require_path = planner._effective_mask_corridor_mode(lane_fork)
+    assert mode_on == 'hard'
     assert require_path is True
 
     planner._fork_perception_enabled = False
-    mode_off, _ = planner._effective_mask_corridor_mode(lane)
+    mode_off, _ = planner._effective_mask_corridor_mode(lane_fork)
     assert mode_off == 'off'
 
     planner.config = replace(planner.config, route_mode=RouteMode.IN)
     planner._fork_perception_enabled = True
-    mode_in, _ = planner._effective_mask_corridor_mode(lane)
+    mode_in, _ = planner._effective_mask_corridor_mode(lane_fork)
     assert mode_in == 'off'
 
 
@@ -960,13 +965,16 @@ def test_in_course_exits_on_second_moment_pass():
         'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
     ):
         planner.step(frame, now_sec=0.0)  # Enter roundabout.
-        # Pass 1: keep right.
+        # Pass 1: keep right — follow keep branch, stay in CIRCLE.
         lane.in_circle_fork_moment = True
         lane.fork_active = True
         lane.branches = (branch0, branch1)
-        planner.step(frame, now_sec=0.1)
+        keep = planner.step(frame, now_sec=0.1)
         assert planner._in_fork_pass_count == 1
         assert planner._fork_selected_rank == 1
+        assert keep.state is DrivingState.ROUNDABOUT_CIRCLE
+        assert keep.decision == 'roundabout_circle_keep_rank1'
+        assert keep.debug['selected_branch_rank'] == 1
         lane.in_circle_fork_moment = False
         planner.step(frame, now_sec=0.2)
         # Pass 2: exit left (≥ min_lap_time).
@@ -976,6 +984,118 @@ def test_in_course_exits_on_second_moment_pass():
     assert planner._in_fork_pass_count == 2
     assert output.state is DrivingState.ROUNDABOUT_EXIT
     assert output.decision == 'roundabout_exit_rank0'
+
+
+def test_aruco_stop_freezes_in_moment_pass_count():
+    """ArUco throttle-stop must not advance IN moment keep/exit counters."""
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    branch0 = SimpleNamespace(points=path, confidence=0.9, lateral_rank=0)
+    branch1 = SimpleNamespace(points=path, confidence=0.9, lateral_rank=1)
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=path,
+        white_confidence=0.9,
+        yellow_confidence=0.9,
+        white_visible=True,
+        yellow_visible=True,
+        fork_active=True,
+        yellow_crossing_line=False,
+        out_fork_capture=False,
+        in_circle_fork_moment=True,
+        branches=(branch0, branch1),
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.IN,
+            prefer_yellow=True,
+            yellow_valid_on_frames=1,
+            min_points=5,
+            min_lap_time_sec=1.0,
+            in_exit_use_moment=True,
+            in_keep_passes=1,
+            stop_on_aruco=True,
+            branch_on_frames=1,
+            branch_off_frames=1,
+            require_green_to_start=False,
+        )
+    )
+    planner.state = DrivingState.ROUNDABOUT_CIRCLE
+    planner._roundabout_started_at = 0.0
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    aruco = ArucoResult(detected=True, should_stop=True, marker_id=3)
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=aruco
+    ):
+        out = planner.step(frame, now_sec=0.5)
+    assert out.decision == 'aruco_stop'
+    assert out.debug['mission_freeze'] is True
+    assert planner._in_fork_pass_count == 0
+    assert planner.state is DrivingState.ROUNDABOUT_CIRCLE
+
+
+def test_out_fork_waits_for_confirmed_sign_before_lock():
+    """Fork rising with unconfirmed sign must not lock default_unknown rank."""
+    path = np.array(
+        [[0.2, 0.0], [0.4, 0.0], [0.6, 0.0], [0.8, 0.0], [1.0, 0.0]],
+        dtype=np.float32,
+    )
+    lane = SimpleNamespace(
+        white_centerline=path,
+        yellow_centerline=np.empty((0, 2), dtype=np.float32),
+        white_confidence=0.9,
+        yellow_confidence=0.0,
+        white_visible=True,
+        yellow_visible=False,
+        fork_active=True,
+        yellow_crossing_line=False,
+        out_fork_capture=True,
+        in_circle_fork_moment=False,
+        branches=(
+            SimpleNamespace(points=path, confidence=0.9, lateral_rank=0),
+            SimpleNamespace(points=path, confidence=0.9, lateral_rank=1),
+        ),
+    )
+    planner = MainPlanner(
+        PlannerConfig(
+            route_mode=RouteMode.OUT,
+            out_fork_require_sign=True,
+            out_fork_require_capture=True,
+            out_fork_sign_hold_sec=3.0,
+            sign_confirm_frames=3,
+            branch_on_frames=1,
+            branch_off_frames=1,
+            min_points=5,
+            default_out_branch_rank=0,
+            require_green_to_start=False,
+        )
+    )
+    planner._out_capture_latched = True
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    with patch(
+        'inference.pipeline.lane_detection.detect', return_value=lane
+    ), patch(
+        'inference.pipeline.traffic_sign.detect',
+        return_value=TrafficResult(turn=TurnSign.RIGHT),
+    ), patch(
+        'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
+    ):
+        # First sighting: candidate only — stay NORMAL.
+        first = planner.step(frame, now_sec=0.0)
+        assert first.state is DrivingState.NORMAL
+        assert planner.desired_turn is TurnSign.UNKNOWN
+        # Confirm over remaining frames.
+        planner.step(frame, now_sec=0.1)
+        locked = planner.step(frame, now_sec=0.2)
+    assert locked.state is DrivingState.FORK_TURN
+    assert locked.debug['selected_branch_rank'] == 1
+    assert locked.debug['fork_locked_turn'] == 'right'
 
 
 def test_out_fork_state_does_not_treat_single_branch_as_turn_path():

@@ -40,7 +40,7 @@ ros2 launch inference auto_driving.launch.py route_mode:=in   # or out
 | 영역 | 내용 |
 |------|------|
 | 카메라 | 320×180 + Kit 패치 |
-| Metric IPM | 0.13 m / 13.8° / x≤1.3 m |
+| Metric IPM | `scripts/vision_tune/metric_ipm.py` + yaml (`pitch_down_deg=10`, `x_max_m=1.5`) |
 | HSV+drivable | real_car + near + morph 3/13 |
 | 표지판 | YOLO `sign_best.onnx` (프레임당 YOLO 1개) |
 | 신호등 | 기본 OpenCV HSV |
