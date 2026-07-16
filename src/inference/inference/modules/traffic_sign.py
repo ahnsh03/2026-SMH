@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from inference.modules.trafficsign import detect_signal
+from inference.modules.trafficsign import debounce_signal, detect_signal
 from inference.types import TrafficResult, TurnSign
 
 _direction_detector_available = True
@@ -31,8 +31,13 @@ def detect(frame: np.ndarray) -> TrafficResult:
 
     Returns TrafficResult with signal (GREEN/RED/UNKNOWN) and turn (LEFT/RIGHT/UNKNOWN).
     Direction detection is optional; unavailable weights/runtime return UNKNOWN.
+
+    The signal is debounced across frames: a color must persist for several
+    consecutive frames before it is reported, which filters out brief color-alike
+    false positives (clothing, road paint, lane markings glimpsed while driving
+    past) without delaying a real, sustained light noticeably.
     """
     return TrafficResult(
-        signal=detect_signal(frame),
+        signal=debounce_signal(detect_signal(frame)),
         turn=_detect_turn_safely(frame),
     )

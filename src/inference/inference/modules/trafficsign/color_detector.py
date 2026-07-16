@@ -9,16 +9,17 @@ from inference.types import TrafficSignal
 
 # HSV thresholds tuned for lit traffic-light lenses (bright, saturated pixels).
 # Red wraps around hue 0, so it needs two ranges.
+# Retuned against bag_20260715_230145 / bag_20260715_230316 (2026-07-16, low-light).
 _RED_RANGES = (
-    ((0, 158, 125), (18, 255, 255)),
-    ((169, 158, 125), (180, 255, 255)),
+    ((0, 110, 100), (8, 255, 255)),
+    ((172, 110, 100), (180, 255, 255)),
 )
-_GREEN_RANGE = ((40, 80, 120), (90, 255, 255))
+_GREEN_RANGE = ((60, 100, 100), (88, 255, 255))
 
-_MIN_RED_PIXELS = 50
-_MIN_GREEN_PIXELS = 50
-_MIN_CIRCULARITY = 0.35
-_MAX_ASPECT_RATIO = 3.0
+_MIN_RED_PIXELS = 40
+_MIN_GREEN_PIXELS = 40
+_MIN_CIRCULARITY = 0.7
+_MAX_ASPECT_RATIO = 1.5
 _MORPH_KERNEL = np.ones((5, 5), dtype=np.uint8)
 
 

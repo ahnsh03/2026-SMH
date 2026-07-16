@@ -53,7 +53,11 @@ def test_detect_empty_frame():
 
 def test_facade_wraps_signal():
     from inference.modules import traffic_sign
+    from inference.modules.trafficsign.debounce import _CONFIRM_FRAMES
 
     frame = _light_frame((0, 0, 255))
-    result = traffic_sign.detect(frame)
+    # The facade debounces across frames (see debounce.py) — a signal must repeat
+    # for _CONFIRM_FRAMES consecutive frames before it is reported.
+    for _ in range(_CONFIRM_FRAMES):
+        result = traffic_sign.detect(frame)
     assert result.signal == TrafficSignal.RED
