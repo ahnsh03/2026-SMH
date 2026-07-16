@@ -1660,7 +1660,7 @@ def test_load_planner_config_has_track_and_stanley():
     assert cfg.require_green_to_start is True
     assert cfg.stop_on_red is True
     assert cfg.stop_on_aruco is True
-    assert cfg.green_wait_timeout_sec == 30.0
+    assert cfg.green_wait_timeout_sec == 15.0
 
 
 def test_wait_green_timeout_assumes_green_and_starts():
@@ -1689,7 +1689,7 @@ def test_wait_green_timeout_assumes_green_and_starts():
         PlannerConfig(
             route_mode=RouteMode.OUT,
             require_green_to_start=True,
-            green_wait_timeout_sec=30.0,
+            green_wait_timeout_sec=15.0,
             stop_on_red=True,
             stop_on_aruco=False,
             normal_tracker='pp',
@@ -1712,7 +1712,7 @@ def test_wait_green_timeout_assumes_green_and_starts():
         early = planner.step(frame, now_sec=1.0)
         assert early.state is DrivingState.WAIT_GREEN
         assert early.decision == 'wait_green'
-        late = planner.step(frame, now_sec=31.5)
+        late = planner.step(frame, now_sec=16.5)
     assert late.state is DrivingState.NORMAL
     assert planner._green_assumed is True
     assert late.debug.get('green_assumed') is True

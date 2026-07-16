@@ -167,12 +167,10 @@ roundabout:
   throttle: 0.18
 
 signals:
-  # Competition: YOLO lights + ArUco + direction signs ALL ON.
-  # OpenCV HSV lights disabled (false positives on nearby colors).
-  # Mid-track only: traffic_pass:=true (skips green wait / red stop).
+  # Lights OFF (OpenCV+YOLO disabled). Wait then assume green and start.
   require_green_to_start: true
   # No green within this many seconds → assume green and start.
-  green_wait_timeout_sec: 30.0
+  green_wait_timeout_sec: 15.0
   stop_on_red: true
   stop_on_aruco: true
   traffic_pass: false

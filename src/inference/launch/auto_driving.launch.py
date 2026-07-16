@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -45,8 +45,6 @@ def generate_launch_description():
                 '(ArUco still stops)'
             ),
         ),
-        # team-new SSOT: sign_light_best_v5b.onnx for red/green lights.
-        SetEnvironmentVariable(name='TRAFFIC_LIGHT_BACKEND', value='yolo'),
         Node(
             package='camera',
             executable='camera_node',

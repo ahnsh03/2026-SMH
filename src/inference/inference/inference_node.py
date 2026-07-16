@@ -228,10 +228,9 @@ class InferenceNode(Node):
         elif planner_config.require_green_to_start:
             timeout = float(planner_config.green_wait_timeout_sec)
             self.get_logger().warn(
-                f'*** WAIT_GREEN armed (throttle=0 until YOLO green, '
-                f'or assume green after {timeout:.0f}s). '
-                'OpenCV HSV lights disabled. '
-                'Mid-track test: traffic_pass:=true ***'
+                f'*** WAIT_GREEN: lights OFF (no OpenCV/YOLO). '
+                f'Assume green after {timeout:.0f}s '
+                '(or traffic_pass:=true to skip). ***'
             )
         if forced_turn_raw in ('left', 'right'):
             # One more loud line so experimental runs are easy to confirm.

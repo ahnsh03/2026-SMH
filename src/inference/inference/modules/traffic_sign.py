@@ -1,29 +1,26 @@
-"""Traffic light & sign detection facade — 담당: 장원정 / 박성준(YOLO light).
+"""Traffic light & sign detection facade — 담당: 장원정 / 박성준.
 
-* **Lights (only):** team-new YOLO ONNX ``sign_light_best_v5b`` classes 2/3
+* **Lights:** disabled (OpenCV + YOLO both off — unreliable on track).
+  Planner uses ``green_wait_timeout_sec`` then assumes green.
 * **Signs (required):** ``direction_sign`` + ``weights/sign_best.onnx`` (2-class)
-
-OpenCV HSV light detection is **disabled** (false positives on nearby colored
-objects). Env ``TRAFFIC_LIGHT_BACKEND`` is ignored for runtime lights.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from inference.modules.trafficsign import detect_signal_yolo
 from inference.types import TrafficResult, TrafficSignal, TurnSign
 
 _direction_detector_available = True
 
 
 def _light_backend() -> str:
-    return 'yolo'
+    return 'off'
 
 
 def _uses_light_yolo(backend: str | None = None) -> bool:
     del backend
-    return True
+    return False
 
 
 def _detect_turn_safely(frame: np.ndarray) -> TurnSign:
@@ -41,25 +38,27 @@ def _detect_turn_safely(frame: np.ndarray) -> TurnSign:
 
 
 def detect_signal(frame: np.ndarray) -> TrafficSignal:
-    """YOLO-only traffic-light color (OpenCV HSV path removed)."""
-    return detect_signal_yolo(frame)
+    """Traffic lights disabled — always UNKNOWN (timeout assume-green handles start)."""
+    del frame
+    return TrafficSignal.UNKNOWN
 
 
 def detect_signal_both(frame: np.ndarray) -> dict[str, object]:
-    """Offline A/B helper — runtime still YOLO-only (opencv field unused)."""
-    yolo = detect_signal_yolo(frame)
+    """Offline helper — runtime lights are off."""
+    del frame
     return {
         'opencv': TrafficSignal.UNKNOWN,
-        'yolo': yolo,
-        'selected': yolo,
-        'mode': 'yolo',
-        'two_yolo_risk': True,
+        'yolo': TrafficSignal.UNKNOWN,
+        'selected': TrafficSignal.UNKNOWN,
+        'mode': 'off',
+        'two_yolo_risk': False,
         'opencv_disabled': True,
+        'yolo_disabled': True,
     }
 
 
 def detect(frame: np.ndarray) -> TrafficResult:
-    """Detect traffic light color and fork turn sign."""
+    """Detect fork turn sign only (traffic light path is off)."""
     return TrafficResult(
         signal=detect_signal(frame),
         turn=_detect_turn_safely(frame),

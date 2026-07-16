@@ -119,7 +119,7 @@ class PlannerConfig:
     # When false: still detect ArUco for debug, but keep lane follow (no hard stop).
     stop_on_aruco: bool = True
     # WAIT_GREEN: if no green seen within this many seconds, assume green and go.
-    green_wait_timeout_sec: float = 30.0
+    green_wait_timeout_sec: float = 15.0
     command_watchdog_sec: float = 0.5
     log_state_changes: bool = True
     log_decision_changes: bool = True
@@ -365,7 +365,7 @@ def load_planner_config(
         stop_on_red=stop_red,
         stop_on_aruco=bool(signals.get('stop_on_aruco', True)),
         green_wait_timeout_sec=max(
-            0.0, float(signals.get('green_wait_timeout_sec', 30.0))
+            0.0, float(signals.get('green_wait_timeout_sec', 15.0))
         ),
         command_watchdog_sec=max(0.1, float(safety.get('command_watchdog_sec', 0.5))),
         log_state_changes=bool(debug.get('log_state_changes', True)),

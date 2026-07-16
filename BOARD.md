@@ -53,7 +53,7 @@ ros2 launch inference auto_driving.launch.py route_mode:=in   # or out
 | Metric IPM | `scripts/vision_tune/metric_ipm.py` + yaml (`pitch_down_deg=10`, `x_max_m=1.5`) |
 | HSV+drivable | real_car + near + morph 3/13 |
 | 표지판 | YOLO `sign_best.onnx` (프레임당 YOLO 1개) |
-| 신호등 | 기본 OpenCV HSV |
+| 신호등 | **OFF** — 15초 후 초록 가정 출발 (`traffic_pass:=true`면 즉시) |
 | 기하 | L 0.175 / δ 0.4266 / d_rc 0.200 |
 | 조향 | 소프트웨어 + = 우, `STEER_INVERT: true` |
 
