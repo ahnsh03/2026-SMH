@@ -275,6 +275,38 @@ python3 scripts/vision_tune/tune_lane_control.py --drive
 
 ---
 
+## OpenCV 신호등 검증 (카메라 bag)
+
+BEV HSV 모자이크와 같이 **원본 / 빨강 마스크 / 초록 마스크 / 결정+blob** 4패널로
+OpenCV `color_detector`가 신호등만 잡는지 bag에서 확인한다 (카메라 프레임, BEV 아님).
+
+```bash
+source /opt/ros/humble/setup.bash
+# 대화형 스크러버 (시작 PAUSE)
+python3 scripts/vision_tune/viz_traffic_light.py --from-bag out_cam
+python3 scripts/vision_tune/viz_traffic_light.py --from-bag in --hits-only
+
+# 보드 임계값으로 검증 (main bags + board color_detector)
+PYTHONPATH=../2026-SMH-board/src/inference:$PYTHONPATH \
+  python3 scripts/vision_tune/viz_traffic_light.py --from-bag out_cam --tune
+
+# 헤드리스: 검출 프레임만 mosaic + hits.csv
+python3 scripts/vision_tune/viz_traffic_light.py --from-bag out \
+  --export-dir data/captures/traffic_light_viz/out --no-gui --stride 2
+```
+
+| 키 | 동작 |
+|----|------|
+| `SPACE` | 재생 / 일시정지 |
+| `←` `→` / `,` `.` | 프레임 이동 |
+| `h` | 다음 RED/GREEN hit |
+| `d` | 현재 mosaic PNG 저장 |
+| `q` / ESC | 종료 |
+
+`--tune`: HSV·`min_px` 트랙바 (라이브 오버라이드). 보드 래퍼: `2026-SMH-board/scripts/viz_traffic_light.py`.
+
+---
+
 ## HSV 마스크 튜너 (Phase 1 · 시뮬·실차 분리)
 
 흰/노란 차선 · 검정/빨강 차로 마스크를 Metric IPM BEV에서 맞춘다.  
