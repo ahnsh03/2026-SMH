@@ -105,6 +105,11 @@ mask_pursuit:
   far_band_ratio: 0.95
   far_blend: 0.0
   use_path_correction: false
+  # Drivable COM first; when paint is clean/strong, pull toward course CTE+heading.
+  # w = paint_blend_max * smoothstep(path_conf, lo, hi)
+  paint_blend_max: 0.40
+  paint_blend_lo: 0.25
+  paint_blend_hi: 0.60
   center_mode: area
   erode_px: 0
   lane_width_m: 0.35

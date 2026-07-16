@@ -70,6 +70,86 @@ def test_mask_com_pursuit_rejects_empty_mask():
     assert not planner._mask_com_pursuit(lane, dt_sec=0.1).valid
 
 
+def test_mask_paint_blend_pulls_toward_clean_path():
+    """High path confidence adds paint CTE/heading on top of drivable COM."""
+    import cv2
+    from inference.modules import lane_detection as ld
+
+    h, w = ld.BEV_HEIGHT, ld.BEV_WIDTH
+    mask = np.zeros((h, w), dtype=np.uint8)
+    # Centered free-space → near-zero COM steer alone.
+    cv2.rectangle(mask, (w // 2 - 25, h // 4), (w // 2 + 25, h - 1), 255, -1)
+    # Paint path offset left (positive y) so CTE/heading pull nonzero.
+    path = np.array(
+        [[0.4, 0.12], [0.8, 0.14], [1.2, 0.16], [1.5, 0.18]],
+        dtype=np.float32,
+    )
+    lane = type(
+        'L',
+        (),
+        {
+            'drivable_area': mask,
+            'meters_per_pixel': float(ld.METERS_PER_PIXEL),
+            'x_forward_max': 2.0,
+            'white_visible': True,
+            'yellow_visible': False,
+            'white_confidence': 0.9,
+            'yellow_confidence': 0.0,
+            'confidence': 0.9,
+        },
+    )()
+    base_kw = dict(
+        normal_tracker='mask_p',
+        mask_steer_law='sim_v2',
+        mask_steer_k=2.0,
+        mask_steer_alpha=1.0,
+        mask_near_band_ratio=1.0,
+        mask_center_mode='area',
+        mask_corridor_mode='off',
+        mask_use_path_correction=False,
+        mask_min_area_px=10.0,
+        mask_erode_px=0,
+        prefer_yellow=False,
+        steering_rate_limit_per_sec=100.0,
+        max_steering_command=1.0,
+        perception_to_rear_axle_x_m=0.265,
+    )
+    com_only = MainPlanner(
+        PlannerConfig(**base_kw, mask_paint_blend_max=0.0)
+    )._mask_com_pursuit(lane, dt_sec=0.1, color_path=path, path_confidence=0.9)
+    blended = MainPlanner(
+        PlannerConfig(
+            **base_kw,
+            mask_paint_blend_max=0.50,
+            mask_paint_blend_lo=0.20,
+            mask_paint_blend_hi=0.55,
+        )
+    )._mask_com_pursuit(lane, dt_sec=0.1, color_path=path, path_confidence=0.9)
+    low_conf = MainPlanner(
+        PlannerConfig(
+            **base_kw,
+            mask_paint_blend_max=0.50,
+            mask_paint_blend_lo=0.20,
+            mask_paint_blend_hi=0.55,
+        )
+    )._mask_com_pursuit(lane, dt_sec=0.1, color_path=path, path_confidence=0.05)
+
+    assert com_only.valid and blended.valid and low_conf.valid
+    assert abs(float(blended.steering) - float(com_only.steering)) > 0.02
+    assert abs(float(low_conf.steering) - float(com_only.steering)) < 0.02
+    assert float(blended.cte_steering) != 0.0
+    dbg = MainPlanner(
+        PlannerConfig(
+            **base_kw,
+            mask_paint_blend_max=0.50,
+            mask_paint_blend_lo=0.20,
+            mask_paint_blend_hi=0.55,
+        )
+    )
+    dbg._mask_com_pursuit(lane, dt_sec=0.1, color_path=path, path_confidence=0.9)
+    assert float(dbg._last_mask_debug.get('mask_paint_blend_w', 0.0)) > 0.3
+
+
 def test_mask_hard_corridor_ignores_side_blob():
     """Opposite-course blob must not yank COM when hard corridor is on."""
     import cv2

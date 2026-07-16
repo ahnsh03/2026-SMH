@@ -162,6 +162,11 @@ class PlannerConfig:
     mask_require_color_path: bool = True
     # When OUT fork perception is armed (sign hold), auto-enable hard corridor.
     mask_corridor_near_fork: bool = True
+    # Confidence-gated paint pull on top of drivable COM (mask_p).
+    # w = paint_blend_max * smoothstep(path_conf, lo, hi); raw = COM + w*(CTE+heading).
+    mask_paint_blend_max: float = 0.0
+    mask_paint_blend_lo: float = 0.20
+    mask_paint_blend_hi: float = 0.55
     # When mask drops in a corner, hold last COM steer this many frames before
     # white PP (PP often yanks off when rails vanish).
     mask_occlusion_hold_frames: int = 24
@@ -383,6 +388,13 @@ def load_planner_config(
         mask_fork_force_pp=bool(mask.get('fork_force_pp', True)),
         mask_require_color_path=bool(mask.get('require_color_path', True)),
         mask_corridor_near_fork=bool(mask.get('corridor_near_fork', True)),
+        mask_paint_blend_max=float(
+            np.clip(mask.get('paint_blend_max', 0.0), 0.0, 1.0)
+        ),
+        mask_paint_blend_lo=max(0.0, float(mask.get('paint_blend_lo', 0.20))),
+        mask_paint_blend_hi=max(
+            0.01, float(mask.get('paint_blend_hi', 0.55))
+        ),
         mask_occlusion_hold_frames=max(
             0, int(mask.get('occlusion_hold_frames', 12))
         ),
@@ -1365,6 +1377,7 @@ class MainPlanner:
         dt_sec: float | None = None,
         *,
         color_path: np.ndarray | None = None,
+        path_confidence: float | None = None,
         far_blend_override: float | None = None,
         apply_rate_limit: bool = True,
         update_ema: bool = True,
@@ -1729,7 +1742,8 @@ class MainPlanner:
         cte_steering = 0.0
         heading_error = 0.0
         heading_steering = 0.0
-        if use_path_corr and path_xy.shape[0] >= 2:
+        paint_w = 0.0
+        if path_xy.shape[0] >= 2:
             rear = self._path_in_rear_axle_frame(path_xy)
             xy = self._ordered_path(rear)
             if xy.shape[0] >= 2:
@@ -1737,7 +1751,39 @@ class MainPlanner:
                 cte_steering = self._cte_correction(cte)
                 heading_error, heading_steering = self._heading_correction(xy)
 
-        raw = float(filtered) + float(cte_steering) + float(heading_steering)
+        # Always-on additive path correction (legacy). Prefer paint_blend_* instead.
+        paint_add = 0.0
+        blend_max = float(np.clip(self.config.mask_paint_blend_max, 0.0, 1.0))
+        if use_path_corr:
+            paint_add = float(cte_steering) + float(heading_steering)
+        elif blend_max > 1e-6 and path_xy.shape[0] >= 2:
+            # Confidence-gated paint pull: drivable COM first; clean paint → more weight.
+            if path_confidence is None:
+                conf = max(
+                    float(getattr(lane, 'white_confidence', 0.0) or 0.0),
+                    float(getattr(lane, 'yellow_confidence', 0.0) or 0.0),
+                    float(getattr(lane, 'confidence', 0.0) or 0.0),
+                )
+            else:
+                conf = float(path_confidence)
+            paint_w = blend_max * self._smoothstep(
+                conf,
+                float(self.config.mask_paint_blend_lo),
+                float(self.config.mask_paint_blend_hi),
+            )
+            prefer_y = bool(getattr(lane, 'yellow_visible', False)) and bool(
+                self.config.prefer_yellow
+            )
+            paint_vis = (
+                bool(getattr(lane, 'yellow_visible', False))
+                if prefer_y
+                else bool(getattr(lane, 'white_visible', False))
+            )
+            if not paint_vis:
+                paint_w = 0.0
+            paint_add = paint_w * (float(cte_steering) + float(heading_steering))
+
+        raw = float(filtered) + float(paint_add)
         dt = self.config.nominal_control_dt_sec if dt_sec is None else max(0.0, dt_sec)
         if apply_rate_limit:
             steered = self._apply_rate_limited_steering(raw, dt)
@@ -1793,6 +1839,9 @@ class MainPlanner:
             'mask_far_blend': round(float(far_blend_eff), 3),
             'mask_far_blend_cfg': round(float(far_blend), 3),
             'mask_path_correction': bool(use_path_corr),
+            'mask_paint_blend_w': round(float(paint_w), 3),
+            'mask_paint_blend_max': round(float(blend_max), 3),
+            'mask_paint_add': round(float(paint_add), 4),
             'mask_color_path_points': int(path_xy.shape[0]),
             'mask_corridor_recover': corridor_recover,
             'mask_center_mode': center_mode,
@@ -1983,16 +2032,24 @@ class MainPlanner:
         lane: Any,
         color_path: np.ndarray,
         dt_sec: float,
+        path_confidence: float | None = None,
     ) -> PursuitResult:
         tracker = str(self.config.normal_tracker or 'pp').lower()
         if tracker == 'hybrid':
             if self._forkish_for_mask(lane):
                 return self._pure_pursuit(color_path, dt_sec)
-            return self._hybrid_pursuit(lane, color_path, dt_sec)
+            return self._hybrid_pursuit(
+                lane, color_path, dt_sec, path_confidence=path_confidence
+            )
         if tracker == 'mask_p':
             if self._forkish_for_mask(lane):
                 return self._pure_pursuit(color_path, dt_sec)
-            return self._mask_com_pursuit(lane, dt_sec, color_path=color_path)
+            return self._mask_com_pursuit(
+                lane,
+                dt_sec,
+                color_path=color_path,
+                path_confidence=path_confidence,
+            )
         if tracker == 'stanley':
             if self._forkish_for_mask(lane):
                 return self._pure_pursuit(color_path, dt_sec)
@@ -2017,6 +2074,7 @@ class MainPlanner:
         lane: Any,
         color_path: np.ndarray,
         dt_sec: float,
+        path_confidence: float | None = None,
     ) -> PursuitResult:
         """Gated blend: PP (+CTE/heading) on straights, mask COM on curve/error."""
         dt = self.config.nominal_control_dt_sec if dt_sec is None else max(0.0, dt_sec)
@@ -2026,15 +2084,17 @@ class MainPlanner:
                 lane,
                 dt,
                 color_path=color_path,
+                path_confidence=path_confidence,
                 far_blend_override=0.0,
                 use_path_correction_override=False,
             )
 
-        # Probe near-only COM for lateral error (no EMA / rate / path corr).
+        # Probe near-only COM for lateral error (no EMA / rate / paint blend).
         probe = self._mask_com_pursuit(
             lane,
             dt,
             color_path=color_path,
+            path_confidence=0.0,
             far_blend_override=0.0,
             apply_rate_limit=False,
             update_ema=False,
@@ -2110,6 +2170,7 @@ class MainPlanner:
             lane,
             dt,
             color_path=color_path,
+            path_confidence=path_confidence,
             far_blend_override=far_eff,
             apply_rate_limit=False,
             update_ema=True,
@@ -2596,7 +2657,9 @@ class MainPlanner:
             )
             if use_hybrid:
                 self._last_mask_debug = {}
-                pursuit = self._hybrid_pursuit(lane, color_path, dt_sec)
+                pursuit = self._hybrid_pursuit(
+                    lane, color_path, dt_sec, path_confidence=path_confidence
+                )
                 if pursuit.valid:
                     w = float(
                         (getattr(self, '_last_mask_debug', {}) or {}).get(
@@ -2639,7 +2702,10 @@ class MainPlanner:
             elif use_mask:
                 self._last_mask_debug = {}
                 pursuit = self._mask_com_pursuit(
-                    lane, dt_sec, color_path=color_path
+                    lane,
+                    dt_sec,
+                    color_path=color_path,
+                    path_confidence=path_confidence,
                 )
                 if pursuit.valid:
                     holding = bool(
