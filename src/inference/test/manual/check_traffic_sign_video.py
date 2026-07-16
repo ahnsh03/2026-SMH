@@ -1,8 +1,8 @@
 """Run traffic-light detection on a video or a generated red-light demo.
 
 Examples:
-    python test/check_traffic_sign_video.py --generate-demo --show --loop
-    python test/check_traffic_sign_video.py --video path/to/red_light.mp4 --output annotated.mp4
+    python test/manual/check_traffic_sign_video.py --generate-demo --show --loop
+    python test/manual/check_traffic_sign_video.py --video path/to/red_light.mp4 --output annotated.mp4
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-_PKG_ROOT = Path(__file__).resolve().parents[1]
+_PKG_ROOT = Path(__file__).resolve().parents[2]
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 

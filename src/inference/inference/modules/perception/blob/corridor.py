@@ -210,7 +210,8 @@ def extract_drivable_blob(
         near = morph
 
     # Soft ego band to drop far side-course bleed before DT.
-    geom = replace(vehicle_geom_for_platform('sim'), track_width_m=float(track_width_m))
+    # Board race: D3-G planar geom (not LIMO sim wheelbase 0.24).
+    geom = replace(vehicle_geom_for_platform('real_car'), track_width_m=float(track_width_m))
     band = build_kinematic_ego_band(
         near.shape[:2],
         meters_per_pixel=float(meters_per_pixel),

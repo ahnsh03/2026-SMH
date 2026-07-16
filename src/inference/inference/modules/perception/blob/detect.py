@@ -100,7 +100,7 @@ def detect_with_debug(
     bev = masks['bev']
     h_bev = int(masks['road_raw'].shape[0]) if masks['road_raw'].size else 0
 
-    _white_ssot, ego, _bev_ssot = course_ego_blob(frame, prefer_yellow=prefer)
+    _white_ssot, ego, bev_ssot = course_ego_blob(frame, prefer_yellow=prefer)
     used_yellow = bool(prefer and yellow_lane_present(masks['yellow']))
     method = 'ego_blob'
     left_rails = np.empty(0, dtype=np.float32)
@@ -121,6 +121,10 @@ def detect_with_debug(
             between_rows=valid_rows,
             rail_valid_ratio=float(valid_rows) / float(max(h_bev, 1)),
         )
+        # Prefer BEV from course_ego_blob (same warp as white/ego SSOT).
+        if getattr(bev_ssot, 'size', 0):
+            bev = bev_ssot
+        white_ssot = np.asarray(_white_ssot, dtype=np.uint8)
     else:
         # Short flicker / empty BEV-HSV → DT strip fallback (same paint walls path).
         blob, lane_mask, corr_stats, left_rails, right_rails, used_yellow = (
@@ -135,6 +139,7 @@ def detect_with_debug(
             )
         )
         method = str(corr_stats.method or 'dt_strip')
+        white_ssot = masks['white']
 
     rail_conf = float(corr_stats.rail_valid_ratio)
     # Ridge mid on the ego region — stable lateral target for PP / paint blend.
@@ -217,7 +222,7 @@ def detect_with_debug(
 
     debug = LaneDebugFrame(
         bev=bev,
-        white_bev=masks['white'],
+        white_bev=white_ssot,
         yellow_bev=masks['yellow'],
         black_bev=masks['black'],
         red_bev=masks['red'],

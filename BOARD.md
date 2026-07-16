@@ -11,14 +11,20 @@ source install/setup.bash
 ros2 launch inference auto_driving.launch.py route_mode:=in   # or out
 # 신호등 없이 트랙 중간 테스트: traffic_pass:=true  (초록 대기·빨간 정지 스킵, ArUco는 유지)
 # 로그에 *** TRAFFIC_PASS *** 또는 *** WAIT_GREEN armed *** 확인.
-# 모니터 패널: Lane (HSV paint) + Road (drivable). 조이스틱 노드 미기동.
-# BEV 안 보이면: colcon build --packages-select inference && source install/setup.bash
-#   (publish QoS를 RELIABLE로 맞춤 — BEST_EFFORT면 모니터가 못 받음)
+# 모니터 패널: White / IN ego / OUT ego (publish_bev_debug). 조이스틱 노드 미기동.
+# 대회: publish_bev_debug:=false 로 모니터 BEV 발행 끄면 CPU 절약.
 # 패치 적용(모니터 라벨·카메라 로그): ./scripts/board_init_workspace.sh 또는
 #   python3 patches/apply_monitor_bev_labels.py external/D-Racer-Kit
 #   python3 patches/apply_camera_quiet_logs.py external/D-Racer-Kit
-# 모니터: http://<보드IP>:5000
+# 모니터: http://<보드IP>:5000  (White / IN ego / OUT ego)
 # 스로틀 확인: ros2 topic echo /control   /   ros2 topic echo /debug/planner
+# 디버그 런치(기본 traffic_pass + BEV):
+#   ros2 launch inference debug_monitor.launch.py route_mode:=out
+# 터미널 대시보드:
+#   python3 scripts/board_monitor_term.py --hz
+# 기능별 단위테스트:
+#   ./scripts/board_test.sh
+#   ./scripts/board_test.sh fork|planner|blob|signs|aruco
 ```
 
 ## 이 브랜치에 있는 것
@@ -27,23 +33,24 @@ ros2 launch inference auto_driving.launch.py route_mode:=in   # or out
 ├── BOARD.md / README.md
 ├── config/                 ← lane_vision, main_planner, vehicle
 ├── patches/                ← Kit 카메라·서보 invert
-├── scripts/board_*.sh      ← init / sync
+├── scripts/board_*.sh      ← init / sync / unit_test
+├── scripts/board_monitor_term.py  ← 터미널 planner/control/aruco
 ├── scripts/check_sign_*    ← 표지판·신호등 점검
 ├── weights/                ← sign_best.onnx (+ light A/B용 v5b)
 ├── docs/                   ← 실차 SSOT 문서만
-├── src/inference/          ← 팀 자율주행
+├── src/inference/          ← 팀 자율주행 (+ test/unit 기능별)
 ├── src/lane_msgs/          ← /perception/lane 메시지
 └── external/D-Racer-Kit/   ← 링크/clone (Git 밖)
 ```
 
 ## 미션 FSM
 
-1. `route_mode:=in|out`  
-2. (테스트) `traffic_pass:=true` → 초록 대기/빨간 정지 스킵  
-3. 초록불 → 출발  
-4. OUT: S자·갈림 / IN: 회전교차로  
-5. ArUco 보이면 정지, 사라지면 재출발  
-6. 빨간불 → 정지  
+1. `route_mode:=in|out`
+2. (테스트) `traffic_pass:=true` → 초록 대기 스킵
+3. 신호등 모듈 OFF → **15초** 후 초록 가정 출발 (또는 traffic_pass)
+4. OUT: S자·갈림 (표지 OR capture로 arm; 표지 없으면 RIGHT 기본)
+5. IN: 회전교차로
+6. ArUco 보이면 정지, 사라지면 재출발
 
 ## 실차 SSOT 요약
 

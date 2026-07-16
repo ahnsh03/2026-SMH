@@ -2,10 +2,10 @@
 
 Course split (SSOT):
 
-* **OUT ``out_fork``:** ``out_fork_capture`` (tip+stretch) arms fork perception /
-  ``FORK_TURN``. Camera turn **sign** picks L/R when confirmed; on sign miss
-  competition uses ``default_out_branch_rank`` (RIGHT=1). Optional
-  ``require_sign`` can gate arming for stricter runs.
+* **OUT ``out_fork``:** arm when **turn-sign window OR** ``out_fork_capture``
+  (tip+stretch). Confirmed camera sign picks L/R; on sign miss competition
+  uses ``default_out_branch_rank`` (RIGHT=1). Strict AND mode available via
+  ``require_sign=true`` + ``require_capture=true``.
 * **IN ``in_exit``:** ``in_circle_fork_moment`` alone (no sign) arms keep/exit
   selection. Pass policy: **1st rising → right (rank 1) = circle keep**;
   **2nd rising → left (rank 0) = exit**. Enables legacy fork follow ON for
@@ -47,7 +47,14 @@ def decide_out_fork_arm(
     require_capture: bool = True,
     force_mid_manoeuvre: bool = False,
 ) -> OutForkArm:
-    """OUT arm = (sign if required) AND (capture if required), unless mid-turn."""
+    """OUT arm policy.
+
+    * Strict (both required): sign_window AND capture.
+    * Race default (``require_sign=False``, ``require_capture=True``):
+      arm on **sign_window OR capture** so a confirmed turn sign can open
+      fork perception before tip/stretch, and capture still arms on sign miss.
+    * Sign-only / capture-only: that gate alone.
+    """
 
     if force_mid_manoeuvre:
         return OutForkArm(
@@ -58,19 +65,36 @@ def decide_out_fork_arm(
             arm=True,
             reason='mid_manoeuvre',
         )
-    ok_sign = (not require_sign) or sign_window
-    ok_cap = (not require_capture) or capture
-    arm = bool(ok_sign and ok_cap)
-    if arm:
-        reason = 'sign_and_capture' if (require_sign and require_capture) else (
-            'sign' if require_sign else ('capture' if require_capture else 'open')
+
+    if require_sign and require_capture:
+        arm = bool(sign_window and capture)
+        reason = (
+            'sign_and_capture'
+            if arm
+            else (
+                'wait_sign_and_capture'
+                if (not sign_window and not capture)
+                else ('wait_sign' if not sign_window else 'wait_capture')
+            )
         )
-    elif not ok_sign and not ok_cap:
-        reason = 'wait_sign_and_capture'
-    elif not ok_sign:
-        reason = 'wait_sign'
+    elif require_sign:
+        arm = bool(sign_window)
+        reason = 'sign' if arm else 'wait_sign'
+    elif require_capture:
+        # Race: sign alone OR capture (sign miss → capture / default rank).
+        arm = bool(sign_window or capture)
+        if arm and sign_window and capture:
+            reason = 'sign_or_capture'
+        elif arm and sign_window:
+            reason = 'sign'
+        elif arm:
+            reason = 'capture'
+        else:
+            reason = 'wait_sign_or_capture'
     else:
-        reason = 'wait_capture'
+        arm = True
+        reason = 'open'
+
     return OutForkArm(
         sign_window=sign_window,
         capture=capture,

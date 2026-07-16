@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,9 +9,6 @@ from unittest.mock import patch
 
 import numpy as np
 
-_INFERENCE_SRC = Path(__file__).resolve().parents[1]
-if str(_INFERENCE_SRC) not in sys.path:
-    sys.path.insert(0, str(_INFERENCE_SRC))
 
 from inference.pipeline import (  # noqa: E402
     MainPlanner,
@@ -1658,7 +1654,7 @@ def test_load_planner_config_has_track_and_stanley():
     assert cfg.default_out_branch_rank == 1
     assert cfg.out_fork_require_sign is False
     assert cfg.require_green_to_start is True
-    assert cfg.stop_on_red is True
+    assert cfg.stop_on_red is False
     assert cfg.stop_on_aruco is True
     assert cfg.green_wait_timeout_sec == 15.0
 

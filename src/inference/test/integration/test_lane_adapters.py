@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 
-_INFERENCE_SRC = Path(__file__).resolve().parents[1]
-if str(_INFERENCE_SRC) not in sys.path:
-    sys.path.insert(0, str(_INFERENCE_SRC))
 
 from inference.lane_adapters import (  # noqa: E402
     detections_from_module,

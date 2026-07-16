@@ -2,21 +2,13 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-# Allow `pytest` without an installed ament package overlay.
-_PKG_ROOT = Path(__file__).resolve().parents[1]
-if str(_PKG_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PKG_ROOT))
-
 cv2 = pytest.importorskip('cv2')
 
-from inference.modules.trafficsign import detect_signal  # noqa: E402
-from inference.types import TrafficSignal  # noqa: E402
+from inference.modules.trafficsign import detect_signal
+from inference.types import TrafficSignal
 
 
 def _light_frame(color_bgr: tuple[int, int, int], size: int = 200, radius: int = 40) -> np.ndarray:
@@ -52,8 +44,9 @@ def test_detect_empty_frame():
 
 
 def test_facade_wraps_signal():
+    """Runtime lights are off — facade always returns UNKNOWN (signs still run)."""
     from inference.modules import traffic_sign
 
     frame = _light_frame((0, 0, 255))
     result = traffic_sign.detect(frame)
-    assert result.signal == TrafficSignal.RED
+    assert result.signal == TrafficSignal.UNKNOWN

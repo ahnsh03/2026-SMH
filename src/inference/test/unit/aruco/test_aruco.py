@@ -2,19 +2,11 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-# Allow `pytest` without an installed ament package overlay.
-_PKG_ROOT = Path(__file__).resolve().parents[1]
-if str(_PKG_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PKG_ROOT))
-
-from inference.modules.aruco import detect_markers, should_stop_for_markers  # noqa: E402
-from inference.modules.aruco.stop_logic import (  # noqa: E402
+from inference.modules.aruco import detect_markers, should_stop_for_markers
+from inference.modules.aruco.stop_logic import (
     STOP_MARKER_IDS,
     reset_stop_logic,
 )

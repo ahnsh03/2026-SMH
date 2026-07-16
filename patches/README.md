@@ -52,9 +52,9 @@ to the param (`gain` *is* writable here); do not add `exposure_absolute`.
 ## monitor BEV panel labels (`apply_monitor_bev_labels.py`)
 
 Kit monitor debug panels default to Grayscale / Blur / Edge. Board remaps those
-slots to Metric-IPM **lane paint** and **drivable road** JPEG from
-`inference_node` (`/debug/bev/lane|road/compressed`). This script renames the
-two panel titles and drops the unused Edge panel (idempotent).
+slots to Metric-IPM **white** / **IN ego** / **OUT ego** JPEG from
+`inference_node` (`/debug/bev/white|in|out/compressed`). This script renames the
+three panel titles (idempotent; also upgrades the older 2-panel Lane/Road patch).
 
 ## camera quiet logs (`apply_camera_quiet_logs.py`)
 

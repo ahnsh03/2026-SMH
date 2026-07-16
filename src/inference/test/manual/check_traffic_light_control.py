@@ -6,7 +6,7 @@ by default so control_node ignores it and the car stays put. Point it at /contro
 only when you actually want the car to move.
 
     ros2 run camera camera_node &
-    python3 test/check_traffic_light_control.py
+    python3 test/manual/check_traffic_light_control.py
     ros2 topic echo /debug/control
 
 Throttle is normalized -1.0..1.0 (d3racer clips to that range), not a percent.
@@ -26,7 +26,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
 
-_PKG_ROOT = Path(__file__).resolve().parents[1]
+_PKG_ROOT = Path(__file__).resolve().parents[2]
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 

@@ -16,7 +16,10 @@ mkdir -p external && ln -sfn ~/D-Racer-Kit external/D-Racer-Kit
 ./scripts/board_race_sync.sh --no-pull
 source install/setup.bash
 ros2 launch inference auto_driving.launch.py route_mode:=in
-# 신호등 없이 중간 배치 테스트:
-# ros2 launch inference auto_driving.launch.py route_mode:=in traffic_pass:=true
-# 모니터: 카메라 + Lane(HSV) + Road(drivable) BEV 마스크 (조이스틱 노드 없음)
+# 디버그(웹+기본 traffic_pass):
+# ros2 launch inference debug_monitor.launch.py route_mode:=out
+# 터미널: python3 scripts/board_monitor_term.py --hz
+# 단위테스트: ./scripts/board_test.sh fork
+# 모니터: 카메라 + White / IN ego / OUT ego BEV 마스크 (조이스틱 노드 없음)
+# 대회: publish_bev_debug:=false 로 모니터 BEV 발행 끄기
 ```

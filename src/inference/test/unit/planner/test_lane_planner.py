@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import math
-import sys
 from pathlib import Path
 
-_INFERENCE_SRC = Path(__file__).resolve().parents[1]
-if str(_INFERENCE_SRC) not in sys.path:
-    sys.path.insert(0, str(_INFERENCE_SRC))
 
 from inference.modules.lane_planner import (  # noqa: E402
     LaneControlParams,

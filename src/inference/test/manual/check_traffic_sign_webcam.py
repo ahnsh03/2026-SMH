@@ -5,10 +5,10 @@ Headless by default (the board is normally reached over SSH), so the verdict
 goes to the terminal instead of a window.
 
 Examples:
-    python3 test/check_traffic_sign_webcam.py
-    python3 test/check_traffic_sign_webcam.py --save annotated.jpg
-    python3 test/check_traffic_sign_webcam.py --source red_light.png
-    python3 test/check_traffic_sign_webcam.py --show
+    python3 test/manual/check_traffic_sign_webcam.py
+    python3 test/manual/check_traffic_sign_webcam.py --save annotated.jpg
+    python3 test/manual/check_traffic_sign_webcam.py --source red_light.png
+    python3 test/manual/check_traffic_sign_webcam.py --show
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import cv2
 
-_PKG_ROOT = Path(__file__).resolve().parents[1]
+_PKG_ROOT = Path(__file__).resolve().parents[2]
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 

@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
-_INFERENCE_SRC = Path(__file__).resolve().parents[1]
-if str(_INFERENCE_SRC) not in sys.path:
-    sys.path.insert(0, str(_INFERENCE_SRC))
-
-from inference.modules.direction_sign.detector import (  # noqa: E402
-    detect_turn_rule_based,
-)
-from inference.types import TurnSign  # noqa: E402
+from inference.modules.direction_sign.detector import detect_turn_rule_based
+from inference.types import TurnSign
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+def _repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for cand in here.parents:
+        if (cand / 'config' / 'main_planner.yaml').is_file():
+            return cand
+    pytest.skip('board repo root not found')
+
+
+_REPO_ROOT = _repo_root()
 
 
 def _sign_frame(direction: str) -> np.ndarray:
@@ -32,8 +34,11 @@ def _sign_frame(direction: str) -> np.ndarray:
         / 'textures'
         / f'turn_sign_{direction}.png'
     )
+    if not path.is_file():
+        pytest.skip(f'sign texture missing (sim asset): {path}')
     sign = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    assert sign is not None
+    if sign is None:
+        pytest.skip(f'failed to load sign texture: {path}')
     sign = cv2.resize(sign, (90, 90), interpolation=cv2.INTER_AREA)
     frame = np.zeros((180, 320, 3), dtype=np.uint8)
     frame[35:125, 115:205] = sign

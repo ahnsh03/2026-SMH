@@ -2,31 +2,25 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 
-_INFERENCE_SRC = Path(__file__).resolve().parents[1]
-if str(_INFERENCE_SRC) not in sys.path:
-    sys.path.insert(0, str(_INFERENCE_SRC))
-
-from inference.modules.active_lane import (  # noqa: E402
+from inference.modules.active_lane import (
     apply_active_lane_policy,
     collapse_to_selected_lane,
     parse_selected_rank_from_planner_debug,
     suppress_merge_spur_branches,
 )
-from inference.modules.lane_detection import (  # noqa: E402
+from inference.modules.lane_detection import (
     ForkLanePair,
     LaneDebugFrame,
     LaneDetections,
     RoadBranch,
 )
-from inference.pipeline import MainPlanner, PlannerConfig  # noqa: E402
-from inference.types import (  # noqa: E402
+from inference.pipeline import MainPlanner, PlannerConfig
+from inference.types import (
     ArucoResult,
     DrivingState,
     PathSource,
@@ -209,12 +203,20 @@ def test_fork_ego_follow_uses_strict_rank_branch_only():
         lane_policy='locked',
         active_branch_rank=0,
     )
-    planner = MainPlanner(PlannerConfig(min_points=5))
+    planner = MainPlanner(
+        PlannerConfig(
+            min_points=5,
+            require_green_to_start=False,
+            stop_on_red=False,
+        )
+    )
     planner.force_fork_choice(TurnSign.LEFT, state=DrivingState.FORK_TURN)
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    debug = LaneDebugFrame()
 
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, debug),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(

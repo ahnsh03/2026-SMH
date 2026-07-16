@@ -406,7 +406,12 @@ class InferenceNode(Node):
         return white, np.asarray(ego, dtype=np.uint8), f'{tag} ego'
 
     def publish_bev_debug_frames(self, output) -> None:
-        """Binary masks: white / IN ego / OUT ego (pre-PDC extract_five SSOT)."""
+        """Binary masks: white / IN ego / OUT ego.
+
+        Reuse ``lane_debug`` white + ego from the active route detect path.
+        Only one extra ``course_ego_blob`` for the opposite course panel.
+        Disable with ``publish_bev_debug:=false`` on race day (no CPU cost).
+        """
         if not self.publish_bev_debug:
             self._bev_publish_ok = False
             self._bev_skip_reason = 'disabled'
@@ -425,18 +430,35 @@ class InferenceNode(Node):
             self._bev_skip_reason = 'no_frame'
             return
 
+        prefer_yellow = bool(output.debug.get('prefer_yellow', False))
+        if str(output.debug.get('route', '')).lower() == 'out':
+            prefer_yellow = False
+
+        dbg = getattr(output, 'lane_debug', None)
+        white = np.asarray(getattr(dbg, 'white_bev', None)) if dbg is not None else None
+        ego = np.asarray(getattr(dbg, 'road_clean', None)) if dbg is not None else None
+        if white is None or getattr(white, 'size', 0) == 0:
+            white = np.zeros((1, 1), dtype=np.uint8)
+        if ego is None or getattr(ego, 'size', 0) == 0:
+            ego = np.zeros_like(white)
+
         try:
-            white, in_blob, in_method = self._course_drivable_mask(
-                frame, prefer_yellow=True
-            )
-            _w2, out_blob, out_method = self._course_drivable_mask(
-                frame, prefer_yellow=False
+            # Opposite course panel only — active route reuses detect ego.
+            _w_opp, ego_opp, _ = self._course_drivable_mask(
+                frame, prefer_yellow=not prefer_yellow
             )
         except Exception as exc:  # noqa: BLE001
             self._bev_publish_ok = False
             self._bev_skip_reason = f'drivable:{exc}'
             self.get_logger().warning(f'bev mask publish failed: {exc}')
             return
+
+        if prefer_yellow:
+            in_blob, in_label = ego, 'IN ego'
+            out_blob, out_label = ego_opp, 'OUT ego'
+        else:
+            in_blob, in_label = ego_opp, 'IN ego'
+            out_blob, out_label = ego, 'OUT ego'
 
         self._publish_jpeg(
             self.bev_lane_pub,
@@ -445,12 +467,12 @@ class InferenceNode(Node):
         )
         self._publish_jpeg(
             self.bev_road_pub,
-            self._mask_to_bgr(in_blob, in_method),
+            self._mask_to_bgr(in_blob, in_label),
             frame_id='mask_in',
         )
         self._publish_jpeg(
             self.bev_out_pub,
-            self._mask_to_bgr(out_blob, out_method),
+            self._mask_to_bgr(out_blob, out_label),
             frame_id='mask_out',
         )
         self._last_bev_debug_sec = now_sec

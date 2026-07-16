@@ -66,7 +66,7 @@ class RailExtractStats:
         return float(self.valid_rows) / float(self.total_rows)
 
 
-def vehicle_geom_for_platform(platform: str = 'sim') -> VehiclePlanarGeom:
+def vehicle_geom_for_platform(platform: str = 'real_car') -> VehiclePlanarGeom:
     key = platform.strip().lower()
     if key in ('sim', 'gazebo', 'limo'):
         return VehiclePlanarGeom(wheelbase_m=0.24, tread_m=0.168)

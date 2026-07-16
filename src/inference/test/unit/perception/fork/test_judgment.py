@@ -46,6 +46,33 @@ def test_out_arm_mid_manoeuvre_forced():
     assert d.reason == 'mid_manoeuvre'
 
 
+def test_out_arm_race_sign_or_capture():
+    """Race YAML: require_sign=False, require_capture=True → OR."""
+    assert (
+        decide_out_fork_arm(
+            sign_window=True, capture=False, require_sign=False, require_capture=True
+        ).arm
+        is True
+    )
+    assert (
+        decide_out_fork_arm(
+            sign_window=False, capture=True, require_sign=False, require_capture=True
+        ).arm
+        is True
+    )
+    assert (
+        decide_out_fork_arm(
+            sign_window=False, capture=False, require_sign=False, require_capture=True
+        ).arm
+        is False
+    )
+    both = decide_out_fork_arm(
+        sign_window=True, capture=True, require_sign=False, require_capture=True
+    )
+    assert both.arm is True
+    assert both.reason == 'sign_or_capture'
+
+
 def test_in_exit_pass_keep_then_exit():
     p1 = decide_in_exit_pass(0, keep_passes=1)
     assert p1.pass_index == 1

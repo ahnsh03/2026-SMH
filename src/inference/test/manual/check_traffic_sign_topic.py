@@ -5,7 +5,7 @@ Runs alongside camera_node and monitor_node, so you can aim the light using the
 web dashboard while watching the verdict here. Ctrl-C to stop.
 
     ros2 run camera camera_node &
-    python3 test/check_traffic_sign_topic.py
+    python3 test/manual/check_traffic_sign_topic.py
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import CompressedImage
 
-_PKG_ROOT = Path(__file__).resolve().parents[1]
+_PKG_ROOT = Path(__file__).resolve().parents[2]
 if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 

@@ -9,10 +9,11 @@ route:
   # Confirm the same direction before latching it. Once a fork starts, its
   # direction/rank stays locked until the manoeuvre completes.
   sign_confirm_frames: 3
-  # OUT: arm on capture even if sign was missed; sign still preferred when seen.
+  # OUT: arm on turn-sign window OR tip+stretch capture (race).
+  # Confirmed sign picks L/R; sign miss → default_out_branch_rank (RIGHT).
   out_fork_require_sign: false
   out_fork_sign_hold_sec: 3.0
-  # Also require tip+stretch capture (score_out_fork_capture).
+  # Capture still used for sign-less arming (OR with sign window).
   out_fork_require_capture: true
   # Keep false: forced_turn:= only chooses L/R rank, does not arm forks all lap.
   # Set true only for sign-less fork unit tests / rail review.
@@ -135,7 +136,8 @@ path:
   white_min_confidence: 0.15
   yellow_min_confidence: 0.12
   yellow_valid_on_frames: 2
-  # Perception flicker: hold last steer + crawl (do not snap neutral / stop early).
+  # Perception flicker: hold last steer + crawl until stop_frames, then throttle 0.
+  # (path_lost_hold_frames is unused legacy — only stop_frames gates crawl→stop.)
   path_lost_hold_frames: 20
   path_lost_stop_frames: 80
   path_lost_crawl_throttle: 0.14
@@ -171,7 +173,8 @@ signals:
   require_green_to_start: true
   # No green within this many seconds → assume green and start.
   green_wait_timeout_sec: 15.0
-  stop_on_red: true
+  # Lights always UNKNOWN — red stop never triggers (kept false to avoid confusion).
+  stop_on_red: false
   stop_on_aruco: true
   traffic_pass: false
 
