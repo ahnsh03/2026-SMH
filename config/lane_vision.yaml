@@ -1,21 +1,99 @@
 # 인지(inference_node) 파라미터 — 차선/표지 비전
 # board: config/lane_vision.yaml 에 대응
+#
+# metric_ipm / hsv 블록은 modules/metric_bev.py, modules/lane_detection.py 가
+# 직접 읽는 SSOT 이다. metric_ipm 값은 팀 참조본
+# (/home/topst/2026-SMH/config/lane_vision.yaml, 2026-07-12 lock)과 동일.
+
 inference_node:
   ros__parameters:
     image_topic: /camera/image/compressed
     lane_topic: /perception/lane
     vehicle_config_file: ""
+    # metric_ipm / hsv 블록(아래)의 경로. 빈 값이면 설치된 share/config 를 자동 탐색.
+    vision_config_file: ""
 
-    # --- BEV / IPM (실제 값은 scripts 튜닝으로 채움) ---
-    # bev_width: 200
-    # bev_height: 200
-    # meters_per_pixel: 0.005
-    # x_forward_max: 1.0
+image:
+  width: 320
+  height: 180
 
-    # --- HSV 색상 임계 (흰/노랑 차선) ---
-    # white_h: [0, 180]
-    # white_s: [0, 40]
-    # white_v: [200, 255]
-    # yellow_h: [20, 35]
-    # yellow_s: [80, 255]
-    # yellow_v: [80, 255]
+# --- Metric IPM (등거리 BEV). SSOT: metric_bev.load_bev_params ---
+# BEV row0=원거리(x_max), 마지막 row=근거리(x_min); col0=좌, 마지막 col=우.
+# 출력 base_link: x=전방+, y=우측+ (LaneController 규약).
+metric_ipm:
+  camera:
+    hfov_deg: 70.42          # C920e
+    height_ground_m: 0.13    # 카메라 렌즈 지면 높이
+    pitch_down_deg: 10.0     # 하향 틸트
+  range:
+    x_min_m: 0.22            # BEV 근거리 경계(이미지 하단)
+    x_max_m: 1.30            # BEV 원거리 경계(crop 라인)
+    y_half_width_m: 0.77     # 좌우 반폭
+    full_image_width: false
+  meters_per_pixel: 0.004    # BEV 등거리 스케일 (가로=세로)
+  crop_top_ratio: 0.39       # 상단 crop 비율(≈x_max)
+  bev_width: 386             # = round(2*0.77/0.004)+1
+  bev_height: 271            # = round((1.30-0.22)/0.004)+1
+  track_width_m: 0.35        # 차선 폭(단측선 오프셋 = 절반)
+  guide_half_width_px: 44    # = round((0.35/2)/0.004)
+  note: 'Team lock 2026-07-12 참조본과 동일. y_half=0.77 기본.'
+
+# --- HSV 색상 임계 (OpenCV H 0-179) ---
+# v4l2 로 카메라 색온도·설정 고정(전반 어둡게) 후 재tap.
+# bags: bag_20260715_230145(Out), bag_20260715_230316(In). tuned 2026-07-16.
+# 차선=흰(+회전교차로만 노랑). 노면=검정/빨강/파랑. **빨강 노면 구간도 흰 차선**.
+#   전반 어두워짐: V 중앙값 ~50 (이전 166). 흰선은 여전히 V≥190.
+#   white  : 밝고 저S. 빨강노면(S≥90)·노란선(S≥80)과 S/V 로 분리.
+#   yellow : 어두워지며 H가 8~18 로 red(H≤10)와 근접 → H≥13 + S 상한 220 + V≥100
+#            으로 red/어두운노면 배제. 회전교차로 노란 원형용(yellow_centerline).
+hsv:
+  active: real_car
+  white:
+    h_min: 0
+    h_max: 179
+    s_min: 0
+    s_max: 72       # 웜화이트(따뜻한 조명+WB): 흰선 S 최대 ~73. 빨강노면 S≥90/노랑 S≥80 과 분리.
+    v_min: 165      # 어두운 구간·모션블러 흰선 V 최저 ~170. 노면 V<160.
+    v_max: 255
+  yellow:
+    h_min: 13
+    h_max: 30
+    s_min: 80
+    s_max: 220
+    v_min: 100
+    v_max: 255
+  # --- 도로 영역(주행가능면) — 단측선 좌/우 판정 보강용. 참조: 2026-SMH real_car ---
+  # road = black_road ∪ red_road. In 코스는 노면이 빨강이므로 red_road 필수.
+  # 단선의 어느 쪽에 도로(빈 공간)가 있는지로 좌/우 경계를 확정 → 콜드스타트에서도 동작.
+  black_road:
+    h_min: 6
+    h_max: 35
+    s_min: 40
+    s_max: 255
+    v_min: 15
+    v_max: 80
+  red_road:                  # 빨강 노면(In 코스). H=0 감싸 상단(H≥175)도 자동 포함.
+    h_min: 0
+    h_max: 5
+    s_min: 235
+    s_max: 255
+    v_min: 85
+    v_max: 185
+  note: >-
+    bags 230145(Out)/230316(In) tap 2026-07-16, v4l2 고정(어둡게). white S≤50,V≥190 /
+    yellow H13-30,S80-220,V100-255. 빨강 노면도 흰차선; 노랑은 회전교차로에만.
+
+lane_detect:
+  color: white               # white | yellow | both. Out·직진·빨강구간 = 흰선.
+                             #   노랑은 yellow_centerline 로 별도 계산(In 회전교차로).
+  morph_open: 3              # 스펙클 제거 커널
+  morph_close: 9             # 선 끊김 메움(어두워 흰선 다소 끊김 → 키움)
+  min_row_pixels: 2          # 한 row 를 유효로 볼 최소 경계 픽셀 수
+  smooth_window: 7           # centerline 이동평균 창(row 단위)
+  line_width_m: 0.03         # 경계선 폭(트랙 스펙 30mm). 단측선 오프셋 보정용.
+  max_lane_gap_m: 0.50       # 좌우 선 사이 이보다 넓으면 다른 차로/구간으로 봄
+  # 트랙 스펙: 폭 0.35(외측~외측), 경계선 0.03 → 내측 주행폭 0.29.
+  # 단측선일 때 선 중심→차로 중심 오프셋 = (0.35-0.03)/2 = 0.16 m.
+  # --- 도로영역 기반 단측선 좌/우 판정 ---
+  road_min_px: 80            # 근거리 밴드 도로 최소 픽셀(이하면 판정 보류→시간로직)
+  road_side_margin: 0.25     # 좌/우 도로 불균형이 이 비율 넘어야 좌/우 확정(회전교차로 등 양쪽 도로는 보류)

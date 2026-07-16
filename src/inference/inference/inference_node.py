@@ -41,9 +41,13 @@ class InferenceNode(Node):
         self.declare_parameter('image_topic', '/camera/image/compressed')
         self.declare_parameter('lane_topic', '/perception/lane')
         self.declare_parameter('vehicle_config_file', '')
+        # metric_ipm / hsv / lane_detect 블록을 담은 lane_vision.yaml 경로.
+        # 빈 값이면 LaneDetector 가 설치 share / 소스 트리에서 자동 탐색.
+        self.declare_parameter('vision_config_file', '')
 
         image_topic = self.get_parameter('image_topic').value
         lane_topic = self.get_parameter('lane_topic').value
+        vision_config = self.get_parameter('vision_config_file').value or None
 
         # D-Racer camera_node 의 QoS(RELIABLE, depth 10)와 호환.
         qos = QoSProfile(
@@ -53,7 +57,7 @@ class InferenceNode(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
 
-        self.pipeline = PerceptionPipeline()
+        self.pipeline = PerceptionPipeline({'lane': vision_config})
 
         self.sub = self.create_subscription(
             CompressedImage, image_topic, self.on_image, qos)

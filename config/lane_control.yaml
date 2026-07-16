@@ -1,16 +1,50 @@
-# 제어(lane_control_node) 파라미터 — 경로추종/명령
-# board: config/lane_control.yaml 에 대응
-lane_control_node:
-  ros__parameters:
-    lane_topic: /perception/lane
-    control_topic: /control
-    command_hz: 10.0
-    lane_timeout: 0.5        # s, 인지 소실 시 안전정지
-    steer_trim: 0.0          # 실차 조향 오프셋 (sim=0, 실차는 vehicle_config STEER_TRIM)
+# 제어 파라미터 — 차선추종(Pure Pursuit) + 미션 모드(In/Out)
+#
+# 통합 주행노드(lane_drive_node)용. 인지→제어를 토픽 없이 in-process 로 처리.
+# 게인은 실차 백파일 튜닝값(LaneController) 기준. board: config/lane_control.yaml.
 
-    # --- Pure Pursuit ---
-    lookahead: 0.35          # m
-    wheelbase: 0.20          # m
-    max_steer: 1.0
-    base_throttle: 0.25
-    steer_ema: 0.5           # 조향 평활 계수 0~1
+lane_drive_node:
+  ros__parameters:
+    image_topic: /camera/image/compressed
+    control_topic: /control
+    command_hz: 20.0
+    lane_timeout: 0.5          # s, 인지 소실 시 안전정지
+    vision_config_file: ""     # lane_vision.yaml (빈값=자동탐색)
+
+    # --- 코스 모드 ---
+    course_mode: out           # out(흰선 추종) | in(노란선 진입+회전교차로 1바퀴)
+
+    # --- 차량 기하 (SSOT: 실차) ---
+    wheelbase_m: 0.175         # 휠베이스 L
+    max_steer_rad: 0.3054      # δ_max=17.5°, steering=±1 ↔ ±17.5°
+    camera_to_axle_m: 0.20     # 카메라 → 후륜축 (centerline x 이동)
+
+    # --- Pure Pursuit + 곡률 FF ---
+    # ★ lookahead 는 후륜축 기준. curve_lookahead 는 반드시 검출 근접점(≈0.42m,
+    #   카메라 x_min 0.22 + 후륜축 0.20)보다 커야 실제로 앞을 본다. 너무 짧으면
+    #   커브에서 근접(직진) 지점만 봐 조향이 약해져 커브를 못 돈다(우회전→직진/좌회전).
+    base_lookahead_m: 1.05     # 직진 look-ahead
+    curve_lookahead_m: 0.58    # 급커브 look-ahead(>0.42 필수)
+    curvature_full_scale: 0.45 # |κ| 정규화 스케일
+    curvature_ff_gain: 0.7     # 곡률 피드포워드(커브 예측). 약하면 커브 못 돔
+    cruise_throttle: 0.22      # 직진 스로틀
+    curve_throttle: 0.20       # 커브 스로틀(감속)
+    steer_ema: 0.5             # 조향 EMA 0~1
+    steer_rate_limit: 0.30     # 프레임당 |Δsteer| 상한(커브 전환 반응)
+    # 차량 조향 부호: 이 D-Racer 는 오른쪽=−, 왼쪽=+. 내부(우측=+)에 곱해 변환.
+    # (백파일 검증: 사람 /control 좌회전 +1.0. steer_sign=+1 이면 실차 반대조향!)
+    steer_sign: -1.0
+    steer_trim: 0.19           # 실차 조향 오프셋(차량 규약, vehicle_config STEER_TRIM)
+
+    # --- In 코스: 노란선 진입 판단 ---
+    entry_min_yellow_pts: 5    # 노란 경로 최소 점수(진입 후보)
+    entry_confirm_frames: 3    # 이 프레임 연속 감지되면 진입 확정
+
+    # --- In 코스: 회전교차로 1바퀴 판정 (실차 튜닝 필요) ---
+    enter_commit_deg: 45.0     # 진입각 이상 돌면 회전교차로 상태로
+    roundabout_exit_deg: 300.0 # 누적 heading 이상이면 탈출(≈1바퀴)
+    roundabout_speed_mps: 0.33 # heading 적분용 정속 추정(커브 스로틀 기준)
+    roundabout_lap_time_s: 0.0 # >0 이면 시간기반으로 대체(측정 lap 시간)
+    roundabout_min_time_s: 2.0 # 조기 탈출 방지
+    roundabout_max_time_s: 20.0 # 무한 회전 방지(규정: 반드시 1회↑ 후 탈출)
+    exit_confirm_frames: 4     # 흰선 이 프레임 안정되면 탈출 완료

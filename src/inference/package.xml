@@ -13,8 +13,9 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>lane_msgs</exec_depend>
-  <!-- 통합 launch(auto_driving)가 제어 계층을 함께 띄운다 -->
-  <exec_depend>driving</exec_depend>
+  <!-- driving 에 대한 의존은 두지 않는다: 의존 방향은 driving→inference (제어가
+       인지를 import). 여기 exec_depend 를 두면 순환이 되어 colcon 빌드 불가.
+       auto_driving.launch 가 driving 노드를 띄우지만 오버레이에 함께 소싱되므로 OK. -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
