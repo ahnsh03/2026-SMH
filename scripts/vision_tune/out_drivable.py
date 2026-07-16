@@ -77,27 +77,50 @@ class FillStats:
 def road_mask_from_hsv(
     bev: np.ndarray,
     ranges: dict[str, HsvRange],
+    *,
+    prefer_yellow: bool = False,
+    yellow: np.ndarray | None = None,
 ) -> np.ndarray:
-    """road = black_near | red (| cyan_near if present). Trial #1 locked."""
+    """road via compose_road_raw (red-only / course cyan gates)."""
 
-    from viz_raw_hsv_masks import _bin, _keep_near_floor_blob, _or2
+    from viz_raw_hsv_masks import _bin, _keep_near_floor_blob
+
+    try:
+        from inference.modules.perception.blob.masks import compose_road_raw
+    except ModuleNotFoundError:
+        from inference.inference.modules.perception.blob.masks import compose_road_raw
 
     black = _keep_near_floor_blob(
         _bin(make_mask(bev, ranges['black_road'], morph=False))
     )
     red = _bin(make_mask(bev, ranges['red_road']))
-    road = _or2(black, red)
-    if 'black_cyan' in ranges or 'black_cyan_2' in ranges:
-        cyan = np.zeros_like(black)
-        if 'black_cyan' in ranges:
-            cyan = _or2(
-                cyan, _bin(make_mask(bev, ranges['black_cyan'], morph=False))
-            )
-        if 'black_cyan_2' in ranges:
-            cyan = _or2(
-                cyan, _bin(make_mask(bev, ranges['black_cyan_2'], morph=False))
-            )
-        road = _or2(road, _keep_near_floor_blob(cyan))
+    if yellow is None:
+        yellow = (
+            _bin(make_mask(bev, ranges['yellow']))
+            if 'yellow' in ranges
+            else np.zeros_like(black)
+        )
+    else:
+        yellow = _bin(yellow)
+    cyan1 = (
+        _bin(make_mask(bev, ranges['black_cyan'], morph=False))
+        if 'black_cyan' in ranges
+        else np.zeros_like(black)
+    )
+    cyan2 = (
+        _bin(make_mask(bev, ranges['black_cyan_2'], morph=False))
+        if 'black_cyan_2' in ranges
+        else np.zeros_like(black)
+    )
+    road, _, _ = compose_road_raw(
+        black,
+        red,
+        cyan1,
+        cyan2,
+        yellow,
+        prefer_yellow=prefer_yellow,
+        keep_near_fn=_keep_near_floor_blob,
+    )
     return road
 
 
@@ -118,7 +141,8 @@ def course_rails_from_debug(
 
 
 def prefer_yellow_for_course(course: str) -> bool:
-    return course.strip().lower() in ('in', 'yellow')
+    key = course.strip().lower()
+    return key in ('in', 'yellow', 'in_cam', 'in_course', 'in_yellow')
 
 
 def _road_width_px(ipm: MetricIpmParams | None = None) -> float:

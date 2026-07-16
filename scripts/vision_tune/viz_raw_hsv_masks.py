@@ -336,26 +336,34 @@ def extract_five_from_bev(
         if 'black_cyan_2' in ranges
         else np.zeros_like(black)
     )
-    cyan_raw = _or2(cyan1, cyan2)
-    cyan = _keep_near_floor_blob(cyan_raw)
-    road = _or2(_or2(black, red), cyan)
-
     # Course paint: exclusive white *or* yellow (SSOT · resolve_course_lane_mask).
     if prefer_yellow is None:
         key = (course or '').strip().lower()
-        if key in ('out', 'out_glare', 'out_course'):
+        if key in ('out', 'out_glare', 'out_course', 'out_cam'):
             prefer_yellow = False
         else:
             # default / in / unknown → IN rule (yellow if present else white)
             prefer_yellow = True
     try:
+        from inference.modules.perception.blob.masks import compose_road_raw
         from inference.modules.perception.blob.rail_corridor import (
             resolve_course_lane_mask,
         )
     except ModuleNotFoundError:
+        from inference.inference.modules.perception.blob.masks import compose_road_raw
         from inference.inference.modules.perception.blob.rail_corridor import (
             resolve_course_lane_mask,
         )
+
+    road, cyan, cyan_raw = compose_road_raw(
+        black,
+        red,
+        cyan1,
+        cyan2,
+        yellow,
+        prefer_yellow=bool(prefer_yellow),
+        keep_near_fn=_keep_near_floor_blob,
+    )
 
     paint, used_yellow = resolve_course_lane_mask(
         white, yellow, prefer_yellow=bool(prefer_yellow)

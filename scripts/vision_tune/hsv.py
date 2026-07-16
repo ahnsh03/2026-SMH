@@ -126,43 +126,56 @@ _BOARD_DEFAULTS: dict[str, dict[str, int]] = {
     'black_cyan_2': dict(_BLACK_CYAN_2_DEFAULT),
 }
 
-# Real-car field tune from bag replay captures (2026-07-15, commits 0191811 + 35ba99e).
+# Real-car after camera settings change (2026-07-16 out_cam/in_cam bags).
 _REAL_CAR_DEFAULTS: dict[str, dict[str, int]] = {
     'white': {
         'h_min': 0,
         'h_max': 179,
         's_min': 0,
-        's_max': 20,
-        'v_min': 210,
+        's_max': 65,
+        'v_min': 165,
         'v_max': 255,
     },
     'yellow': {
-        'h_min': 15,
-        'h_max': 50,
-        's_min': 50,
-        's_max': 150,
-        'v_min': 160,
+        'h_min': 10,
+        'h_max': 20,
+        's_min': 75,
+        's_max': 235,
+        'v_min': 130,
         'v_max': 255,
     },
     'black_road': {
-        'h_min': 17,
-        'h_max': 70,
-        's_min': 0,
+        'h_min': 6,
+        'h_max': 35,
+        's_min': 40,
         's_max': 255,
         'v_min': 15,
-        'v_max': 140,
+        'v_max': 80,
     },
     'red_road': {
         'h_min': 0,
-        'h_max': 9,
-        's_min': 110,
+        'h_max': 5,
+        's_min': 235,
         's_max': 255,
-        'v_min': 120,
-        'v_max': 255,
+        'v_min': 85,
+        'v_max': 185,
     },
-    # OUT LED billboard floor wash (from_bag/out_glare, retune 2026-07-16 S/V).
-    'black_cyan': dict(_BLACK_CYAN_DEFAULT),
-    'black_cyan_2': dict(_BLACK_CYAN_2_DEFAULT),
+    'black_cyan': {
+        'h_min': 95,
+        'h_max': 104,
+        's_min': 215,
+        's_max': 255,
+        'v_min': 85,
+        'v_max': 150,
+    },
+    'black_cyan_2': {
+        'h_min': 0,
+        'h_max': 5,
+        's_min': 30,
+        's_max': 50,
+        'v_min': 125,
+        'v_max': 185,
+    },
 }
 
 _DEFAULTS = _SIM_DEFAULTS
@@ -175,12 +188,15 @@ _PROFILE_META: dict[str, dict[str, Any]] = {
         'tool': 'scripts/vision_tune/tune_hsv.py (key d)',
     },
     'real_car': {
-        'environment': 'D3-G field (C920e 320x180)',
-        'source': 'bag replay → data/captures/from_bag/{in,out}',
-        'bags': 'bag_20260711_150234 (IN), bag_20260711_144948 (OUT)',
-        'tuned': '2026-07-15',
-        'tool': 'scripts/vision_tune/tune_hsv.py --from-bag',
-        'commits': '0191811, 35ba99e',
+        'environment': 'D3-G field (C920e 320x180, camera retune)',
+        'source': 'bag replay → data/captures/from_bag/{out_cam,in_cam}',
+        'bags': (
+            'bag_20260715_230145 (OUT), bag_20260715_230316 (IN); '
+            'signs 230515/230601'
+        ),
+        'tuned': '2026-07-16',
+        'tool': 'scripts/vision_tune/tune_hsv.py --from-bag out_cam|in_cam',
+        'metric_ipm': 'pitch_down_deg=10, x_max_m=1.5',
     },
 }
 

@@ -6,10 +6,11 @@ A/B on bag frames (``viz_mask_postprocess_ab.py`` / ``viz_cyan_ab.py``) showed:
   - C_near / E_walls compete on IN when paint is strong
   - ``black_cyan`` / ``black_cyan_2``: near-robot CC only *before* morph
     (billboard wash appears on- and off-lane; keep on-lane wash)
+  - road fill gates: bottom-red≥250 px → red only; cyan2 IN-only; cyan1 off when yellow visible
 
 Pipeline
 --------
-1. morph denoise road (black_near|red|cyan_near) — open 2 / close 3
+1. morph denoise road (compose_road_raw) — open 2 / close 3
 2. keep largest CC by **near-band mass** touching ego near-band  (= ego blob SSOT)
 3. DT ridge mid → clip each row to mid ± track_width/2 ∩ blob
 4. optional: if course paint dense, AND with paint-wall flood (lights walls)

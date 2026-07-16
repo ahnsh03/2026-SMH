@@ -4,15 +4,20 @@
 Joystick bags live under ``bags/`` (copied into the workspace for the sim
 container). Default course aliases:
 
-  in  → bags/in_course   (← monorepo data/bag_20260711_150234)
-  out → bags/out_course  (← monorepo data/bag_20260711_144948)
+  in        → bags/in_course          (old cam IN)
+  out       → bags/out_course         (old cam OUT)
+  out_cam   → bags/out_cam_20260715   (2026-07-15 카메라 재설정 OUT)
+  in_cam    → bags/in_cam_20260715    (2026-07-15 카메라 재설정 IN)
+  sign_right→ bags/sign_right_20260715
+  sign_left → bags/sign_left_20260715
 
 Examples (inside 2026-smh-sim after sourcing ROS):
 
-  python3 scripts/vision_tune/capture_from_bag.py in
+  python3 scripts/vision_tune/capture_from_bag.py out_cam
+  python3 scripts/vision_tune/capture_from_bag.py out_cam --dump-stride 15
   python3 scripts/vision_tune/capture_from_bag.py out --rate 0.4
-  python3 scripts/vision_tune/capture_from_bag.py --bag bags/in_course \\
-      --out data/captures/from_bag/in
+  python3 scripts/vision_tune/capture_from_bag.py --bag bags/out_cam_20260715 \\
+      --out data/captures/from_bag/out_cam
 
 Keys (focus the player window):
   c           save current frame as PNG
@@ -62,13 +67,33 @@ CAMERA_TOPIC = '/camera/image/compressed'
 COURSE_BAGS: dict[str, Path] = {
     'in': _REPO_ROOT / 'bags' / 'in_course',
     'out': _REPO_ROOT / 'bags' / 'out_course',
+    # 2026-07-15 camera retune bags (copied under bags/).
+    'out_cam': _REPO_ROOT / 'bags' / 'out_cam_20260715',
+    'in_cam': _REPO_ROOT / 'bags' / 'in_cam_20260715',
+    'sign_right': _REPO_ROOT / 'bags' / 'sign_right_20260715',
+    'sign_left': _REPO_ROOT / 'bags' / 'sign_left_20260715',
 }
 
 # Optional monorepo mount (docker-compose: ../data → /host_data)
 HOST_DATA_ALIASES: dict[str, Path] = {
     'in': Path('/host_data/bag_20260711_150234'),
     'out': Path('/host_data/bag_20260711_144948'),
+    'out_cam': Path('/host_data/bag_20260715_230145'),
+    'in_cam': Path('/host_data/bag_20260715_230316'),
+    'sign_right': Path('/host_data/bag_20260715_230515'),
+    'sign_left': Path('/host_data/bag_20260715_230601'),
 }
+
+COURSE_CAPTURE_DIRS: dict[str, str] = {
+    'in': 'in',
+    'out': 'out',
+    'out_cam': 'out_cam',
+    'in_cam': 'in_cam',
+    'sign_right': 'sign_right',
+    'sign_left': 'sign_left',
+}
+
+COURSE_CHOICES = tuple(COURSE_BAGS.keys())
 
 
 def _stamp() -> str:
@@ -125,11 +150,15 @@ def resolve_bag(course: str | None, bag: Path | None) -> Path:
         return path
 
     if course is None:
-        raise SystemExit('Provide course (in|out) or --bag PATH')
+        raise SystemExit(
+            f'Provide course ({"|".join(COURSE_CHOICES)}) or --bag PATH'
+        )
 
     key = course.strip().lower()
     if key not in COURSE_BAGS:
-        raise SystemExit(f'Unknown course {course!r}; use in / out or --bag')
+        raise SystemExit(
+            f'Unknown course {course!r}; use {" / ".join(COURSE_CHOICES)} or --bag'
+        )
 
     candidates = [COURSE_BAGS[key], HOST_DATA_ALIASES[key]]
     for cand in candidates:
@@ -139,7 +168,7 @@ def resolve_bag(course: str | None, bag: Path | None) -> Path:
     raise SystemExit(
         'Bag not found. Expected one of:\n'
         + '\n'.join(f'  - {c}' for c in candidates)
-        + '\nCopy from monorepo data/ or mount ../data at /host_data.'
+        + '\nCopy into bags/ or mount ../data at /host_data.'
     )
 
 
@@ -185,6 +214,31 @@ def load_camera_jpegs(
 
 def decode_jpeg(payload: bytes) -> np.ndarray | None:
     return cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+
+def dump_frames(
+    jpegs: list[bytes],
+    stamps: list[float],
+    out_dir: Path,
+    *,
+    stride: int,
+    start_index: int = 0,
+) -> int:
+    """Non-interactive sparse dump for HSV retune (no GUI)."""
+
+    out_dir = _ensure_out_dir(out_dir)
+    stride = max(1, int(stride))
+    saved = 0
+    for i in range(start_index, len(jpegs), stride):
+        frame = decode_jpeg(jpegs[i])
+        if frame is None:
+            continue
+        path = save_frame(frame, out_dir, i + 1, float(stamps[i]))
+        saved += 1
+        if saved <= 3 or saved % 20 == 0:
+            print(f'  dump [{saved}] {path.name}', flush=True)
+    print(f'dumped={saved} stride={stride} dir={out_dir}', flush=True)
+    return saved
 
 
 def save_frame(frame: np.ndarray, out_dir: Path, index: int, t_rel: float) -> Path:
@@ -386,8 +440,11 @@ def main() -> int:
     parser.add_argument(
         'course',
         nargs='?',
-        choices=('in', 'out'),
-        help='Course alias: in (=bags/in_course) or out (=bags/out_course)',
+        choices=COURSE_CHOICES,
+        help=(
+            'Bag alias: in|out (old) · out_cam|in_cam|sign_right|sign_left '
+            '(2026-07-15 camera retune)'
+        ),
     )
     parser.add_argument(
         '--bag',
@@ -404,7 +461,7 @@ def main() -> int:
         '--out',
         type=Path,
         default=None,
-        help='PNG output dir (default: data/captures/from_bag/<course>)',
+        help='PNG output dir (default: data/captures/from_bag/<alias>)',
     )
     parser.add_argument(
         '--rate',
@@ -418,6 +475,15 @@ def main() -> int:
         default=0.0,
         help='start at bag-relative seconds (default: 0)',
     )
+    parser.add_argument(
+        '--dump-stride',
+        type=int,
+        default=0,
+        help=(
+            'if >0: no GUI — save every Nth camera frame for HSV tune '
+            '(recommended OUT: 12–20)'
+        ),
+    )
     args = parser.parse_args()
 
     bag_dir = resolve_bag(args.course, args.bag)
@@ -428,7 +494,12 @@ def main() -> int:
         if not out_dir.is_absolute():
             out_dir = (_REPO_ROOT / out_dir).resolve()
     else:
-        out_dir = (_REPO_ROOT / 'data' / 'captures' / 'from_bag' / course_label).resolve()
+        capture_key = COURSE_CAPTURE_DIRS.get(
+            str(args.course or ''), course_label
+        )
+        out_dir = (
+            _REPO_ROOT / 'data' / 'captures' / 'from_bag' / capture_key
+        ).resolve()
 
     print(f'Loading {bag_dir} …', flush=True)
     jpegs, stamps = load_camera_jpegs(bag_dir, args.topic)
@@ -440,6 +511,16 @@ def main() -> int:
                 break
         else:
             start_index = len(jpegs) - 1
+
+    if int(args.dump_stride) > 0:
+        n = dump_frames(
+            jpegs,
+            stamps,
+            out_dir,
+            stride=int(args.dump_stride),
+            start_index=start_index,
+        )
+        return 0 if n > 0 else 1
 
     return run_player(
         jpegs,

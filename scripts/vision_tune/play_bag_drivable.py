@@ -531,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         'course',
         nargs='?',
-        choices=('in', 'out'),
+        choices=('in', 'out', 'in_cam', 'out_cam'),
         help='bag course alias (ignored with --from-bev)',
     )
     ap.add_argument('--bag', type=Path, default=None)
@@ -584,10 +584,8 @@ def main(argv: list[str] | None = None) -> int:
     def _resolve_paint_course(fallback: str | None) -> str:
         if args.paint_course:
             return args.paint_course
-        if args.course:
-            return args.course
-        name = (fallback or '').lower()
-        if 'out' in name:
+        key = (args.course or fallback or '').lower()
+        if key.startswith('out') or 'out' in key:
             return 'out'
         return 'in'
 

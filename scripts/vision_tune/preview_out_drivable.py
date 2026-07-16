@@ -93,6 +93,8 @@ GAP = 4
 FROM_BAG_DIRS = {
     'in': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'in',
     'out': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out',
+    'in_cam': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'in_cam',
+    'out_cam': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out_cam',
 }
 
 
@@ -234,7 +236,9 @@ def compare_road_modes(
             ranges = load_hsv_ranges(config_path)
             ipm = load_metric_ipm(config_path)
             bev = warp_metric_ipm(frame, ipm)
-            road = road_mask_from_hsv(bev, ranges)
+            road = road_mask_from_hsv(
+                bev, ranges, prefer_yellow=prefer_yellow_for_course(course)
+            )
         road_only = denoise_road_mask(np.asarray(road, dtype=np.uint8))
         road_in = np.asarray(getattr(dets, 'drivable_area', road_only), dtype=np.uint8)
         road_in_comp = compose_drivable(road_only, road_in, 'road_in')
@@ -304,7 +308,9 @@ def build_views(
     if getattr(debug, 'road_raw', None) is not None and getattr(debug.road_raw, 'size', 0) > 0:
         road = debug.road_raw
     else:
-        road = road_mask_from_hsv(bev_fit, ranges)
+        road = road_mask_from_hsv(
+            bev_fit, ranges, prefer_yellow=prefer_yellow_for_course(course)
+        )
 
     blob = getattr(debug, 'road_clean', None)
     if blob is None or getattr(blob, 'size', 0) == 0:
@@ -403,8 +409,9 @@ def _resolve_folder(from_bag: str | None, folder: Path | None) -> Path:
         return folder.expanduser().resolve()
     key = (from_bag or 'out').strip().lower()
     if key not in FROM_BAG_DIRS:
-        raise SystemExit(f'Unknown --from-bag {from_bag!r}; use in|out')
-    path = FROM_BAG_DIRS[key]
+        raise SystemExit(
+            f'Unknown --from-bag {from_bag!r}; use {"|".join(FROM_BAG_DIRS)}'
+        )    path = FROM_BAG_DIRS[key]
     if not path.is_dir():
         raise SystemExit(f'Missing captures: {path}')
     return path.resolve()
@@ -415,15 +422,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--folder', type=Path, default=None)
     parser.add_argument(
         '--from-bag',
-        choices=('in', 'out'),
+        choices=tuple(FROM_BAG_DIRS.keys()),
         default='out',
-        help='Shortcut to data/captures/from_bag/<in|out> (default: out)',
+        help='Shortcut to data/captures/from_bag/<alias> (default: out)',
     )
     parser.add_argument(
         '--course',
         choices=('in', 'out'),
         default=None,
-        help='Rail color: out=white, in=yellow (default: same as --from-bag)',
+        help='Rail color: out=white, in=yellow (default: from --from-bag)',
     )
     parser.add_argument('--config', type=Path, default=default_config_path())
     parser.add_argument(
@@ -456,6 +463,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     course = args.course or args.from_bag or 'out'
+    if str(course).endswith('_cam') or str(course).endswith('_course'):
+        course = 'in' if str(course).startswith('in') else 'out'
     folder = _resolve_folder(args.from_bag, args.folder)
     paths = _list_images(folder)
     if not paths:

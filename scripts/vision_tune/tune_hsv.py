@@ -6,7 +6,11 @@ Tune **6** channels on Metric IPM BEV (or camera):
 
 Examples (inside 2026-smh-sim after sourcing ROS):
 
-  # All previous bag captures (in+out+glare+black_tune+in_yellow) — keys 1–6
+  # 2026-07-15 camera retune — OUT first
+  python3 scripts/vision_tune/capture_from_bag.py out_cam --dump-stride 15
+  python3 scripts/vision_tune/tune_hsv.py --from-bag out_cam --channel white
+
+  # All previous bag captures (in+out+glare+black_tune+in_yellow)
   python3 scripts/vision_tune/tune_hsv.py --from-bag all
 
   python3 scripts/vision_tune/tune_hsv.py --from-bag out_glare --channel black_cyan
@@ -79,6 +83,11 @@ CHANNEL_COLORS = {
 FROM_BAG_DIRS = {
     'in': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'in',
     'out': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out',
+    # 2026-07-15 camera retune dumps (capture_from_bag.py out_cam|in_cam …).
+    'out_cam': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out_cam',
+    'in_cam': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'in_cam',
+    'sign_right': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'sign_right',
+    'sign_left': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'sign_left',
     # OUT LED billboard floor-wash frames only (7 captures, 2026-07-15).
     'out_glare': _REPO_ROOT / 'data' / 'captures' / 'from_bag' / 'out_glare',
     # Black V / curve off-track samples (IN+OUT frames for black_road tune).
@@ -89,12 +98,12 @@ FROM_BAG_DIRS = {
 
 # Suggested capture sets per channel (keys into FROM_BAG_DIRS or merge tags).
 CHANNEL_CAPTURE_HINT = {
-    'white': 'out / in  (흰 테이프)',
-    'yellow': 'in / in_yellow',
-    'black_road': 'black_road / in / out',
-    'red_road': 'out',
-    'black_cyan': 'out_glare',
-    'black_cyan_2': 'in / in_yellow',
+    'white': 'out_cam / out  (흰 테이프)',
+    'yellow': 'in_cam / in_yellow',
+    'black_road': 'out_cam / in_cam / black_road',
+    'red_road': 'out_cam / out',
+    'black_cyan': 'out_glare / out_cam',
+    'black_cyan_2': 'in_cam / in_yellow',
 }
 
 # --from-bag all : merge these folders (existing only).
@@ -589,8 +598,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             'Capture set under data/captures/from_bag/. '
-            'all = in+out+out_glare+black_road+in_yellow (6 HSV channels). '
-            'Keys 1–6: white yellow black_road red_road black_cyan black_cyan_2.'
+            'all = in+out+out_glare+black_road+in_yellow (+ out_cam/in_cam). '
+            'Keys 1–6: white yellow black_road red_road '
+            'black_cyan black_cyan_2.'
         ),
     )
     parser.add_argument('--config', type=Path, default=default_config_path())

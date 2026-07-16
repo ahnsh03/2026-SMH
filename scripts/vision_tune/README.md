@@ -138,17 +138,28 @@ python3 scripts/vision_tune/capture_camera.py --out data/captures/sim
 
 ## 조이스틱 bag 재생 + 캡처 (IN / OUT)
 
-실차 수동 주행 bag을 **Gazebo 없이** 재생하며 PNG를 뽑는다.  
-워크스페이스 복사본: `bags/in_course`, `bags/out_course`  
-(원본: monorepo `data/bag_20260711_150234` = IN, `data/bag_20260711_144948` = OUT)
+실차 수동 주행 bag을 **Gazebo 없이** 재생하며 PNG를 뽑는다.
+
+| alias | bag 폴더 | 의미 |
+|-------|----------|------|
+| `out` / `in` | `bags/out_course` · `in_course` | 구 카메라 (07-11) |
+| **`out_cam`** | `bags/out_cam_20260715` ← `data/bag_20260715_230145` | **신 카메라 OUT** |
+| **`in_cam`** | `bags/in_cam_20260715` ← `…230316` | 신 카메라 IN |
+| `sign_right` / `sign_left` | `…230515` / `…230601` | 우·좌회전 표지 |
 
 ```bash
 # 2026-smh-sim 안에서
 source /opt/ros/humble/setup.bash && source install/setup.bash
 
-python3 scripts/vision_tune/capture_from_bag.py in          # IN 코스
-python3 scripts/vision_tune/capture_from_bag.py out         # OUT 코스
-python3 scripts/vision_tune/capture_from_bag.py out --rate 0.3 --start 10
+# --- 카메라 재설정 후 HSV 재튜닝 (OUT부터) ---
+python3 scripts/vision_tune/capture_from_bag.py out_cam --dump-stride 15
+PYTHONPATH=scripts/vision_tune python3 scripts/vision_tune/tune_hsv.py \
+  --from-bag out_cam --channel white
+# s 로 lane_vision.yaml 저장 → 채널 1·3·4·5 (white / black_road / red_road / cyan)
+
+# interactive scrub
+python3 scripts/vision_tune/capture_from_bag.py out_cam
+python3 scripts/vision_tune/capture_from_bag.py out         # 구 bag
 ```
 
 | 키 | 동작 |
@@ -300,7 +311,7 @@ python3 scripts/vision_tune/tune_hsv.py --from-bag in_yellow --channel yellow
 | `both` | in+out 병합 |
 
 **주행가능 영역 SSOT (2026-07-16 LOCKED trial #1):**  
-`road_raw = black_near|red|cyan_near` (near=하단 밴드 **질량** CC, morph 전)  
+`road_raw` = `compose_road_raw` (red→red only; cyan2 IN-only; cyan1 off if yellow visible)  
 → morph open **3** / close **13** / 1회 → ego (하단 밴드 질량).  
 HSV retune: black 유지(H17 V15–140); **red S≥110**, **cyan S200–215 V190–238**.
 
