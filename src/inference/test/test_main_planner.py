@@ -299,7 +299,8 @@ def test_roundabout_circle_uses_paint_pp_not_mask():
     planner._roundabout_started_at = 0.0
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -364,8 +365,10 @@ def test_smoothstep_and_hybrid_prefers_pp_on_straight():
     )
     result = planner._hybrid_pursuit(lane, path, dt_sec=0.1)
     assert result.valid
-    assert float(planner._last_mask_debug.get('hybrid_w', 1.0)) < 0.25
-    assert planner._last_mask_debug.get('hybrid_mode') == 'pp'
+    hybrid_w = float(planner._last_mask_debug.get('hybrid_w', 1.0))
+    assert hybrid_w < 0.25
+    # Near-zero weight: pure PP or tiny blend label (anti-wobble pack).
+    assert planner._last_mask_debug.get('hybrid_mode') in ('pp', 'blend')
 
 
 def test_hybrid_raises_mask_weight_far_blend_scales():
@@ -481,7 +484,8 @@ def test_out_fork_gated_without_sign():
     )
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -527,7 +531,8 @@ def test_aruco_detected_but_stop_on_aruco_false_keeps_lane_follow():
     )
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -575,7 +580,8 @@ def test_forced_turn_does_not_arm_out_fork_by_default():
     planner.apply_forced_turn(TurnSign.LEFT)
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -622,7 +628,8 @@ def test_out_fork_arms_after_sign_and_capture():
     )
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect',
         return_value=TrafficResult(turn=TurnSign.LEFT),
@@ -836,15 +843,18 @@ def test_brief_path_loss_holds_then_returns_steering():
     planner = MainPlanner(
         PlannerConfig(
             path_lost_hold_frames=2,
-            path_lost_stop_frames=10,
+            path_lost_stop_frames=4,
+            path_lost_crawl_throttle=0.14,
             path_lost_steering_return_rate_per_sec=2.0,
+            require_green_to_start=False,
         )
     )
     planner._steering = 0.6
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -852,14 +862,19 @@ def test_brief_path_loss_holds_then_returns_steering():
     ):
         first = planner.step(frame, now_sec=0.0)
         second = planner.step(frame, now_sec=0.05)
-        third = planner.step(frame, now_sec=0.10)
+        late = planner.step(frame, now_sec=0.10)
+        late = planner.step(frame, now_sec=0.15)
+        late = planner.step(frame, now_sec=0.20)
 
+    # Hold last steer + crawl until stop_frames, then throttle 0 (steer still held).
     assert first.command.steering == 0.6
     assert second.command.steering == 0.6
-    assert first.decision.endswith('path_lost_hold')
-    assert second.decision.endswith('path_lost_hold')
-    assert abs(third.command.steering - 0.5) < 1e-9
-    assert third.decision.endswith('path_lost_return')
+    assert first.decision.endswith('path_lost_hold_crawl')
+    assert second.decision.endswith('path_lost_hold_crawl')
+    assert abs(first.command.throttle - 0.14) < 1e-9
+    assert late.decision.endswith('path_lost_hold_stop')
+    assert late.command.throttle == 0.0
+    assert late.command.steering == 0.6
 
 
 def test_steering_rate_limit_is_time_based():
@@ -959,7 +974,8 @@ def test_in_course_exits_on_second_moment_pass():
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -1028,7 +1044,8 @@ def test_aruco_stop_freezes_in_moment_pass_count():
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     aruco = ArucoResult(detected=True, should_stop=True, marker_id=3)
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -1080,7 +1097,8 @@ def test_out_fork_waits_for_confirmed_sign_before_lock():
     planner._out_capture_latched = True
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect',
         return_value=TrafficResult(turn=TurnSign.RIGHT),
@@ -1124,7 +1142,8 @@ def test_out_fork_state_does_not_treat_single_branch_as_turn_path():
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -1174,7 +1193,8 @@ def test_forced_turn_right_stays_in_roundabout_circle():
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -1229,7 +1249,8 @@ def test_forced_turn_left_arms_roundabout_exit():
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -1290,7 +1311,8 @@ def test_ranked_branch_matches_lateral_rank():
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect',
         return_value=TrafficResult(turn=TurnSign.RIGHT),
@@ -1343,7 +1365,8 @@ def test_sign_is_confirmed_then_locked_during_fork():
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect',
         side_effect=(
@@ -1398,7 +1421,8 @@ def test_fork_uses_cached_branch_during_short_detection_flicker():
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
 
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect', return_value=TrafficResult()
     ), patch(
@@ -1746,6 +1770,9 @@ def test_out_fork_sign_miss_defaults_to_right():
     ), patch(
         'inference.pipeline.aruco_detection.detect', return_value=ArucoResult()
     ):
+        # Capture latch is previous-frame: prime once, arm on the next step.
+        primed = planner.step(frame, now_sec=0.5)
+        assert primed.debug.get('out_fork_capture') is True
         out = planner.step(frame, now_sec=1.0)
     assert out.state is DrivingState.FORK_TURN
     assert out.debug['selected_branch_rank'] == 1
@@ -1793,7 +1820,8 @@ def test_traffic_pass_skips_green_wait_and_red_stop():
     assert planner.state is DrivingState.NORMAL
     frame = np.zeros((2, 2, 3), dtype=np.uint8)
     with patch(
-        'inference.pipeline.lane_detection.detect', return_value=lane
+        'inference.pipeline.lane_detection.detect_with_debug',
+        return_value=(lane, SimpleNamespace()),
     ), patch(
         'inference.pipeline.traffic_sign.detect',
         return_value=TrafficResult(signal=TrafficSignal.RED),
