@@ -15,9 +15,9 @@ pure_pursuit:
   steer_command_deadband: 0.03
 
 speed:
-  # Start slower than sim freeze (0.28); raise after straight is calm.
-  cruise_throttle: 0.22
-  curve_throttle: 0.14
+  # Was 0.22 (often no roll on D-Racer). Match main_planner.yaml board cruise.
+  cruise_throttle: 0.32
+  curve_throttle: 0.20
 
 track_state:
   # Enable only if left/right hunting remains after trim + geometry.

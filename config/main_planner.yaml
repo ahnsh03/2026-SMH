@@ -58,14 +58,15 @@ pure_pursuit:
   steer_command_deadband: 0.03
 
 speed:
-  # Slow + robust IN finish (LIMO plant ≠ D-Racer — trade speed for continuity).
-  cruise_throttle: 0.22
-  curve_throttle: 0.14
+  # D-Racer needs more than LIMO-sim crawl; 0.22 often sits below static friction
+  # (steer twitches, car never rolls). Raise further if still stuck on carpet.
+  cruise_throttle: 0.32
+  curve_throttle: 0.20
   curve_steering_threshold: 0.28
   default_throttle: 0.0
   error_speed_cte_full_m: 0.20
   error_speed_steer_full: 0.50
-  error_speed_min_scale: 0.50
+  error_speed_min_scale: 0.55
 
 # NORMAL: free-space mask COM (sim_v2) on blob road_clean — no lane ribbon.
 # Switch to stanley|pp only for paint-path A/B. Fork still PP when forkish.

@@ -3,6 +3,8 @@
 | File | Role | When loaded |
 |------|------|-------------|
 | `sign_best.onnx` | Left/Right **direction signs** (2-class) | **Always** (race) |
+
+Synced from `main` @ `7cfb063` (wonjung58, 2026-07-16) — SHA256 `3f66a0b6…15b21657`.
 | `sign_light_best_v5b.onnx` | 4-class; runtime uses **Red/Green only** | Only if `TRAFFIC_LIGHT_BACKEND` ≠ `opencv` |
 
 ## CPU policy (D3-G)
