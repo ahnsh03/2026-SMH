@@ -23,12 +23,13 @@ lane_drive_node:
     # ★ lookahead 는 후륜축 기준. curve_lookahead 는 반드시 검출 근접점(≈0.42m,
     #   카메라 x_min 0.22 + 후륜축 0.20)보다 커야 실제로 앞을 본다. 너무 짧으면
     #   커브에서 근접(직진) 지점만 봐 조향이 약해져 커브를 못 돈다(우회전→직진/좌회전).
-    base_lookahead_m: 1.05     # 직진 look-ahead
-    curve_lookahead_m: 0.58    # 급커브 look-ahead(>0.42 필수)
-    curvature_full_scale: 0.45 # |κ| 정규화 스케일
+    base_lookahead_m: 1.10     # 직진 look-ahead
+   # 직진 look-ahead
+    curve_lookahead_m: 1.10    # 급커브 look-ahead(>0.42 필수)
+    curvature_full_scale: 0.60 # |κ| 정규화 스케일
     curvature_ff_gain: 0.7     # 곡률 피드포워드(커브 예측). 약하면 커브 못 돔
     cruise_throttle: 0.22      # 직진 스로틀
-    curve_throttle: 0.20       # 커브 스로틀(감속)
+    curve_throttle: 0.18       # 커브 스로틀(감속)
     steer_ema: 0.5             # 조향 EMA 0~1
     steer_rate_limit: 0.30     # 프레임당 |Δsteer| 상한(커브 전환 반응)
     # 차량 조향 부호: 이 D-Racer 는 오른쪽=−, 왼쪽=+. 내부(우측=+)에 곱해 변환.
@@ -48,3 +49,22 @@ lane_drive_node:
     roundabout_min_time_s: 2.0 # 조기 탈출 방지
     roundabout_max_time_s: 20.0 # 무한 회전 방지(규정: 반드시 1회↑ 후 탈출)
     exit_confirm_frames: 4     # 흰선 이 프레임 안정되면 탈출 완료
+
+    # --- 표지판(좌/우) + 신호등(빨강/초록) YOLO26n ---
+    # 빨강불→정지, 초록불→주행. 표지 인식 중→감속 + 표지방향 차선 추종.
+    # YOLO 추론이 CPU 에서 느려(~0.4s) 별도 스레드에서 비동기 실행.
+    enable_sign_light: true         # 기능 on/off (onnxruntime/모델 없으면 자동 무시)
+    sign_light_model_path: ""       # 빈값=자동탐색(team-new/weights → 2026-SMH/weights)
+    sign_light_conf: 0.35           # YOLO 신뢰도 임계
+    sign_light_threads: 3           # onnxruntime 스레드(4코어 중 3=172ms, 1개는 제어용)
+    sign_slow_factor: 0.5           # 표지 인식 중 스로틀 배율(감속)
+    sign_lane_offset_m: 0.15        # 표지방향 centerline 측면 바이어스(우표지=우측). 0=off
+    light_enter_seconds: 0.2        # 빨강/초록 이 시간 지속돼야 상태 변경(오탐 억제)
+    sign_hold_seconds: 1.0          # 표지 사라져도 이 시간 감속/차선 유지
+
+    # --- ArUco 정지 마커 (DICT_6X6_50 ID 3) → throttle=0 ---
+    enable_aruco_stop: true         # 아루코 정지 기능 on/off
+    aruco_enter_stop_seconds: 0.15  # 이 시간 연속 검출되면 정지(오탐 필터)
+    aruco_exit_stop_seconds: 1.5    # 이 시간 연속 미검출되면 재출발(수 프레임 놓쳐도 유지)
+    aruco_min_marker_px: 0.0        # 마커 변 길이(px) 하한=거리 게이팅. 0=거리무관.
+                                    #   가까이서만 정지하려면 실차서 값 올림(예 40~70)

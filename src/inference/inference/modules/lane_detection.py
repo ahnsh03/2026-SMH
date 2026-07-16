@@ -14,12 +14,8 @@
 6. centerline      : 좌·우 모두 → 중점 / 한쪽만 → (track_width-line_width)/2 오프셋.
 7. 미터 변환·평활  : bev_uv_to_xy (x 전방+, y 우측+) → 이동평균.
 
-단측선 좌/우 오배정 방지(3중):
-  1) 근거리 시드로 identity 확정,
-  2) 도로영역(검정∪빨강 노면) 단서 — 단선의 어느 쪽이 주행가능면인지 보고 좌/우
-     확정. 메모리가 없는 콜드스타트/reset() 직후에도 동작하며 시간로직보다 우선,
-  3) 프레임 간 시간적 연속성(_reconcile_seed)으로 "우선을 좌선으로" 뒤집힘 방지.
-reset() 로 시간 상태 초기화.
+단측선 좌/우 오배정 방지: 근거리 시드로 identity 확정 + 프레임 간 시간적
+연속성(_reconcile_seed)으로 "우선을 좌선으로" 뒤집힘을 막는다. reset() 로 초기화.
 
 좌표 규약: white_centerline 은 [x 전방+, y 우측+] 미터. (LaneController 규약,
 metric_bev.py 참조. 우회전 → y>0.)
@@ -112,12 +108,6 @@ class LaneDetector:
             "s_max": 20, "v_min": 210})
         yblock = hsv.get("yellow")
         self.yellow_lo, self.yellow_hi = (_hsv_bounds(yblock) if yblock else (None, None))
-        # 도로 영역(주행가능면) — 단측선 좌/우 판정 보강용. 검정 노면 ∪ 빨강 노면.
-        bblock = hsv.get("black_road")
-        self.black_lo, self.black_hi = (_hsv_bounds(bblock) if bblock else (None, None))
-        rblock = hsv.get("red_road")
-        self.red_lo, self.red_hi = (_hsv_bounds(rblock) if rblock else (None, None))
-        self.road_enabled = self.black_lo is not None or self.red_lo is not None
 
         # --- 검출 튜닝 ---
         ld = cfg.get("lane_detect") or {}
@@ -129,10 +119,6 @@ class LaneDetector:
         self.max_lane_gap_m = float(
             overrides.get("max_lane_gap_m", ld.get("max_lane_gap_m", 0.60)))
         self.line_width_m = float(overrides.get("line_width_m", ld.get("line_width_m", 0.03)))
-        # 도로영역 기반 단측선 좌/우 판정 튜닝
-        self.road_min_px = int(overrides.get("road_min_px", ld.get("road_min_px", 80)))
-        self.road_side_margin = float(
-            overrides.get("road_side_margin", ld.get("road_side_margin", 0.25)))
 
         # 단측선 오프셋: 검출은 선 중심(런 centroid) → 차로 중심까지 거리.
         #   = track_width/2 - line_width/2  (트랙 스펙 0.35, 0.03 → 0.16 m)
@@ -173,28 +159,8 @@ class LaneDetector:
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
         return mask
 
-    def _road_mask(self, hsv: np.ndarray):
-        """검정 ∪ 빨강 노면 마스크(주행가능영역 근사). 채널 미설정 시 None.
-
-        빨강 노면은 H=0 을 감싸므로, red_road.h_min≤10 이면 상단(H≥175)도 포함해
-        In 코스 빨강 노면을 놓치지 않는다.
-        """
-        road = None
-        if self.black_lo is not None:
-            road = cv2.inRange(hsv, self.black_lo, self.black_hi)
-        if self.red_lo is not None:
-            red = cv2.inRange(hsv, self.red_lo, self.red_hi)
-            if int(self.red_lo[0]) <= 10:
-                wrap_lo = (175, int(self.red_lo[1]), int(self.red_lo[2]))
-                wrap_hi = (179, int(self.red_hi[1]), int(self.red_hi[2]))
-                red = cv2.bitwise_or(red, cv2.inRange(hsv, wrap_lo, wrap_hi))
-            road = red if road is None else cv2.bitwise_or(road, red)
-        if road is None:
-            return None
-        return self._morph(road)
-
     def _masks(self, bev_bgr: np.ndarray):
-        """BEV → (white, yellow, boundary, road). boundary=추종용 경계, road=주행면."""
+        """BEV → (white_mask, yellow_mask, boundary_mask). boundary=추종용 경계."""
         hsv = cv2.cvtColor(bev_bgr, cv2.COLOR_BGR2HSV)
         white = cv2.inRange(hsv, self.white_lo, self.white_hi)
         yellow = (cv2.inRange(hsv, self.yellow_lo, self.yellow_hi)
@@ -205,8 +171,7 @@ class LaneDetector:
             boundary = yellow
         else:  # both
             boundary = cv2.bitwise_or(white, yellow)
-        road = self._road_mask(hsv)
-        return self._morph(white), self._morph(yellow), self._morph(boundary), road
+        return self._morph(white), self._morph(yellow), self._morph(boundary)
 
     # -------------------------------------------------------- run helpers
     @staticmethod
@@ -244,51 +209,19 @@ class LaneDetector:
                 right = float(rp)
         return left, right
 
-    def _road_side_of_line(self, road, col) -> int:
-        """근거리 밴드에서 단선(col) 기준 도로(주행가능면)가 좌/우 어디에 더 많은가.
+    def _reconcile_seed(self, left, right, center, state):
+        """단측선 시드의 좌/우 identity 를 직전 프레임으로 확정.
 
-        반환: +1 오른쪽에 도로 → 단선은 '좌측 경계'
-              -1 왼쪽에 도로   → 단선은 '우측 경계'
-               0 판정 보류(도로 근거 부족 / 양쪽 다 도로 = 회전교차로 등)
-        메모리 불필요 → 콜드스타트/reset 직후 단선에서도 좌/우 확정 가능.
-        """
-        if road is None:
-            return 0
-        H, W = road.shape
-        band = road[int(H * 0.72):, :]                  # _seed_sides 와 동일 근거리 밴드
-        c = int(round(col))
-        lpx = int((band[:, :c] > 0).sum()) if c > 0 else 0
-        rpx = int((band[:, c:] > 0).sum()) if c < W else 0
-        tot = lpx + rpx
-        if tot < self.road_min_px:
-            return 0
-        r = (rpx - lpx) / float(tot)
-        if r > self.road_side_margin:
-            return 1
-        if r < -self.road_side_margin:
-            return -1
-        return 0
-
-    def _reconcile_seed(self, left, right, center, state, road=None):
-        """단측선 시드의 좌/우 identity 를 도로영역 + 직전 프레임으로 확정.
-
-        차가 선 사이면(둘 다 보임) center-split 을 신뢰. 한쪽만 보이면:
-          (a) 도로영역 단서가 확실하면 그쪽으로 확정(메모리 불필요, 최우선),
-          (b) 아니면 직전 프레임의 좌/우 column 중 더 가까운 쪽으로 배정.
-        → 차가 선을 살짝 넘어 단선이 중심 반대편에 나타나도 좌/우가 뒤집히지 않는다.
+        차가 선 사이면(둘 다 보임) center-split 을 신뢰. 한쪽만 보이면 직전
+        프레임의 좌/우 column 중 더 가까운 쪽으로 배정해 프레임 간 연속성을
+        지킨다 → 차가 선을 살짝 넘어 단선이 중심 반대편에 나타나도 좌/우가
+        뒤집히지 않는다.
         """
         if left is not None and right is not None:
             return left, right                          # 선 사이 = 신뢰
         single = left if right is None else right
         if single is None:
             return None, None
-        # (a) 도로영역 단서 — 메모리 없이도 좌/우 확정. 시간로직보다 우선.
-        side = self._road_side_of_line(road, single)
-        if side > 0:
-            return single, None                         # 도로가 오른쪽 → 좌측 경계
-        if side < 0:
-            return None, single                         # 도로가 왼쪽  → 우측 경계
-        # (b) 도로 단서 보류 → 프레임 간 시간적 연속성으로 배정
         pl, pr = state["prev_left"], state["prev_right"]
         has_l, has_r = pl is not None, pr is not None
         dl = abs(single - pl) if has_l else None
@@ -322,21 +255,19 @@ class LaneDetector:
         return float(cens[j]) if d[j] <= gate else None
 
     # ---------------------------------------------------- 추적 코어 (테스트 대상)
-    def _track_centerline(self, mask: np.ndarray, state: dict, road=None):
+    def _track_centerline(self, mask: np.ndarray, state: dict):
         """boundary mask(BEV) → (pts_uv, stats). 시드→행별 근접추적→시간기억.
 
         pts_uv: (center_u, v, mode) 리스트. mode 0=양선,1=좌선만,2=우선만.
         좌/우 identity 는 근거리 시드에서 확정하고 이후 행에서는 근접으로만
         추적한다(ego 중심 재판정 없음) → 급커브에서 선이 중심을 넘어도 안 뒤집힘.
         state: 색상별 프레임 간 시간 상태(dict) — 흰/노랑 독립.
-        road: 도로영역 마스크(선택). 단측선 좌/우 확정 보강용.
         """
         H, W = mask.shape
         center = self.bev.u_center
 
         left_seed, right_seed = self._seed_sides(mask, center)
-        left_seed, right_seed = self._reconcile_seed(
-            left_seed, right_seed, center, state, road)
+        left_seed, right_seed = self._reconcile_seed(left_seed, right_seed, center, state)
 
         left_col, right_col = left_seed, right_seed
         pts_uv: List[Tuple[float, float, int]] = []
@@ -409,12 +340,11 @@ class LaneDetector:
             return result
 
         bev = self.bev.warp(frame)
-        white_m, yellow_m, mask, road = self._masks(bev)
+        white_m, yellow_m, mask = self._masks(bev)
         H, W = mask.shape
 
         # 주 경로: 주행 차로 중심선 (경계선 색 무관, boundary=흰∪노랑).
-        # road 단서로 단측선 좌/우 오배정 방지(콜드스타트 포함).
-        white_pts, st = self._track_centerline(mask, self._white_state, road)
+        white_pts, st = self._track_centerline(mask, self._white_state)
         left_hits = st["left_hits"]
         right_hits = st["right_hits"]
         valid_rows = st["valid_rows"]
@@ -483,7 +413,7 @@ class LaneDetector:
     def debug_view(self, frame) -> np.ndarray:
         """BEV + 마스크(흰=빨강, 노랑=초록) + centerline(초록점) 오버레이."""
         bev = self.bev.warp(frame)
-        white_m, yellow_m, _, _road = self._masks(bev)
+        white_m, yellow_m, _ = self._masks(bev)
         vis = bev.copy()
         vis[white_m > 0] = (0, 0, 255)
         vis[yellow_m > 0] = (0, 255, 0)
