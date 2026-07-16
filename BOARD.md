@@ -73,3 +73,16 @@ ln -sfn ~/D-Racer-Kit external/D-Racer-Kit
 ```
 
 `board_init_workspace.sh`가 Kit → `src/camera|control|joystick|…` 심볼릭 링크 + patches 적용.
+
+## 향후 과제 (제어·차선 튜닝)
+
+즉시 튜닝은 보류. 마무리 순서:
+
+1. **차선 피팅 로직** — bag 바탕 구현·검증  
+2. **bag 입력 → 실차** — 스로틀·조향각을 로봇으로 확인  
+3. **튜닝 → 트랙 구동 → 재튜닝**  
+4. **개별 미션 검증**  
+5. **통합** (풀 랩)
+
+상세·명령·파라미터 위치: [docs/control-tuning-roadmap.md](docs/control-tuning-roadmap.md)  
+Bag 목록: `external/D-Racer-Kit/bagfile/bagfile.md`
